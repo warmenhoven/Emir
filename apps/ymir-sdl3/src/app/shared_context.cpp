@@ -4,9 +4,6 @@
 
 #include <ymir/sys/saturn.hpp>
 
-#include <ymir/util/scope_guard.hpp>
-
-#include <unordered_set>
 #include <vector>
 
 namespace app {
@@ -87,6 +84,22 @@ std::filesystem::path SharedContext::GetPerGameExternalBackupRAMPath(ymir::bup::
     return basePath / fmt::format("bup-ext-{}M-{}.bin", BupSizeToSize(bupSize) * 8 / 1024 / 1024, GetGameFileName());
 }
 
+std::filesystem::path SharedContext::GetPersistentSMPCDataPath() const {
+    const char *regionSuffix;
+    if (iplRomInfo != nullptr) {
+        switch (iplRomInfo->region) {
+        case ymir::db::SystemRegion::US_EU: regionSuffix = "us_eu"; break;
+        case ymir::db::SystemRegion::JP: regionSuffix = "jp"; break;
+        case ymir::db::SystemRegion::KR: regionSuffix = "asia"; break;
+        default: regionSuffix = "other"; break;
+        }
+    } else {
+        regionSuffix = "none";
+    }
+
+    return profile.GetPath(ProfilePath::PersistentState) / fmt::format("smpc-{}.bin", regionSuffix);
+}
+
 SDL_DisplayID SharedContext::GetSelectedDisplay() const {
     if (display.id != 0) {
         return display.id;
@@ -150,6 +163,10 @@ void SharedContext::SaturnContainer::SetSlaveSH2Enabled(bool enabled) {
 
 bool SharedContext::SaturnContainer::IsDebugTracingEnabled() const {
     return instance->IsDebugTracingEnabled();
+}
+
+bool SharedContext::SaturnContainer::IsSH2CacheEmulationEnabled() const {
+    return instance->IsSH2CacheEmulationEnabled();
 }
 
 ymir::XXH128Hash SharedContext::SaturnContainer::GetIPLHash() const {

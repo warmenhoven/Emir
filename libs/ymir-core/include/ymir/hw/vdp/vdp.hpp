@@ -8,7 +8,6 @@
 #include "vdp_configs.hpp"
 #include "vdp_state.hpp"
 
-#include "vdp_callbacks.hpp"
 #include "vdp_internal_callbacks.hpp"
 
 #include "vdp_devlog.hpp"
@@ -16,7 +15,6 @@
 #include <ymir/core/configuration.hpp>
 #include <ymir/core/scheduler.hpp>
 #include <ymir/sys/bus.hpp>
-#include <ymir/sys/system.hpp>
 
 #include <ymir/savestate/savestate_vdp.hpp>
 
@@ -26,19 +24,13 @@
 
 #include "renderer/vdp_renderer.hpp"
 
-#include <ymir/util/bit_ops.hpp>
-#include <ymir/util/data_ops.hpp>
-#include <ymir/util/event.hpp>
 #include <ymir/util/inline.hpp>
-#include <ymir/util/unreachable.hpp>
 
 #include <blockingconcurrentqueue.h>
 
 #include <array>
-#include <iosfwd>
 #include <memory>
 #include <span>
-#include <thread>
 #include <utility>
 
 namespace ymir::vdp {
@@ -66,11 +58,16 @@ public:
     // TODO: replace with scheduler events
     void Advance(uint64 cycles);
 
-    /// @brief Determines if the VDP2 is in the last VCNT line phase.
-    /// This can be used to determine if a frame is about to begin.
-    /// @return `true` if the VDP2 is processing the last line of the screen
-    bool InLastLinePhase() const {
-        return m_state.VPhase == VerticalPhase::LastLine;
+    /// @brief Retrieves the current VDP2 vertical phase.
+    /// @return the current VDP2 vertical phase
+    VerticalPhase GetVerticalPhase() const {
+        return m_state.VPhase;
+    }
+
+    /// @brief Retrieves the current VDP2 horizontal phase.
+    /// @return the current VDP2 horizontal phase
+    HorizontalPhase GetHorizontalPhase() const {
+        return m_state.HPhase;
     }
 
     // -------------------------------------------------------------------------
@@ -193,6 +190,18 @@ public:
         return m_skipEmptyVDP1Table;
     }
 
+    // Introduce a small amount of jitter to latched Virtua Gun coordinates.
+    //
+    // Death Crimson is the only known game that detects perfectly stable shots as reloads. Enabling this option
+    // introduces a small amount of jitter to gun coordinates to make the game recognize on-screen shots as such.
+    void SetVirtuaGunJitter(bool enable) {
+        m_virtuaGunJitter = enable;
+    }
+
+    bool IsVirtuaGunJitterEnabled() const {
+        return m_virtuaGunJitter;
+    }
+
     // -------------------------------------------------------------------------
     // Memory dumps
 
@@ -226,6 +235,10 @@ private:
     VDPState m_state;
 
     core::Configuration &m_config;
+
+    bool m_virtuaGunJitter = false;
+    uint32 m_virtuaGunLastJitterX = 0u;
+    uint32 m_virtuaGunLastJitterY = 0u;
 
     std::unique_ptr<IVDPRenderer> m_renderer;
 
@@ -421,6 +434,7 @@ private:
         // Infinite loop detection
         uint32 lastJumpAddress; // target address of the last Jump To command
         uint32 loopCount;       // number of jumps taken to the same address
+        bool inInfiniteLoop;    // found infinite loop
     } m_VDP1CtlState;
 
     // Hacky VDP1 command execution timing penalty accrued from external writes to VRAM

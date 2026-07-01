@@ -72,6 +72,7 @@ private:
     std::array<std::vector<char>, 2> m_buffers; // Buffers for serialized states (current and next)
     bool m_bufferFlip = false;                  // Which buffer is which
     std::vector<char> m_deltaBuffer;            // XOR delta buffer
+    size_t m_maxBufferSize = 0;                 // Largest buffer size ever used
 
     std::array<std::vector<char>, 60 * 60> m_deltas; // Ring buffer of delta frames
     size_t m_deltaWritePos = 0;                      // Current delta ring buffer write position

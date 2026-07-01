@@ -46,7 +46,6 @@ void InputSettingsView::Display() {
 
     // -------------------------------------------------------------------------
 
-#if Ymir_FF_VIRTUA_GUN
     ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
     ImGui::SeparatorText("Mouse");
     ImGui::PopFont();
@@ -89,10 +88,11 @@ void InputSettingsView::Display() {
         "mice and regain control of the system cursor.\n"
         "The system cursor is reenabled if Ymir loses focus or a window is opened by other means, such as opening the "
         "Settings window with the shortcut or triggering a debugger breakpoint.");
-#endif
 
-    // TODO: lock mouse cursor to screen area in system cursor mode
-    // - also update App::ConfigureMouseCapture()
+    MakeDirty(ImGui::Checkbox("Lock mouse cursor to window", &settings.mouse.lockToDisplay));
+    widgets::ExplanationTooltip("When this option is enabled, if using system cursor capture mode, the mouse cursor "
+                                "will be constrained to the window area.",
+                                m_context.displayScale);
 
     // TODO: preferred device capture order
 

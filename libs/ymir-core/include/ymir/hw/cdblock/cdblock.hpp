@@ -72,6 +72,7 @@ private:
     static void OnCommandExecEvent(core::EventContext &eventContext, void *userContext);
 
     alignas(uint64) std::array<uint16, 4> m_CR;
+    alignas(uint64) std::array<uint16, 4> m_RR;
 
     const media::Disc &m_disc;
     const media::fs::Filesystem &m_fs;
@@ -271,7 +272,7 @@ private:
 
     class PartitionManager {
     public:
-        PartitionManager();
+        PartitionManager(debug::ICDBlockTracer *&tracer);
 
         void Reset();
 
@@ -298,14 +299,21 @@ private:
         [[nodiscard]] bool ValidateState(const savestate::CDBlockSaveState &state) const;
         void LoadState(const savestate::CDBlockSaveState &state);
 
+        // -------------------------------------------------------------------------
+        // Debugger
+
+        void OnTracerAttached();
+
     private:
         std::array<std::deque<Buffer>, kNumPartitions> m_partitions;
 
         uint32 m_freeBuffers;
         uint32 m_reservedBuffers;
+
+        debug::ICDBlockTracer *&m_tracer;
     };
 
-    PartitionManager m_partitionManager;
+    PartitionManager m_partitionManager{m_tracer};
     std::array<Filter, kNumFilters> m_filters;
 
     std::array<Buffer, kNumBuffers + 1> m_scratchBuffers;
@@ -434,7 +442,11 @@ public:
     // Attaches the specified tracer to this component.
     // Pass nullptr to disable tracing.
     void UseTracer(debug::ICDBlockTracer *tracer) {
+        if (m_tracer && m_tracer != tracer) {
+            m_tracer->Detach();
+        }
         m_tracer = tracer;
+        m_partitionManager.OnTracerAttached();
     }
 
     class Probe {

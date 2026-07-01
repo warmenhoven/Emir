@@ -5,6 +5,7 @@
 @brief Defines `util::Observable`, a type that implements the Observable design pattern.
 */
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <type_traits>
@@ -18,7 +19,9 @@ namespace util {
 /// Be aware of this behavior to handle multithreaded scenarios properly.
 ///
 /// @tparam T the type of the value
-template <typename T>
+/// @tparam t_fnConstraint an optional value constraint function applied to all assigned values
+template <typename T, auto t_fnConstraint = std::identity{}>
+    requires std::is_invocable_r_v<T, decltype(t_fnConstraint), T>
 class Observable {
 public:
     /// @brief The observer function type.
@@ -48,27 +51,15 @@ public:
     /// @param[in] value the new value
     /// @return a reference to this observable
     Observable &operator=(T value) {
-        m_value = value;
+        m_value = t_fnConstraint(value);
         Notify();
         return *this;
-    }
-
-    /// @brief Accesses members of the value contained in this observable wrapper.
-    /// @return a pointer to the contained value
-    T *operator->() {
-        return &m_value;
     }
 
     /// @brief Accesses members of the value contained in this observable wrapper.
     /// @return a `const` pointer to the contained value
     const T *operator->() const {
         return &m_value;
-    }
-
-    /// @brief Dereferences the value contained in this observable wrapper.
-    /// @return a reference to the contained value
-    T &operator*() {
-        return m_value;
     }
 
     /// @brief Dereferences the value contained in this observable wrapper.

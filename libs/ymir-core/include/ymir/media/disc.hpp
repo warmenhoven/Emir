@@ -8,7 +8,8 @@
 #include <ymir/util/data_ops.hpp>
 #include <ymir/util/dev_assert.hpp>
 
-#include "cdrom_crc.hpp"
+#include "cd_defs.hpp"
+#include "cd_utils.hpp"
 #include "saturn_header.hpp"
 #include "subheader.hpp"
 
@@ -23,22 +24,6 @@
 
 namespace ymir::media {
 
-struct TOCEntry {
-    uint8 controlADR;        // Bits 7-4 = Control, bits 3-0 = q-Mode
-                             //   Control = 0b0100 (0x4) = non-copyable data
-                             //   Control = 0b0110 (0x6) = copyable data
-                             //   q-Mode = 0b0001 (0x1) = lead-in, user data, lead-out areas
-                             //   q-Mode = 0b0010 (0x2) = information area
-    uint8 trackNum;          // 00 for lead-in, 01 to 99 for tracks, AA for lead-out
-    uint8 pointOrIndex;      // Pointer field for lead-in, index for tracks and lead-out
-                             //   For tracks: index 00 is pause, 01 to 99 are various indices within the track
-                             //   Lead-out always uses 01
-    uint8 min, sec, frac;    // Relative time. During pause (index 00) this time is relative to the start of the track
-                             // (index 01) and counts in decreasing order
-    uint8 zero;              // Must be 0x00
-    uint8 amin, asec, afrac; // Absolute time. Monotonically increasing until the lead-out track.
-};
-
 struct Index {
     uint32 startFrameAddress = 0;
     uint32 endFrameAddress = 0;
@@ -49,6 +34,7 @@ struct Track {
     uint32 index = 0;
     uint32 unitSize = 0;   // size of a unit, always >= sectorSize
     uint32 sectorSize = 0; // size of the valid data in the sector
+    uint32 headerOffset = 0;
     uint32 userDataOffset = 0;
     uint8 controlADR = 0;
     bool mode2 = false;
@@ -79,10 +65,11 @@ struct Track {
     void SetSectorSize(uint32 size) {
         unitSize = size;
         sectorSize = size;
-        userDataOffset = size >= 2352 ? (mode2 ? 24 : 16) : size >= 2340 ? (mode2 ? 12 : 4) : 0;
         hasSyncBytes = size >= 2352;
         hasHeader = size >= 2340;
         hasECC = size >= 2336;
+        headerOffset = hasSyncBytes ? 12 : 0;
+        userDataOffset = hasSyncBytes ? (mode2 ? 24 : 16) : hasHeader ? (mode2 ? 12 : 4) : 0;
     }
 
     // Reads the user data portion of a sector.
@@ -136,52 +123,7 @@ struct Track {
         fmt::println("Track unit size:   {} bytes", unitSize);*/
 
         // Fill in any missing data
-        if (!hasSyncBytes) {
-            static constexpr std::array<uint8, 12> syncBytes = {0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                                                                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00};
-            std::copy(syncBytes.begin(), syncBytes.end(), outBuf.begin());
-            // fmt::println("  Added sync bytes");
-        }
-        if (!hasHeader) {
-            // Convert absolute frame address to min:sec:frac
-            outBuf[0xC] = util::to_bcd(frameAddress / 75 / 60);
-            outBuf[0xD] = util::to_bcd((frameAddress / 75) % 60);
-            outBuf[0xE] = util::to_bcd(frameAddress % 75);
-
-            // Determine mode based on track type and sector size
-            if (controlADR == 0x41) {
-                // Data track
-                outBuf[0xF] = mode2 ? 0x02 : 0x01;
-            } else {
-                // Audio track
-                outBuf[0xF] = 0x00;
-            }
-            // fmt::println("  Added header");
-        } else {
-            YMIR_DEV_ASSERT(outBuf[0xC] == util::to_bcd(frameAddress / 75 / 60));
-            YMIR_DEV_ASSERT(outBuf[0xD] == util::to_bcd((frameAddress / 75) % 60));
-            YMIR_DEV_ASSERT(outBuf[0xE] == util::to_bcd(frameAddress % 75));
-        }
-        if (!hasECC) {
-            // Fill out EDC, Intermediate, P-Parity and Q-Parity fields
-            // TODO: handle Mode 2 Form 1 and 2
-
-            std::span<uint8> edcBuf{outBuf.subspan(2064, 4)};
-            std::span<uint8> interBuf{outBuf.subspan(2068, 8)};
-            std::span<uint8> pParityBuf{outBuf.subspan(2076, 172)};
-            std::span<uint8> qParityBuf{outBuf.subspan(2248, 104)};
-
-            const uint32 crc = CalcCRC(std::span<uint8, 2064>{outBuf.first(2064)});
-            util::WriteLE<uint32>(&edcBuf[0], crc);
-
-            std::fill(interBuf.begin(), interBuf.end(), 0x00);
-
-            // TODO: compute ECC (P-Parity and Q-Parity)
-            std::fill(pParityBuf.begin(), pParityBuf.end(), 0x00);
-            std::fill(qParityBuf.begin(), qParityBuf.end(), 0x00);
-
-            // fmt::println("  Added subheader");
-        }
+        SynthesizeSectorData(outBuf, outputSize, frameAddress, controlADR, mode2);
 
         /*fmt::println("Raw sector data:");
         for (uint32 i = 0; i < outBuf.size(); i++) {
@@ -333,12 +275,12 @@ struct Session {
         // Point A0 - first data track
         {
             auto &tocEntry = leadInTOC[leadInTOCCount++];
-            tocEntry.controlADR = tracks[firstTrackNum - 1].controlADR;
+            tocEntry.controlADR = 0x41;
             tocEntry.trackNum = 0x00;
             tocEntry.pointOrIndex = 0xA0;
-            tocEntry.min = util::to_bcd(startFrameAddress / 75 / 60);
-            tocEntry.sec = util::to_bcd(startFrameAddress / 75 % 60);
-            tocEntry.frac = util::to_bcd(startFrameAddress % 75);
+            tocEntry.min = 0x00;
+            tocEntry.sec = 0x00;
+            tocEntry.frac = 0x00;
             tocEntry.zero = 0x00;
             tocEntry.amin = util::to_bcd(firstTrackNum);
             tocEntry.asec = 0x00;
@@ -348,12 +290,12 @@ struct Session {
         // Point A1 - last data track
         {
             auto &tocEntry = leadInTOC[leadInTOCCount++];
-            tocEntry.controlADR = tracks[lastTrackNum - 1].controlADR;
+            tocEntry.controlADR = 0x41;
             tocEntry.trackNum = 0x00;
             tocEntry.pointOrIndex = 0xA1;
-            tocEntry.min = util::to_bcd(startFrameAddress / 75 / 60);
-            tocEntry.sec = util::to_bcd(startFrameAddress / 75 % 60);
-            tocEntry.frac = util::to_bcd(startFrameAddress % 75);
+            tocEntry.min = 0x00;
+            tocEntry.sec = 0x00;
+            tocEntry.frac = 0x00;
             tocEntry.zero = 0x00;
             tocEntry.amin = util::to_bcd(lastTrackNum);
             tocEntry.asec = 0x00;
@@ -363,7 +305,7 @@ struct Session {
         // Point A2 - start of leadout track
         {
             auto &tocEntry = leadInTOC[leadInTOCCount++];
-            tocEntry.controlADR = tracks[lastTrackNum - 1].controlADR;
+            tocEntry.controlADR = 0x41;
             tocEntry.trackNum = 0x00;
             tocEntry.pointOrIndex = 0xA2;
             tocEntry.min = util::to_bcd(startFrameAddress / 75 / 60);

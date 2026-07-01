@@ -583,7 +583,13 @@ struct VDP2State {
                                 // Illegal CP access in T0-T3
                                 // If PN happens before first CP, shift left, otherwise shift right
                                 if (pnIndex < std::countr_zero(bgCP)) {
-                                    bgParams.vramDataOffset.fill(8u);
+                                    // If there is a PN access on the same bank as the illegal CP access which would
+                                    // cause the CP access to be legal again, make it so.
+                                    // FIXME: this is probably incorrect, but works with every known test case so far.
+                                    const uint8 pnIndexBank = std::countr_zero(bgPNBank);
+                                    if (!bgPNBank || (bgCPBank & kLoResPatterns[pnIndexBank]) == 0) {
+                                        bgParams.vramDataOffset.fill(8u);
+                                    }
                                 } else {
                                     bgParams.charPatDelay.fill(true);
                                 }
@@ -872,6 +878,7 @@ struct VDPState {
         state.regs1.eraseX3Latch = regs1.eraseX3Latch;
         state.regs1.eraseY1Latch = regs1.eraseY1Latch;
         state.regs1.eraseY3Latch = regs1.eraseY3Latch;
+        state.regs1.nextCommandAddress = regs1.nextCommandAddress;
 
         state.regs2.TVMD = regs2.ReadTVMD();
         state.regs2.EXTEN = regs2.ReadEXTEN();
@@ -1019,7 +1026,6 @@ struct VDPState {
         state.regs2.displayEnabledLatch = regs2.displayEnabledLatch;
         state.regs2.borderColorModeLatch = regs2.borderColorModeLatch;
         state.regs2.VCNTLatch = regs2.VCNTLatch;
-        state.regs2.VCNTLatched = regs2.VCNTLatched;
 
         for (size_t i = 0; i < 4; i++) {
             state.renderer.nbgLayerStates[i].fracScrollX = state2.nbgLayerStates[i].fracScrollX;
@@ -1117,6 +1123,7 @@ struct VDPState {
         regs1.eraseX3Latch = state.regs1.eraseX3Latch;
         regs1.eraseY1Latch = state.regs1.eraseY1Latch;
         regs1.eraseY3Latch = state.regs1.eraseY3Latch;
+        regs1.nextCommandAddress = state.regs1.nextCommandAddress;
 
         regs2.WriteTVMD(state.regs2.TVMD);
         regs2.WriteEXTEN(state.regs2.EXTEN);
@@ -1264,7 +1271,6 @@ struct VDPState {
         regs2.displayEnabledLatch = state.regs2.displayEnabledLatch;
         regs2.borderColorModeLatch = state.regs2.borderColorModeLatch;
         regs2.VCNTLatch = state.regs2.VCNTLatch;
-        regs2.VCNTLatched = state.regs2.VCNTLatched;
 
         state1.sysClipH = state.renderer.vdp1State.sysClipH;
         state1.sysClipV = state.renderer.vdp1State.sysClipV;

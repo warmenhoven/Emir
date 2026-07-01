@@ -12,8 +12,15 @@ The sections below explain how each of them work.
 Before reporting bugs, make sure you also test the [latest nightly build](https://github.com/StrikerX3/Ymir/releases/tag/latest-nightly) -- there's a chance the bug might've been already fixed.
 Also refer to the [troubleshooting guide](TROUBLESHOOTING.md) for further instructions that might solve the issue.
 
+Make sure to test the game with the recommended or accurate presets -- go to **Settings > Tweaks** and click the **Recommended** or **Best compatibility/accuracy** buttons in all sections. Specifically:
+- SH-2 clock ratio **must be** at 100% and CD read speed **must be** at 2x. Users reporting issues where these options are not at the default settings will be asked to retry with the defaults.
+- Graphics issues that only occur with the **Deinterlace video** or **Transparent meshes** must be reported as such.
+- Games that are fixed by enabling **Emulate SH-2 cache**, tuning **Emulation step granularity** or enabling **Use low level CD Block emulation** should be reported in the [compatibility list](https://docs.google.com/spreadsheets/d/1SLZzL9LelSlpEmTKy8cjaQnE7mew2uW1rfCgcekO58Q/edit?usp=sharing) instead. They might be added to the internal database if this is the only way they will work.
+- Any threading issues should be reported in the dedicated issues. Threaded VDP2 and deinterlacing never cause issues, but threaded VDP1 and SCSP might.
+
 If the bug persists, check that it hasn't already been reported by searching through the [Issues](https://github.com/StrikerX3/Ymir/issues). If you can't find an existing report, open a new one and provide the following information:
 - Ymir version(s) tested (go to **Help > About** and click **Copy version**)
+- The full set of tweakable options (go to **Settings > Tweaks** and click **Copy to clipboard** under the blue box. You can paste this directly in GitHub issues to get a nicely-formatted list)
 - Game name/title, if the bug is specific to a game
 - Game disc image format (CUE + single BIN, CUE + multiple BINs, MAME CHD, etc.)
 - Instructions for reproducing the bug
@@ -40,11 +47,24 @@ The issue should explain what you want to see added or improved in Ymir. Provide
 
 Pull requests must explain what they're proposing and the rationale behind changes. Provide links to existing bugs they fix or features they implement if applicable.
 
-You must disclose if the code was generated with AI assistance, from simple code completions to full code generation.
-AI-generated PR descriptions are fine. AI-generated code will be thoroughly scrutizined or outright rejected if it impacts too much code for no good reason.
-Ymir's code is entirely human-written; AI has only been used to acquire knowledge.
-
 Code contributions must follow the code standards and formatting guidelines described below.
+
+### AI usage guidelines
+
+Ymir's code is (to the author's knowledge) entirely human-written; AI has only been used to acquire knowledge.
+
+If you plan to use AI-enabled tools such as agent-enabled IDEs, CLIs, or integrated LLM-based code generation/assistance, please follow these guidelines:
+- Clearly state that you've used such tools in the PR description, and in what way they have assisted you. Don't claim that the work is entirely your own if that is not the case.
+- Prove that you understand what you're doing by taking the time to manually write PR and commit descriptions. LLM-generated descriptions are often too verbose, too broad, too generic, or lack contextual clues to explain the "why" no matter how detailed your prompt is. If you have the time to spend writing an elaborate prompt, you certainly have the time to write the PR description itself.
+- If you're a first-time contributor, resist the urge to ask AI to do the work for you. You're sabotaging yourself by not getting hands-on experience with the project on your own.
+- Keep the scope of the work constrained to something manageable by one person. If you can't explain what the PR does without the help of AI because it's too big or complex, chances are it's also too big and complex for maintainers to review and reason about.
+- Conversely, if the work is small enough that you could do it by hand, *do it by hand*. It's the perfect learning opportunity and shows you are actively interested in contributing to the project.
+
+Failing to follow these guidelines will likely get your PR closed.
+
+I'd love to apply a zero-tolerance policy, but that is simply infeasible. LLMs are a reality and lots of people use them; this isn't going to change.
+These usage guidelines instead promote self-improvement, prevent AIs from running the show, and should result in more productive discussions and contributions.
+With that said, there should be no situation where AI assistance is *needed*.
 
 ### Coding guidelines
 
@@ -86,7 +106,8 @@ Any changes to the current hot code paths (SH2 interpreter, VDP2 software render
 
 Adhere to the code formatting rules. Use `clang-format` to format the code.
 
-When adding new dependencies, prefer the ones available through vcpkg. Failing that, add them as a git submodule under [vendor/](/vendor).
+When adding new dependencies to `ymir-core`, **never** use vcpkg ports; always use Git submodules under [vendor/](/vendor). This allows the repository to be added as subproject in other CMake projects.
+Other targets may use vcpkg ports, but Git submodules (or FetchContent) is preferred.
 If cloning submodules, use HTTPS, not SSH, as some build pipelines won't be able to clone GitHub repos without an SSH key.
 Make a custom CMakeLists.txt if the dependency's own file doesn't behave well as a dependency or if you only need a subset of functionality from the library.
 See existing vendored dependencies for examples and the comments in [vendor/CMakeLists.txt](/vendor/CMakeLists.txt) for more details.

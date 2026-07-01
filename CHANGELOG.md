@@ -1,19 +1,204 @@
 # Ymir changelog
 
-## Version 0.3.1
+## Version 0.4.0
 
 In development.
+
+Uses save state file version 13.
+
+### New features and improvements
+
+- App: Added option to unpause emulator when loading discs. Enabled by default, which changes established behavior.
+- App: Display volume indicator on the top-right corner of the window for a few seconds after adjustments.
+    - `smpc-us_eu.bin`: USA, Europe -- SMPC area codes 4, 5, A, C, D
+    - `smpc-jp.bin`: Japan -- SMPC area code 1
+    - `smpc-asia.bin`: Korea, Taiwan -- SMPC area codes 2, 6
+    - `smpc-other.bin`: Other (invalid) SMPC area codes
+    - The old `smpc.bin` will be automatically migrated to these files as you use IPL ROMs for each region.
+- Input: Added option to constrain mouse cursor to window in system cursor mode.
+- Input: Convert 3D Control Pad analog stick to D-Pad inputs when in digital mode.
+- Input: Graduate Virtua Gun to stable feature.
+- Input: Introduce a small amount of jitter to the Virtua Gun aim in Death Crimson. Greatly improves shot detection in the game. (#787)
+- SH2: Interrupt recalculation microoptimizations.
+- SMPC: Remove direct dependency to filesystem API for data persistence.
+- VDP1: Software renderer performance microoptimizations:
+    - Do these once per command instead of per pixel:
+        - Determine double density mode
+        - Get references to VDP1 registers
+        - Shift/mask color bank values
+
+### Fixes
+
+- Backup RAM: Fix crash when attempting to load a backup RAM cartridge with the default path.
+- CD Block (HLE): Read reset position flag correctly from parameters.
+- GameDB: Disable a number of game-specific hacks that are no longer required:
+    - Chisato Moritaka - Watarase Bashi & Lala Sunshine: no longer crashes at startup. (#604)
+    - Deep Fear: no longer freezes after the "April Fools!" voice line. (#740)
+    - Marvel Super Heroes vs. Street Fighter: no longer crashes at the end of the Capcom logo. (#507)
+    - Mega Man X3 / Rockman X3: sprites are not glitched anymore. (#244)
+    - Metal Fighter Miku: goes in-game, no longer stuck after start menu. (#466)
+    - Soviet Strike: VDP1 graphics no longer flicker.
+- GameDB: Force-enable SH-2 cache emulation for Dino Island to fix palette glitches. (#764)
+- GameDB: Force fast bus timings on Resident Evil to fix start menu crashes. (#907)
+- GameDB: Slow down VDP1 execution speed in 3D Baseball to fix team name plates and announcer voice line glitches. (#593)
+- GUI: Reinitialize style from scratch when rescaling GUI elements. Fixes Settings windows (and probably others) from growing extremely large when constantly switching display scales.
+- Input: Set least significant bits of 3D Control Pad analog reports to all ones. Fixes double inputs in Deep Fear. (#744)
+- Input: Make 3D Control Pad peripheral report in digital mode match the Standard Pad. Fixes broken inputs in digital mode in the following games:
+    - Bug Too! (#622)
+    - Black/Matrix (#861)
+- Media (CUE): Don't accumulate pre/postgaps multiple times per track. Fixes some audio track offset issues for single-BIN dumps. (#146)
+- Media (CUE): Use CUE sheet timestamps to compute track lengths. Fixes some audio track offset issues for single-BIN dumps. (#146)
+- SMPC: Update peripheral PDR1/2 registers when reading and when updating EXLE. Fixes many cases of games not recognizing Virtua Gun inputs or missing shots. (#787)
+- VDP1: Don't sync VDP1 FBRAM on debug reads. Fixes deadlock when viewing the framebuffer area in a memory viewer window.
+- VDP1: Textured sprites with CMDSIZE.H=0 never fetch additional texels. Fixes glitched graphics in the scorecard of the shooting range in Policenauts.
+- VDP2: Fix coordinate latching on external latches. Fixes various Virtua Gun shot offset errors. (#787)
+- VDP2: Fix off-screen coordinate latching. Fixes some Virtua Gun reload detection issues. (#787)
+- VDP2: Restrict color calculations in certain video modes. Fixes Sound Test screen text blending in with the background in Dark Savior.
+    - In high resolution modes with color RAM modes other than 0, color calculations can only be applied on top of RGB layers, but not palette layers.
+
+
+
+## Version 0.3.3
+
+Released 2026-06-21.
+
+Uses save state file version 13.
+
+### New features and improvements
+
+- GUI: Specify missing ImGui style colors.
+- System: Add Europe PAL and Asia NTSC (in that order) to default preferred regions after North America and Japan.
+- VDP2: Implemented color gradation effect. Fixes background in the Egg Birdon boss arena of Saturn Bomberman.
+
+### Fixes
+
+- System: Properly autoselect IPL ROMs for Asia NTSC region (South Korea, Taiwan).
+- VDP1: Don't automatically mark jumps to 0 as infinite loops. Fixes Akumajou Dracula X no longer booting. (#904)
+
+
+## Version 0.3.2
+
+Released 2026-06-21.
+
+Introduced save state file version 13.
+
+### New features and improvements
+
+- App: Added action to reload save states from disk to the File menu.
+- App: Added disc serial number to System State window.
+- App: Added M PLUS U font for Japanese text support and convert Japanese backup RAM text to the appropriate characters. (#18)
+- App: Added option to show/hide game name from window title bar.
+- App: Added option to show/hide performance indicators from window title bar.
+- App: Added option to start emulation paused upon launching the emulator. (#899)
+- App: Added Message History window, listing up to 10000 messages.
+- App: Display Japanese text in the Backup Memory Manager and on window title bar (game title).
+- App: Removed graphics backend option as it served no purpose at this time. Ymir will rely on the default backend used by the SDL3 Renderer API, which should be compatible with most systems.
+    - Note: GPU rendering will include a rewrite of the app's graphics subsystem, moving away from SDL Renderer to our own implementation.
+- App: Rotate screenshots based on selected display rotation.
+- Debug: Added CD Block Partitions view, listing all buffers currently loaded in each partition.
+- Debug: Avoid infinite loop when SH2 debugger window is collapsed. Fixes UI hang when (re)opening the window once it was collapsed. (#690)
+- Debug: Simplify SH2 watchpoints down to simple read/write toggles per byte.
+    - Previously set watchpoints will be migrated to the new format automatically. 16-bit watchpoints are converted to two consecutive watchpoints, and 32-bit watchpoints are converted to four consecutive watchpoints.
+    - 16-bit and 32-bit accesses will now trigger watchpoints on any byte accessed by them. For example, a read watchpoint set on 6010003 will be triggered by 8-bit reads from 6010003, 16-bit reads from 6010002 or 32-bit reads from 6010000.
+    - When a watchpoint is triggered, Ymir will now display the address and size of the access and which watchpoints were triggered.
+- SCSP: Added Threaded SCSP option, bringing a decent performance boost in nearly all situations. (#3, #896; @SternXD)
+- SCU: Optimize DSP operations involving 48-bit registers.
+- SH2: Clock ratio option ranging from 25% up to 500%. (#876, #895; @SternXD)
+- SH2: Decode opcode arguments directly in instruction handlers for better performance.
+- SH2: Fetch pairs of instructions using 32-bit accesses, more closely matching the behavior of the real SH7095. Improves overall emulation accuracy and slightly boosts performance on SH2-bound games.
+- SH2: Handle WB/EX stalls. (thanks to @celeriyacon)
+- SH2: Microoptimize DIV1 instruction.
+
+### Fixes
+
+- App: Temporarily switch from exclusive to borderless fullscreen when opening a file dialog then back to exclusive mode once the dialog is closed to avoid minimizing or resizing the window.
+- CD Block (HLE): Don't change status code when executing Get TOC. Fixes Mass Destruction not playing any music in-game. (#664)
+- CD Block (HLE): Extend seek times to 5 ticks. Fixes animations in Digital Dance Mix Vol. 1 - Namie Amuro when seeking or pausing and resuming tracks. (#476)
+- CD Block (HLE): Extend sizes of Mode 2 Form 2 sectors read from disc when the get sector length is less than 2324 bytes. Fixes:
+    - Chisato Moritaka - Watarase Bashi & Lala Sunshine (#604): FMVs now play correctly.
+    - Digital Dance Mix Vol. 1 - Namie Amuro (#476): animations and song now play correctly.
+- CD Block (HLE): Fix handling of "Get Session Info" command.
+- CD Block (HLE): Fix handling of "Play Disc" command with resume from pause parameters on data tracks. Fixes buffer exhaustion leading to softlocks in Panzer Dragoon II Zwei.
+- CD Block (HLE): Fix handling of "Seek Disc" command parameter exceptions.
+- CD Block (HLE): Handle more "Play Disc" command parameter nuances. Fixes animations in Digital Dance Mix Vol. 1 - Namie Amuro when seeking or pausing and resuming tracks. (#476)
+- CD Block (HLE): Ignore read speed setting and always use 2x for data tracks. Fixes some cases of FMVs stuttering or playing too slowly:
+    - Mass Destruction (#664)
+    - Tilt! (#872)
+- CD Block (HLE): Introduce separate array for command responses.
+- CD Block (HLE): Open tray when ejecting a disc. Fixes various cases of games that hang, freeze, crash or exhibit erratic behavior when ejecting a disc while playing. These should now properly boot back to the system's interactive shell. (#298)
+- CD Block (HLE): Properly resume disc playback after being paused due to running out of buffers. Fixes multiple games:
+    - Chou Jikuu Yousai Macross - Ai Oboete Imasu ka (#605): intro sequence now plays correctly.
+    - Dragon Force (#866): Working Designs logo FMV now plays correctly.
+    - Legend of K-1 - The Best Collection (#758): FMV of third fight now plays correctly.
+    - LifeScape - Seimei 40 Okunen Haruka na Tabi (#598): no longer freezes on opening FMV.
+    - Mahjong Yon Shimai - Wakakusa Monogatari (#527): no longer freezes on character select screen.
+    - Shellshock (#344): no longer crashes on CORE logo.
+    - Senken Kigyouden / Xianjian Qixiazhuan (#409): graphics now load correctly.
+    - Sonic Jam (#83): in-game music now plays correctly.
+    - IRREEL (homebrew) (#580): level 2 assets now load correctly.
+- CD Block (HLE): Use saved start/end play parameters when checking for FAD/track. Fixes music not looping in Mass Destruction. (#664)
+- Input: Properly bind inputs loaded from settings file upon startup. (#900)
+- Media: Bail out early on CUE parser if the file starts with a null byte.
+- Media: Ensure a valid Saturn disc is loaded before trying to parse the filesystem. Fixes crashes when trying to load non-Saturn discs.
+- Media: Fix crash when attempting to load CHDs with non-ASCII characters in the file name.
+- Rewind: Fix crash when attempting to rewind to the very first frame. (#857)
+- Rewind: Fix occasional crash when attempting to rewind with CD Block LLE enabled.
+- Settings: Correctly load virtual RTC settings from configuration file.
+- SH2: Cache line fills only cost one access to the SH2.
+- SH2: DMAC 16-byte burst should read 4 longwords then write 4 longwords.
+- SH2: Fix 8-bit and 16-bit reads from and writes to cache address array and associative purge areas. Fixes graphics glitches in Dark Savior. (#134) (thanks to @celeriyacon)
+- VDP1: Add one-pixel offset to vertical coordinates of axis-aligned sprites when rendering high-resolution modes with deinterlacing enabled. Fixes gaps in Sonic Jam and Astra Superstars. (#784, #853)
+- VDP1: Add one-pixel offset to vertical coordinates of clipping coordinates. Fixes one-pixel gap at the bottom of the screen in Sonic Jam. (#853)
+- VDP1: Branch, link and COPR fixes. (thanks to @celeriyacon)
+- VDP1: Don't end frame drawing when an infinite loop is detected. Fixes Stellar Assault no longer booting.
+- VDP1: Gouraud shading was not incremented in transparent pixels. Fixes character shading in Magical Night Dreams - Cotton 2. (#728)
+- VDP1: Illegal commands cause VDP1 to stay stuck in place rather than abort execution.
+- VDP1: Synchronize reads and writes to FBRAM. Fixes graphics issues when threaded VDP1 rendering is enabled in multiple games: (#898)
+    - BlackFire (#790): GUI elements no longer flicker.
+    - Burning Rangers (#791): transparent elements (such as fire and explosions) are no longer drawn behind walls, doors, etc.
+    - Scorcher (#281, #473): HUD is now drawn on top of level geometry and game no longer crashes in Training mode.
+    - Virtual Golf (Europe) (#830): ground is now fully rendered and random sprites no longer appear.
+    - Waialae no Kiseki - Extra 36 Holes (#871): ground is now fully rendered.
+- VDP1: Use all 16 bits for system and user clipping coordinates. Fixes black title screen on the European version of Revolution X - Music Is the Weapon.
+- VDP2: Handle another case of illegal CP/PN access combinations involving multiple PN accesses in different banks. Fixes shifted text frames in Ryuuteki Gosennen - Dragons of China. (#856)
+- VDP2: Latch current VCNT when reading from EXTEN. Fixes camera angles in Digital Dance Mix Vol. 1 - Namie Amuro. (#476)
+- VDP2: Update horizontal scroll increment every scanline. Fixes in-game terrain graphics drawn half as wide in Shellshock. (#344)
+
+
+## Version 0.3.1
+
+Released 2026-05-03.
 
 Uses save state file version 12.
 
 ### New features and improvements
 
 - Debugger: Add Priority Stack to VDP2 debug overlay.
-- VDP2: Various performance microoptimizations to the software renderer, improving performance in graphics-bound games (especially in high resolution modes).
+- VDP2: Various performance optimizations to the software renderer, improving performance in graphics-bound games (especially in high resolution modes). Technical details:
+    - RBG1 was being unnecessarily rendered when NBG0 was enabled and RBG1 was disabled
+    - Remove redundant transparency bit since priority zero acts as transparency 
+    - Remove various unused function arguments, reducing CPU register and stack pressure
+    - Pass down VDP2 register references as arguments rather than fetching them from scratch everywhere
+    - Reuse line data (i.e. skip recomputing lines) when rendering vertical mosaic
+    - Bit-pack character pattern data in a single 32-bit value
+    - Microoptimize scroll coordinates calculations
+    - Rotation parameter table calculations:
+        - Specialize calculations for (1) no coefficient table, (2) per-line coefficient table and (3) per-dot coefficient table
+        - Hoist coefficient table enable and per-dot coefficients checks out of the loop
+        - Make the inner loops SIMD-friendly
+        - Avoid unnecessary computation of transparency and line color screen data if they are disabled
+    - Microoptimizations to the compositor function:
+        - Layer sorting now uses a combined key
+        - Gather layer data in one single loop
+        - Pixel fetching is now templatized and some bail out checks are done earlier
+        - Color offset calculation enable flag is cleared in the fetch loop if no offset is actually applied
 
 ### Fixes
 
 - Debugger: Various SH2 stack analysis fixes.
+- GameDB: Add slow VDP1 flag to Funky Fantasy to fix slow FMVs.
+- Media: Detect postgaps in data tracks when the CUE sheet doesn't explicitly announce them. Fixes audio track shifts in bad Virtua Fighter 2 dumps.
+- Media: Fix PREGAP/POSTGAP handling in CUE/BIN dumps. Fixes shifted audio tracks in games dumped with ImgBurn.
 - SH2: Fix illegal slot instruction exception handling. (thanks to @celeriyacon)
 - VDP1: Add game-specific flag for skipping command processing if the top of the table is empty. Enable it exclusively for Sekai no Shasou kara - I Swiss-hen - Alps Tozantetsudou no Tabi. Fixes missing graphics in Gungriffon. (#810)
 - VDP1: Disable early polygon drawing termination when rendering polygons when user clipping mode is inverted. Fixes clipped polygons around the minimap in Machine Head (#767).

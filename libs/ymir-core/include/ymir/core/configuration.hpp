@@ -7,16 +7,22 @@
 
 #include "configuration_defs.hpp"
 
-#include <ymir/sys/clocks.hpp>
-
 #include <ymir/util/date_time.hpp>
 #include <ymir/util/observable.hpp>
+#include <ymir/util/ratio.hpp>
 
 #include <ymir/core/types.hpp>
 
 #include <vector>
 
 namespace ymir::core {
+
+inline constexpr RatioU32 kMinSH2ClockRatio = RatioU32::FromPercentage(25u);
+inline constexpr RatioU32 kMaxSH2ClockRatio = RatioU32::FromPercentage(10000u);
+
+inline constexpr RatioU32 ClampSH2ClockRatio(RatioU32 ratio) {
+    return std::clamp(ratio, kMinSH2ClockRatio, kMaxSH2ClockRatio);
+}
 
 /// @brief Emulator core configuration.
 ///
@@ -39,10 +45,17 @@ struct Configuration {
         ///
         /// If none of these regions is supported by the disc, the first region listed on the disc is used.
         util::Observable<std::vector<config::sys::Region>> preferredRegionOrder =
-            std::vector<config::sys::Region>{config::sys::Region::NorthAmerica, config::sys::Region::Japan};
+            std::vector<config::sys::Region>{config::sys::Region::NorthAmerica, config::sys::Region::Japan,
+                                             config::sys::Region::EuropePAL, config::sys::Region::AsiaNTSC};
 
         /// @brief Specifies the video standard for the system, which affects video timings and clock rates.
         util::Observable<config::sys::VideoStandard> videoStandard = config::sys::VideoStandard::NTSC;
+
+        /// @brief Enables debug tracing.
+        ///
+        /// When enabled, the emulator executes an alternative code path with all debug functions enabled, incurring a
+        /// noticeable performance penalty.
+        util::Observable<bool> debugTracing = false;
 
         /// @brief Enables SH-2 cache emulation.
         ///
@@ -50,6 +63,18 @@ struct Configuration {
         ///
         /// Enabling this option incurs a small performance penalty and purges all SH-2 caches.
         util::Observable<bool> emulateSH2Cache = false;
+
+        /// @brief SH-2 clock factor ratio.
+        ///
+        /// Adjusts the cycle rate of the SH-2 CPUs, which may reduce internal slowdowns and lag in CPU-heavy games.
+        /// Decreasing the factor will improve emulation performance but may cause slowdowns.
+        ///
+        /// Changing it either way from 100% may lower compatibility with some games.
+        ///
+        /// The ratio is clamped to the range [25%..10000%]. The SH2 starts to choke on interrupts if it runs too
+        /// slowly and, while going faster technically is feasible, a 2.8 GHz SH2 is already too much to emulate, let
+        /// alone two of them.
+        util::Observable<RatioU32, ClampSH2ClockRatio> sh2ClockFactor = RatioU32::FromPercentage(100u);
     } system;
 
     /// @brief RTC configuration

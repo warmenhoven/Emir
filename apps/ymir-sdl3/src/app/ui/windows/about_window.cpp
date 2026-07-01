@@ -147,6 +147,15 @@ static const char *demoTextStandard =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ  \u00C0\u00C9\u00CE\u00D5\u00DA\u00D1\u00C7\u00DD\n"
     "abcdefghijklmnopqrstuvwxyz  \u00E0\u00E9\u00EE\u00F5\u00FA\u00F1\u00E7\u00FD";
 
+static const char *demoTextStandardJP =
+    "いろはにほへとちりぬるを\n"
+    "わかよたれそつねならむ\n"
+    "うゐのおくやまけふこえて\n"
+    "あさきゆめみしゑひもせす\n"
+    "\n"
+    "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかつ。\n"
+    "何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。\n";
+
 static const char *demoTextMaterialSymbols =
     ICON_MS_HOME          ICON_MS_HELP         ICON_MS_FOLDER         ICON_MS_DOCS             ICON_MS_SETTINGS      ICON_MS_MENU         ICON_MS_HISTORY      ICON_MS_HISTORY_OFF    "\n"
     ICON_MS_PLAY_ARROW    ICON_MS_PAUSE        ICON_MS_PLAY_PAUSE     ICON_MS_ARROW_BACK_2     ICON_MS_FAST_FORWARD  ICON_MS_FAST_REWIND  ICON_MS_SKIP_NEXT    ICON_MS_SKIP_PREVIOUS  "\n"
@@ -158,6 +167,7 @@ static const FontDesc fontDescs[] = {
     { .name = "Material Symbols", .license = licenseApache2_0, .url = "https://fonts.google.com/icons",               .fontFn = [](SharedContext &ctx) -> FontInfo { return {ctx.fonts.sansSerif.regular, 24.0f}; }, .demoText = demoTextMaterialSymbols },
     { .name = "Spline Sans",      .license = licenseOFL,       .url = "https://github.com/SorkinType/SplineSans",     .fontFn = [](SharedContext &ctx) -> FontInfo { return {ctx.fonts.sansSerif.regular, 16.0f}; }, .demoText = demoTextStandard },
     { .name = "Spline Sans Mono", .license = licenseOFL,       .url = "https://github.com/SorkinType/SplineSansMono", .fontFn = [](SharedContext &ctx) -> FontInfo { return {ctx.fonts.monospace.regular, 16.0f}; }, .demoText = demoTextStandard },
+    { .name = "M PLUS U",         .license = licenseOFL,       .url = "https://github.com/coz-m/MPLUS_FONTS",         .fontFn = [](SharedContext &ctx) -> FontInfo { return {ctx.fonts.sansSerif.regular, 16.0f}; }, .demoText = demoTextStandardJP },
     { .name = "Zen Dots",         .license = licenseOFL,       .url = "https://github.com/googlefonts/zen-dots",      .fontFn = [](SharedContext &ctx) -> FontInfo { return {ctx.fonts.display,           24.0f}; }, .demoText = demoTextStandard },
 };
 // clang-format on
@@ -668,6 +678,7 @@ void AboutWindow::DrawAcknowledgementsTab() {
     ImGui::TextUnformatted(":");
     ImGui::Indent();
     ImGui::TextUnformatted("Aitor Guevara, "
+                           "Armonte, "
                            "Aydan Watkins, "
                            "Chase Heathcliff, "
                            "Derek Fagan, "
@@ -675,9 +686,11 @@ void AboutWindow::DrawAcknowledgementsTab() {
                            "Elcorsico 28, "
                            "Giovani Avelar, "
                            "Israel Jacquez, "
+                           "James Wood, "
                            "Jeff Greulich, "
                            "Joek, "
                            "Julien P, "
+                           "KC, "
                            "khalifax10, "
                            "Mario Fonseca, "
                            "Mored4u, "
@@ -688,7 +701,8 @@ void AboutWindow::DrawAcknowledgementsTab() {
                            "Rustle, "
                            "Some Guy, "
                            "TheCoolPup, "
-                           "Zrat.");
+                           "Zrat, "
+                           "アレ・.");
     ImGui::Unindent();
 
     ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);

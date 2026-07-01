@@ -13,6 +13,12 @@ on:
   schedule:
     - cron: '45 3 * * *'
   workflow_dispatch: # Enable manual runs
+    inputs:
+      trigger-screenshotter:
+        description: 'Trigger the screenshotter job'
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   packages: write
@@ -44,6 +50,7 @@ jobs:
 
   commit-sha:
     runs-on: ubuntu-latest
+    name: Get commit SHA
     needs: [check_date]
     if: ${{ needs.check_date.outputs.should_run != 'false' }}
     outputs:
@@ -58,6 +65,7 @@ jobs:
 
   build-all:
     uses: StrikerX3/Ymir/.github/workflows/build.yaml@main
+    name: Build
     needs: [commit-sha]
     with:
       dev-build: true
@@ -66,6 +74,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
+    name: Publish nightly release
     needs: [build-all]
 
     permissions:
@@ -117,3 +126,11 @@ jobs:
         run: |
           gh release edit ${{ env.NIGHTLY_TAG_NAME }} \
             --draft=false
+
+  trigger-screenshotter:
+    uses: StrikerX3/Ymir/.github/workflows/screenshotter.yaml@main
+    name: Trigger screenshotter job
+    needs: [release]
+    if: ${{ inputs.trigger-screenshotter == null || inputs.trigger-screenshotter }}
+    secrets:
+      YMIR_SCREENSHOTTER_SECRET: ${{ secrets.YMIR_SCREENSHOTTER_SECRET }}

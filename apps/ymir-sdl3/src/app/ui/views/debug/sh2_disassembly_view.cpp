@@ -124,7 +124,7 @@ void SH2DisassemblyView::Display() {
             io.WantCaptureMouse = true;
         }
 
-        const uint32 lines = availArea.y / (lineHeight + itemSpacing) + 1;
+        const uint32 lines = std::max(availArea.y, 0.0f) / (lineHeight + itemSpacing) + 1;
         // TODO: branch arrows
 
         auto toggleSetBreakpoint = [&](uint32 address) {
@@ -192,8 +192,8 @@ void SH2DisassemblyView::Display() {
         const uint32 baseAddress = m_cursor.viewportTopAddress;
         for (uint32 i = 0; i < lines; i++) {
             const uint32 address = baseAddress + i * sizeof(uint16);
-            const uint16 prevOpcode = m_context.saturn.GetMainBus().Peek<uint16>(address - 2);
-            const uint16 opcode = m_context.saturn.GetMainBus().Peek<uint16>(address);
+            const uint16 prevOpcode = probe.PeekInstruction(address - 2, false);
+            const uint16 opcode = probe.PeekInstruction(address, false);
             const sh2::DisassembledInstruction &prevDisasm = sh2::Disassemble(prevOpcode);
             const sh2::DisassembledInstruction &disasm = sh2::Disassemble(opcode);
 
@@ -474,7 +474,7 @@ void SH2DisassemblyView::Display() {
                 }
             };
 
-            auto drawDelaySlotPrefix = [&] {
+            auto drawDelaySlotPrefix = [&](bool valid) {
                 const float xofs = disasmCharSize.x * 2;
                 ImGui::SameLine(0, xofs);
                 ImVec2 startPos = ImGui::GetCursorScreenPos();
@@ -487,9 +487,9 @@ void SH2DisassemblyView::Display() {
                     ImVec2(startPos.x + disasmCharSize.x * 0.4f, startPos.y + disasmCharSize.y * 0.6f),
                     ImVec2(startPos.x + disasmCharSize.x * 1.4f, startPos.y + disasmCharSize.y * 0.6f),
                 };
-                drawList->AddPolyline(points, std::size(points),
-                                      ImGui::ColorConvertFloat4ToU32(m_model.colors.disasm.delaySlot), ImDrawFlags_None,
-                                      2.0f);
+                const ImVec4 color = valid ? m_model.colors.disasm.delaySlot : m_model.colors.disasm.delaySlotIllegal;
+                drawList->AddPolyline(points, std::size(points), ImGui::ColorConvertFloat4ToU32(color),
+                                      ImDrawFlags_None, 2.0f);
                 ImGui::Dummy(ImVec2(0, 0));
             };
 
@@ -560,11 +560,7 @@ void SH2DisassemblyView::Display() {
                 ImGui::Dummy(ImVec2(0, 0));
 
                 if (prevDisasm.hasDelaySlot) {
-                    if (!disasm.validInDelaySlot) {
-                        drawIllegalMnemonic();
-                        return;
-                    }
-                    drawDelaySlotPrefix();
+                    drawDelaySlotPrefix(disasm.validInDelaySlot);
                 }
 
                 switch (disasm.mnemonic) {
@@ -1035,6 +1031,9 @@ void SH2DisassemblyView::Display() {
                     };
 
                     ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.medium);
+                    if (prevDisasm.hasDelaySlot && !disasm.validInDelaySlot) {
+                        ImGui::TextColored(m_model.colors.disasm.illegalMnemonic, "Illegal delay slot instruction");
+                    }
                     if (isBreakpointSet) {
                         drawSepOnce();
                         ImGui::TextColored(m_model.colors.disasm.bkptHoveredIconColor, "Breakpoint set");

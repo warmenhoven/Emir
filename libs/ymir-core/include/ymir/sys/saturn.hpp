@@ -18,7 +18,6 @@ See @ref index for instructions on how to use the emulator.
 
 #include "memory.hpp"
 #include "system.hpp"
-#include "system_features.hpp"
 
 #include <ymir/hw/cart/cart.hpp>
 #include <ymir/hw/cart/cart_slot.hpp>
@@ -171,12 +170,14 @@ struct Saturn {
     /// Disabling debug tracing also detaches all tracers from all components.
     ///
     /// @param[in] enable whether to enable or disable debug tracing
-    void EnableDebugTracing(bool enable);
+    void EnableDebugTracing(bool enable) {
+        configuration.system.debugTracing = enable;
+    }
 
     /// @brief Determines if debug tracing is enabled.
     /// @return the debug tracing state
     [[nodiscard]] bool IsDebugTracingEnabled() const noexcept {
-        return m_systemFeatures.enableDebugTracing;
+        return m_enableDebugTracing;
     }
 
     /// @brief Enables or disables SH-2 cache emulation.
@@ -193,7 +194,13 @@ struct Saturn {
     /// @brief Determines if SH-2 cache emulation is enabled.
     /// @return the SH-2 cache emulation state
     [[nodiscard]] bool IsSH2CacheEmulationEnabled() const noexcept {
-        return configuration.system.emulateSH2Cache;
+        return m_emulateSH2Caches;
+    }
+
+    /// @brief Sets the SH-2 clock factor.
+    /// @param[in] factor the clock factor ratio
+    void SetSH2ClockFactor(RatioU32 factor) {
+        configuration.system.sh2ClockFactor = factor;
     }
 
     /// @brief Runs the emulator until the end of the current frame using the current settings.
@@ -372,9 +379,17 @@ private:
     /// @param[in] regions the new preferred region order
     void UpdatePreferredRegionOrder(std::span<const core::config::sys::Region> regions);
 
+    /// @brief Updates the debug tracing setting and the `RunFrameFn()` pointer.
+    /// @param[in] enabled whether to enable debug tracing
+    void UpdateDebugTracing(bool enabled);
+
     /// @brief Updates the SH-2 cache emulation setting and the `RunFrameFn()` pointer.
     /// @param[in] enabled whether to enable SH-2 cache emulation
     void UpdateSH2CacheEmulation(bool enabled);
+
+    /// @brief Updates the SH-2 clock factor and updates system clock ratios.
+    /// @param[in] factor the new clock ratio
+    void UpdateSH2ClockFactor(RatioU32 factor);
 
     /// @brief Updates the video standard to emulate and adjusts clock ratios across the system's components.
     /// @param[in] videoStandard the new video standard
@@ -402,8 +417,11 @@ private:
     /// @brief Global system parameters.
     sys::System m_system;
 
-    /// @brief Global system features.
-    sys::SystemFeatures m_systemFeatures;
+    /// @brief Whether to use debug tracing.
+    bool m_enableDebugTracing = false;
+
+    /// @brief Whether to emulate SH2 caches.
+    bool m_emulateSH2Caches = false;
 
 public:
     // -------------------------------------------------------------------------

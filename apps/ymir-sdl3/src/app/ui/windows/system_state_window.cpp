@@ -152,10 +152,15 @@ void SystemStateWindow::DrawClocks() {
         ImGui::TableSetupColumn("Ratio");
         ImGui::TableHeadersRow();
 
-        const sys::ClockRatios &clockRatios = m_context.saturn.instance->GetClockRatios();
+        const Saturn &saturn = *m_context.saturn.instance;
 
-        const double masterClock =
-            (double)clockRatios.masterClock * clockRatios.masterClockNum / clockRatios.masterClockDen / 1000000.0;
+        const sys::ClockRatios clockRatios = saturn.GetClockRatios();
+
+        const double clockScale = (double)saturn.configuration.system.sh2ClockFactor.Get().AsDouble();
+        const double baseMasterClock =
+            ((double)clockRatios.masterClock * clockRatios.masterClockNum / clockRatios.masterClockDen / 1000000.0);
+        const double masterClock = baseMasterClock * clockScale;
+
         ImGui::TableNextRow();
         if (ImGui::TableNextColumn()) {
             ImGui::TextUnformatted("SH-2, SCU and VDPs");
@@ -179,14 +184,14 @@ void SystemStateWindow::DrawClocks() {
         }
 
         // Account for double-resolution
-        const bool doubleWidth = m_context.saturn.instance->VDP.GetProbe().GetResolution().width >= 640;
+        const bool doubleWidth = saturn.VDP.GetProbe().GetResolution().width >= 640;
         ImGui::TableNextRow();
         if (ImGui::TableNextColumn()) {
             ImGui::TextUnformatted("Pixel clock");
         }
         if (ImGui::TableNextColumn()) {
             const double factor = doubleWidth ? 0.5 : 0.25;
-            ImGui::Text("%.5lf MHz", masterClock * factor);
+            ImGui::Text("%.5lf MHz", baseMasterClock * factor);
         }
         if (ImGui::TableNextColumn()) {
             ImGui::Text("1:%u", doubleWidth ? 2u : 4u);
@@ -257,24 +262,8 @@ void SystemStateWindow::DrawCDBlock() {
         m_context.EnqueueEvent(events::emu::EjectDisc());
     }
 
-    ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
-    if (m_context.state.loadedDiscImagePath.empty()) {
-        ImGui::TextUnformatted("No image loaded");
-    } else {
-        ImGui::Text("Image from %s", fmt::format("{}", m_context.state.loadedDiscImagePath).c_str());
-        std::string hash{};
-        {
-            std::unique_lock lock{m_context.locks.disc};
-            hash = ToString(m_context.saturn.GetDiscHash());
-        }
+    DrawDiscImage();
 
-        ImGui::Text("Hash: %s", hash.c_str());
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Copy##disc_hash")) {
-            SDL_SetClipboardText(hash.c_str());
-        }
-    }
-    ImGui::PopTextWrapPos();
     switch (status) {
     case cdblock::kStatusCodeBusy: ImGui::TextUnformatted("Busy"); break;
     case cdblock::kStatusCodePause: ImGui::TextUnformatted("Paused"); break;
@@ -430,24 +419,8 @@ void SystemStateWindow::DrawCDDrive() {
         m_context.EnqueueEvent(events::emu::EjectDisc());
     }
 
-    ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
-    if (m_context.state.loadedDiscImagePath.empty()) {
-        ImGui::TextUnformatted("No image loaded");
-    } else {
-        ImGui::Text("Image from %s", fmt::format("{}", m_context.state.loadedDiscImagePath).c_str());
-        std::string hash{};
-        {
-            std::unique_lock lock{m_context.locks.disc};
-            hash = ToString(m_context.saturn.GetDiscHash());
-        }
+    DrawDiscImage();
 
-        ImGui::Text("Hash: %s", hash.c_str());
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Copy##disc_hash")) {
-            SDL_SetClipboardText(hash.c_str());
-        }
-    }
-    ImGui::PopTextWrapPos();
     switch (status.operation) {
     case CDOp::Reset: ImGui::TextUnformatted("Reset"); break;
     case CDOp::Idle: ImGui::TextUnformatted("Idle"); break;
@@ -576,6 +549,40 @@ void SystemStateWindow::DrawCDDrive() {
     } else {
         ImGui::TextUnformatted("");
     }
+}
+
+void SystemStateWindow::DrawDiscImage() {
+    ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+    if (m_context.state.loadedDiscImagePath.empty()) {
+        ImGui::TextUnformatted("No image loaded");
+    } else {
+        ImGui::Text("Image from %s", fmt::format("{}", m_context.state.loadedDiscImagePath).c_str());
+        std::string hash{};
+        std::string serial{};
+        {
+            std::unique_lock lock{m_context.locks.disc};
+            hash = ToString(m_context.saturn.GetDiscHash());
+            serial = m_context.saturn.GetDisc().header.productNumber;
+        }
+
+        auto draw = [&](const char *name, std::string_view value) {
+            if (value.empty()) {
+                ImGui::Text("%s: <blank>", name);
+            } else {
+                ImGui::Text("%s: %s", name, value.data());
+                ImGui::PushID(name);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Copy")) {
+                    SDL_SetClipboardText(value.data());
+                }
+                ImGui::PopID();
+            }
+        };
+
+        draw("Serial", serial.c_str());
+        draw("Hash", hash.c_str());
+    }
+    ImGui::PopTextWrapPos();
 }
 
 void SystemStateWindow::DrawBackupMemory() {

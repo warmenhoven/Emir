@@ -11,6 +11,10 @@ VDP::VDP(core::Scheduler &scheduler, core::Configuration &config)
     , m_scheduler(scheduler) {
 
     config.system.videoStandard.Observe([this](VideoStandard videoStandard) { SetVideoStandard(videoStandard); });
+    config.system.sh2ClockFactor.Observe([this](RatioU32) {
+        m_state.regs2.TVMDDirty = true;
+        UpdateResolution<false>();
+    });
     config.video.threadedVDP1.Observe([this](bool value) {
         if (auto *renderer = m_renderer->As<VDPRendererType::Software>()) {
             renderer->EnableThreadedVDP1(value);
@@ -337,6 +341,7 @@ FORCE_INLINE void VDP::VDP1WriteVRAM(uint32 address, T value) {
     if (m_stallVDP1OnVRAMWrites && m_VDP1CtlState.drawing) {
         m_VDP1TimingPenaltyCycles += kVDP1TimingPenaltyPerWrite;
     }
+    m_VDP1CtlState.inInfiniteLoop = false;
 }
 
 template <mem_primitive_16 T, bool peek>
@@ -596,6 +601,7 @@ void VDP::UpdateResolution() {
 
     // Derive right shift amount to be applied to HCNT<<1
     m_state.regs2.HCNTShift = m_state.regs2.TVMD.HRESOn <= 1   ? 1  // Normal modes: HCNT << 1
+                              : m_state.regs2.TVMD.HRESOn <= 3 ? 2  // Hi-Res modes: HCNT >> 1
                               : m_state.regs2.TVMD.HRESOn >= 6 ? 2  // Excl. Hi-Res: HCNT >> 1
                                                                : 0; // Other modes:  HCNT unchanged
 
@@ -676,10 +682,12 @@ void VDP::UpdateResolution() {
                                   : vTimingsNormal[m_state.regs2.TVSTAT.PAL][m_state.regs2.TVMD.VRESOn];
     m_VTimingField = static_cast<uint32>(interlaced) & m_state.regs2.TVSTAT.ODD;
 
-    // Adjust for dot clock
+    // Adjust for dot clock and SH-2 clock factor
     const uint32 dotClockMult = (m_state.regs2.TVMD.HRESOn & 2) ? 2 : 4;
+    const auto [clockFactorNum, clockFactorDen] = m_config.system.sh2ClockFactor->Pair();
     for (auto &timing : m_HTimings) {
-        timing *= dotClockMult;
+        timing = timing * dotClockMult * clockFactorNum / clockFactorDen;
+        timing = std::max(timing, 1u); // safeguard against infinite loop with the scheduler
     }
 
     // Compute cycles available for VBlank erase
@@ -706,6 +714,7 @@ void VDP::UpdateResolution() {
     }};
     static constexpr auto kVPActiveIndex = static_cast<uint32>(VerticalPhase::Active);
     static constexpr auto kVPLastLineIndex = static_cast<uint32>(VerticalPhase::LastLine);
+    // NOTE: intentionally not scaling VBlank erase cycles to ensure it completes when the system is underclocked
     m_VBlankEraseCyclesPerLine = kVBEHorzTimings[m_state.regs2.TVMD.HRESOn];
     m_VBlankEraseLines = {
         m_VTimings[0][kVPLastLineIndex] - m_VTimings[0][kVPActiveIndex],
@@ -765,7 +774,7 @@ FORCE_INLINE void VDP::IncrementVCounter() {
 // ----
 
 void VDP::BeginHPhaseActiveDisplay() {
-    devlog::trace<grp::phase>("(VCNT = {:3d})  Entering horizontal active display phase", m_state.regs2.VCNT);
+    devlog::trace<grp::hphase>("(VCNT = {:3d})  Entering horizontal active display phase", m_state.regs2.VCNT);
     if (m_state.VPhase == VerticalPhase::Active) {
         if (m_state.regs2.VCNT == m_VTimings[m_VTimingField][0] - 16) { // ~1ms before VBlank IN
             m_cbTriggerOptimizedINTBACKRead();
@@ -776,7 +785,7 @@ void VDP::BeginHPhaseActiveDisplay() {
 }
 
 void VDP::BeginHPhaseRightBorder() {
-    devlog::trace<grp::phase>("(VCNT = {:3d})  Entering right border phase", m_state.regs2.VCNT);
+    devlog::trace<grp::hphase>("(VCNT = {:3d})  Entering right border phase", m_state.regs2.VCNT);
 
     devlog::trace<grp::intr_hb>("## HBlank IN {:3d}", m_state.regs2.VCNT);
 
@@ -808,13 +817,13 @@ void VDP::BeginHPhaseRightBorder() {
 }
 
 void VDP::BeginHPhaseSync() {
-    devlog::trace<grp::phase>("(VCNT = {:3d})  Entering horizontal sync phase", m_state.regs2.VCNT);
+    devlog::trace<grp::hphase>("(VCNT = {:3d})  Entering horizontal sync phase", m_state.regs2.VCNT);
 
     // This phase intentionally does nothing to insert a gap between the two border phases
 }
 
 void VDP::BeginHPhaseLeftBorder() {
-    devlog::trace<grp::phase>("(VCNT = {:3d})  Entering left border phase", m_state.regs2.VCNT);
+    devlog::trace<grp::hphase>("(VCNT = {:3d})  Entering left border phase", m_state.regs2.VCNT);
 
     if (m_state.VPhase == VerticalPhase::LastLine) {
         auto &ctx1 = m_VDP1CtlState;
@@ -868,13 +877,13 @@ void VDP::BeginHPhaseLeftBorder() {
 // ----
 
 void VDP::BeginVPhaseActiveDisplay() {
-    devlog::trace<grp::phase>("(VCNT = {:3d})  Entering vertical active display phase", m_state.regs2.VCNT);
+    devlog::trace<grp::vphase>("(VCNT = {:3d})  Entering vertical active display phase", m_state.regs2.VCNT);
 
     m_state.regs2.VCNTSkip = 0;
 }
 
 void VDP::BeginVPhaseBottomBorder() {
-    devlog::trace<grp::phase>("(VCNT = {:3d})  Entering bottom border phase", m_state.regs2.VCNT);
+    devlog::trace<grp::vphase>("(VCNT = {:3d})  Entering bottom border phase", m_state.regs2.VCNT);
 
     devlog::trace<grp::intr>("## VBlank IN");
 
@@ -886,7 +895,7 @@ void VDP::BeginVPhaseBottomBorder() {
 }
 
 void VDP::BeginVPhaseBlankingAndSync() {
-    devlog::trace<grp::phase>("(VCNT = {:3d})  Entering blanking/vertical sync phase", m_state.regs2.VCNT);
+    devlog::trace<grp::vphase>("(VCNT = {:3d})  Entering blanking/vertical sync phase", m_state.regs2.VCNT);
 
     // End frame
     devlog::trace<grp::vdp2_render>("End VDP2 frame");
@@ -902,13 +911,13 @@ void VDP::BeginVPhaseBlankingAndSync() {
 }
 
 void VDP::BeginVPhaseVCounterSkip() {
-    devlog::trace<grp::phase>("(VCNT = {:3d})  Entering vertical counter skip phase", m_state.regs2.VCNT);
+    devlog::trace<grp::vphase>("(VCNT = {:3d})  Entering vertical counter skip phase", m_state.regs2.VCNT);
 
     m_state.regs2.VCNTSkip = m_VCounterSkip;
 }
 
 void VDP::BeginVPhaseTopBorder() {
-    devlog::trace<grp::phase>("(VCNT = {:3d})  Entering top border phase", m_state.regs2.VCNT);
+    devlog::trace<grp::vphase>("(VCNT = {:3d})  Entering top border phase", m_state.regs2.VCNT);
 
     UpdateResolution<true>();
 
@@ -920,7 +929,7 @@ void VDP::BeginVPhaseTopBorder() {
 }
 
 void VDP::BeginVPhaseLastLine() {
-    devlog::trace<grp::phase>("(VCNT = {:3d})  Entering last line phase", m_state.regs2.VCNT);
+    devlog::trace<grp::vphase>("(VCNT = {:3d})  Entering last line phase", m_state.regs2.VCNT);
 
     devlog::trace<grp::intr>("## VBlank OUT");
 
@@ -964,6 +973,7 @@ void VDP::VDP1BeginFrame() {
 
     m_state.regs1.returnAddress = kVDP1NoReturn;
     m_state.regs1.currCommandAddress = 0;
+    m_state.regs1.nextCommandAddress = 0;
     m_state.regs1.currFrameEnded = false;
 
     bool valid = !m_skipEmptyVDP1Table;
@@ -982,6 +992,7 @@ void VDP::VDP1BeginFrame() {
         m_VDP1CtlState.drawing = true;
         m_VDP1CtlState.lastJumpAddress = 0xFFFFFFFF;
         m_VDP1CtlState.loopCount = 0;
+        m_VDP1CtlState.inInfiniteLoop = false;
     } else {
         devlog::warn<grp::vdp1_cmd>("Possible empty command table found; aborting");
     }
@@ -1003,14 +1014,16 @@ uint64 VDP::VDP1ProcessCommand() {
     if (!m_VDP1CtlState.drawing) {
         return 0;
     }
-
-    uint64 cycles = 0;
-
-    uint32 &cmdAddress = m_state.regs1.currCommandAddress;
-    const VDP1Command::Control control{.u16 = VDP1ReadVRAM<uint16>(cmdAddress)};
+    if (m_VDP1CtlState.inInfiniteLoop) {
+        return 16;
+    }
 
     // Every command costs 16 cycles to fetch, even if skipped
-    cycles += 16;
+    uint64 cycles = 16;
+
+    const uint32 cmdAddress = m_state.regs1.nextCommandAddress;
+    const VDP1Command::Control control{.u16 = VDP1ReadVRAM<uint16>(cmdAddress)};
+    m_state.regs1.currCommandAddress = cmdAddress;
 
     devlog::trace<grp::vdp1_cmd>("Processing command {:04X} @ {:05X}", control.u16, cmdAddress);
     if (control.end) [[unlikely]] {
@@ -1018,8 +1031,7 @@ uint64 VDP::VDP1ProcessCommand() {
         VDP1EndFrame();
     } else if (!control.skip) {
         if (!control.IsValid()) [[unlikely]] {
-            devlog::debug<grp::vdp1_cmd>("Invalid command {:X}; aborting", static_cast<uint16>(control.command));
-            VDP1EndFrame();
+            devlog::debug<grp::vdp1_cmd>("Invalid command {:X}", static_cast<uint16>(control.command));
             return cycles;
         }
         m_renderer->VDP1ExecuteCommand(cmdAddress, control);
@@ -1028,32 +1040,37 @@ uint64 VDP::VDP1ProcessCommand() {
 
     // Go to the next command
     using enum VDP1Command::JumpType;
+    uint32 target = cmdAddress;
     switch (control.jumpMode) {
-    case Next: cmdAddress += 0x20; break;
+    case Next: target += 0x20; break;
     case Assign: {
-        const uint32 nextCmdAddress = (VDP1ReadVRAM<uint16>(cmdAddress + 0x02) << 3u) & ~0x1F;
-        devlog::trace<grp::vdp1_cmd>("Jump to {:05X}", nextCmdAddress);
+        target = (VDP1ReadVRAM<uint16>(cmdAddress + 0x02) << 3u) & ~0x1F;
+        devlog::trace<grp::vdp1_cmd>("Jump to {:05X}", target);
 
         // Simple check for infinite loops
+        // - Akumajou Dracula X attempts to jump back to 0 in some cases
         // - Gale Racer stage 1-2 (Mojave Desert) creates an infinite loop at 05140 with the jump at 05280
-        if (nextCmdAddress == m_VDP1CtlState.lastJumpAddress) {
+        // - Rayman leaves garbage in VDP1 VRAM and occasionally runs a command that loops into itself
+        // - Sonic R attempts to jump back to 0 in some cases
+        // - Stellar Assault SS puts the VDP1 in an infinite loop during boot, breaks out by editing VRAM while in it
+        if (target == m_VDP1CtlState.lastJumpAddress) {
             ++m_VDP1CtlState.loopCount;
         } else {
             m_VDP1CtlState.loopCount = 0;
-            m_VDP1CtlState.lastJumpAddress = nextCmdAddress;
+            m_VDP1CtlState.lastJumpAddress = target;
         }
 
         static constexpr uint32 kMaxLoopIterations = 32;
 
-        // HACK: Avoid infinite loops
-        // - Sonic R attempts to jump back to 0 in some cases
-        // - Rayman leaves garbage in VDP1 VRAM and occasionally runs a command that loops into itself
-        if (nextCmdAddress == 0 || nextCmdAddress == cmdAddress || m_VDP1CtlState.loopCount >= kMaxLoopIterations) {
-            devlog::warn<grp::vdp1_cmd>("Possible infinite loop detected; aborting");
-            VDP1EndFrame();
+        if (target == cmdAddress || m_VDP1CtlState.loopCount >= kMaxLoopIterations) {
+            if constexpr (devlog::warn_enabled<grp::vdp1_cmd>) {
+                if (m_VDP1CtlState.loopCount == kMaxLoopIterations) {
+                    devlog::warn<grp::vdp1_cmd>("Possible infinite loop detected; suspending");
+                }
+            }
+            m_VDP1CtlState.inInfiniteLoop = true;
             return cycles;
         }
-        cmdAddress = nextCmdAddress;
         break;
     }
     case Call:
@@ -1061,21 +1078,22 @@ uint64 VDP::VDP1ProcessCommand() {
         if (m_state.regs1.returnAddress == kVDP1NoReturn) {
             m_state.regs1.returnAddress = cmdAddress + 0x20;
         }
-        cmdAddress = (VDP1ReadVRAM<uint16>(cmdAddress + 0x02) << 3u) & ~0x1F;
-        devlog::trace<grp::vdp1_cmd>("Call {:05X}", cmdAddress);
+        target = (VDP1ReadVRAM<uint16>(cmdAddress + 0x02) << 3u) & ~0x1F;
+        devlog::trace<grp::vdp1_cmd>("Call {:05X}", target);
         break;
     case Return:
         // Return seems to only return if there was a previous Call
         if (m_state.regs1.returnAddress != kVDP1NoReturn) {
-            cmdAddress = m_state.regs1.returnAddress;
+            target = m_state.regs1.returnAddress;
             m_state.regs1.returnAddress = kVDP1NoReturn;
+            devlog::trace<grp::vdp1_cmd>("Return to {:05X}", target);
         } else {
-            cmdAddress += 0x20;
+            target += 0x20;
+            devlog::trace<grp::vdp1_cmd>("Illegal return, advancing to {:05X}", target);
         }
-        devlog::trace<grp::vdp1_cmd>("Return to {:05X}", cmdAddress);
         break;
     }
-    cmdAddress &= 0x7FFFF;
+    m_state.regs1.nextCommandAddress = target & 0x7FFFF;
 
     return cycles;
 }
@@ -1210,10 +1228,28 @@ FORCE_INLINE uint64 VDP::VDP1CalcCommandTiming(uint32 cmdAddress, VDP1Command::C
 
 void VDP::ExternalLatch(uint16 x, uint16 y) {
     if (m_state.regs2.EXTEN.EXLTEN) {
-        // TODO: why do we need to tweak the coords here? And why shift by 2 instead of 1?
-        m_state.regs2.WriteHCNT((x + 64u) << 2u);
-        m_state.regs2.VCNTLatch = y + 16u;
         m_state.regs2.TVSTAT.EXLTFG = x < m_HRes && y < m_VRes;
+        if (m_state.regs2.TVSTAT.EXLTFG) {
+            if (m_virtuaGunJitter) {
+                auto jitter = [](uint32 &lastValue) {
+                    for (;;) {
+                        const uint32 value = rand() & 3;
+                        if (value != lastValue) {
+                            lastValue = value;
+                            return value;
+                        }
+                    }
+                };
+
+                x += jitter(m_virtuaGunLastJitterX);
+                y += jitter(m_virtuaGunLastJitterY);
+            }
+            m_state.regs2.WriteHCNT((x + 32u) << 2u);
+            m_state.regs2.VCNTLatch = y;
+        } else {
+            m_state.regs2.WriteHCNT(0x3FF);
+            m_state.regs2.VCNTLatch = 0x1FF;
+        }
     }
 }
 

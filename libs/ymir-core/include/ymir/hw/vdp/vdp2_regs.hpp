@@ -71,6 +71,8 @@ struct VDP2Regs {
         TVMDDirty = true;
         accessPatternsDirty = true;
         vcellScrollDirty = true;
+
+        UpdateRestrictedColorCalc();
     }
 
     template <bool peek>
@@ -394,12 +396,19 @@ struct VDP2Regs {
         TVMD.u16 = value & 0x81F7;
         TVMDDirty |= ((TVMD.u16 ^ oldTVMD.u16) & 0x1F7) != 0;
         accessPatternsDirty |= TVMD.HRESOn != oldTVMD.HRESOn;
+        UpdateRestrictedColorCalc();
     }
 
     // 180002   EXTEN   External Signal Enable
     RegEXTEN EXTEN;
 
     FORCE_INLINE uint16 ReadEXTEN() const {
+        if (!EXTEN.EXLTEN) {
+            VCNTLatch = (VCNT << VCNTShift) + VCNTSkip;
+            if (TVMD.LSMDn == InterlaceMode::DoubleDensity) {
+                VCNTLatch |= TVSTAT.ODD ^ 1;
+            }
+        }
         return EXTEN.u16;
     }
 
@@ -417,7 +426,6 @@ struct VDP2Regs {
             value ^= 0x2; // for some reason ODD is read inverted
         }
         if constexpr (!peek) {
-            VCNTLatched = TVSTAT.EXLTFG;
             TVSTAT.EXLTFG = 0;
         }
         return value;
@@ -478,18 +486,14 @@ struct VDP2Regs {
     uint16 VCNT;              // Current vertical counter
     uint16 VCNTShift;         // Left-shift applied to VCNT, derived from screen mode
     uint16 VCNTSkip;          // Value added to VCNT, derived from current display phase
-    uint16 VCNTLatch;         // Vertical counter latched by external signal
-    mutable bool VCNTLatched; // Whether the vertical counter is currently latched
+    mutable uint16 VCNTLatch; // Vertical counter latched by external signal
 
     FORCE_INLINE uint16 ReadVCNT() const {
-        if (VCNTLatched) {
-            return VCNTLatch << VCNTShift;
-        }
-        return (VCNT << VCNTShift) + VCNTSkip;
+        return VCNTLatch;
     }
 
     FORCE_INLINE void WriteVCNT(uint16 value) {
-        VCNT = value & 0x1FF;
+        VCNTLatch = value & 0x1FF;
     }
 
     // 18000C   -       Reserved (but not really)
@@ -545,6 +549,8 @@ struct VDP2Regs {
         vramControl.colorRAMMode = bit::extract<12, 13>(value);
         vramControl.colorRAMCoeffTableEnable = bit::test<15>(value);
         vramControl.UpdateDerivedValues();
+
+        UpdateRestrictedColorCalc();
     }
 
     // 180010   CYCA0L  VRAM Cycle Pattern A0 Lower
@@ -3366,6 +3372,14 @@ struct VDP2Regs {
     // Derived from CCTL, CCRNA/B, CCRR and CCRLB
     ColorCalcParams colorCalcParams;
 
+    // Whether color calculations are restricted based on current video mode settings.
+    // Color calculations are restricted when all of these conditions are met:
+    // - Using high resolution or exclusive monitor modes
+    // - Using color RAM modes other than 0
+    // This prevents blending layers on top of palette layers. Blending with RGB layers is still allowed.
+    // Derived from TVMD.HRESOn and RAMCTL.CRMDn
+    bool restrictedColorCalc;
+
     // Special function codes A and B.
     // Derived from SFCODE
     std::array<SpecialFunctionCodes, 2> specialFunctionCodes;
@@ -3373,6 +3387,10 @@ struct VDP2Regs {
     // Enables transparent shadow sprites.
     // Derived from SDCTL.TPSDSL
     bool transparentShadowEnable;
+
+    void UpdateRestrictedColorCalc() {
+        restrictedColorCalc = TVMD.HRESOn >= 2 && vramControl.colorRAMMode > 0;
+    }
 };
 
 } // namespace ymir::vdp

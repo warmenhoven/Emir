@@ -8,8 +8,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <filesystem>
-#include <fstream>
 
 namespace ymir::smpc {
 
@@ -57,7 +55,7 @@ SMPC::SMPC(core::Scheduler &scheduler, ISMPCOperations &smpcOps, core::Configura
 }
 
 SMPC::~SMPC() {
-    WritePersistentData();
+    PersistData();
 }
 
 void SMPC::Reset(bool hard) {
@@ -143,18 +141,22 @@ FLATTEN void SMPC::UpdateClockRatios(const sys::ClockRatios &clockRatios) {
     m_rtc.UpdateClockRatios(clockRatios);
 }
 
-void SMPC::LoadPersistentDataFrom(std::filesystem::path path, std::error_code &error) {
-    m_persistentDataPath = path;
-    errno = 0;
-    ReadPersistentData();
-    error.assign(errno, std::generic_category());
+void SMPC::LoadPersistentData(const PersistentSMPCData &data) {
+    SMEM = data.SMEM;
+    m_STE = data.STE;
+    m_rtc.LoadPersistentData(data.rtc);
 }
 
-void SMPC::SavePersistentDataTo(std::filesystem::path path, std::error_code &error) {
-    m_persistentDataPath = path;
-    errno = 0;
-    WritePersistentData();
-    error.assign(errno, std::generic_category());
+void SMPC::SavePersistentData(PersistentSMPCData &data) const {
+    data.SMEM = SMEM;
+    data.STE = m_STE;
+    m_rtc.SavePersistentData(data.rtc);
+}
+
+void SMPC::PersistData() const {
+    PersistentSMPCData data;
+    SavePersistentData(data);
+    m_cbPersistData(data);
 }
 
 uint8 SMPC::GetAreaCode() const {
@@ -411,58 +413,6 @@ void SMPC::Write(uint32 address, uint8 value) {
     }
 }
 
-void SMPC::ReadPersistentData() {
-    if (m_persistentDataPath.empty()) {
-        return;
-    }
-
-    // TODO: replace std iostream with custom I/O class with managed endianness
-    std::ifstream in{m_persistentDataPath, std::ios::binary};
-    if (!in) {
-        return;
-    }
-
-    int version = in.get();
-    if (version != kPersistentDataVersion || version < 0) {
-        return;
-    }
-    in.seekg(3, std::ios::cur); // skip 3 reserved bytes
-
-    std::array<uint8, 4> smem{};
-    bool ste{};
-
-    in.read((char *)&smem[0], sizeof(smem));
-    in.read((char *)&ste, sizeof(ste));
-    if (!in) {
-        return;
-    }
-    SMEM = smem;
-    m_STE = ste;
-
-    m_rtc.ReadPersistentData(in);
-}
-
-void SMPC::WritePersistentData() {
-    if (m_persistentDataPath.empty()) {
-        return;
-    }
-
-    // TODO: replace std iostream with custom I/O class with managed endianness
-    std::ofstream out{m_persistentDataPath, std::ios::binary};
-    if (!out) {
-        return;
-    }
-
-    out.put(kPersistentDataVersion);
-    out.put(0x00); // reserved for future expansion
-    out.put(0x00); // reserved for future expansion
-    out.put(0x00); // reserved for future expansion
-    out.write((const char *)&SMEM[0], sizeof(SMEM));
-    out.write((const char *)&m_STE, sizeof(m_STE));
-
-    m_rtc.WritePersistentData(out);
-}
-
 FORCE_INLINE uint8 SMPC::ReadIREG(uint8 offset) const {
     assert(offset < 7);
     return IREG[offset];
@@ -494,6 +444,7 @@ FORCE_INLINE uint8 SMPC::ReadPDR1() const {
     if constexpr (peek) {
         return PDR1;
     } else {
+        const_cast<SMPC *>(this)->WritePDR1<false>(PDR1);
         return (PDR1 & 0x7F) | (m_busValue & 0x80);
     }
 }
@@ -503,6 +454,7 @@ FORCE_INLINE uint8 SMPC::ReadPDR2() const {
     if constexpr (peek) {
         return PDR2;
     } else {
+        const_cast<SMPC *>(this)->WritePDR2<false>(PDR2);
         return (PDR2 & 0x7F) | (m_busValue & 0x80);
     }
 }
@@ -628,6 +580,8 @@ FORCE_INLINE void SMPC::WriteIOSEL(uint8 value) {
 FORCE_INLINE void SMPC::WriteEXLE(uint8 value) {
     m_extLatchEnable1 = bit::test<0>(value);
     m_extLatchEnable2 = bit::test<1>(value);
+    WritePDR1<false>(PDR1);
+    WritePDR2<false>(PDR2);
 }
 
 void SMPC::ProcessCommand() {
@@ -919,7 +873,7 @@ void SMPC::SETSMEM() {
     SMEM[2] = IREG[2];
     SMEM[3] = IREG[3];
     m_STE = true;
-    WritePersistentData();
+    PersistData();
 
     SF = false; // done processing
 }
@@ -940,7 +894,7 @@ void SMPC::SETTIME() {
                              dt.hour, dt.minute, dt.second);
 
     m_rtc.SetDateTime(dt);
-    WritePersistentData();
+    PersistData();
 
     SF = false; // done processing
 }

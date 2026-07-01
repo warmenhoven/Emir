@@ -24,7 +24,6 @@ void SH2WatchpointsManager::Unbind() {
 }
 
 void SH2WatchpointsManager::AddWatchpoint(uint32 address, debug::WatchpointFlags flags) {
-    address &= ~1u;
     m_watchpoints[address].flags |= flags;
     if (m_sh2) {
         m_sh2->AddWatchpoint(address, flags);
@@ -32,7 +31,6 @@ void SH2WatchpointsManager::AddWatchpoint(uint32 address, debug::WatchpointFlags
 }
 
 void SH2WatchpointsManager::RemoveWatchpoint(uint32 address, debug::WatchpointFlags flags) {
-    address &= ~1u;
     m_watchpoints[address].flags &= ~flags;
     if (m_watchpoints[address].flags == debug::WatchpointFlags::None) {
         m_watchpoints.erase(address);
@@ -43,7 +41,6 @@ void SH2WatchpointsManager::RemoveWatchpoint(uint32 address, debug::WatchpointFl
 }
 
 void SH2WatchpointsManager::ClearWatchpoint(uint32 address) {
-    address &= ~1u;
     if (m_watchpoints.erase(address) > 0) {
         if (m_sh2) {
             m_sh2->ClearWatchpointsAt(address);
@@ -52,8 +49,6 @@ void SH2WatchpointsManager::ClearWatchpoint(uint32 address) {
 }
 
 bool SH2WatchpointsManager::MoveWatchpoint(uint32 address, uint32 newAddress) {
-    address &= ~1u;
-    newAddress &= ~1u;
     if (GetWatchpointFlags(address) == debug::WatchpointFlags::None) {
         return false;
     }
@@ -77,7 +72,6 @@ bool SH2WatchpointsManager::MoveWatchpoint(uint32 address, uint32 newAddress) {
 }
 
 bool SH2WatchpointsManager::ToggleWatchpointEnabled(uint32 address) {
-    address &= ~1u;
     auto it = m_watchpoints.find(address);
     if (it == m_watchpoints.end()) {
         return false;
@@ -109,7 +103,6 @@ void SH2WatchpointsManager::ReplaceWatchpoints(std::map<uint32, SH2Watchpoint> w
 }
 
 debug::WatchpointFlags SH2WatchpointsManager::GetWatchpointFlags(uint32 address) const {
-    address &= ~1u;
     auto it = m_watchpoints.find(address);
     if (it == m_watchpoints.end()) {
         return debug::WatchpointFlags::None;
@@ -119,7 +112,6 @@ debug::WatchpointFlags SH2WatchpointsManager::GetWatchpointFlags(uint32 address)
 }
 
 bool SH2WatchpointsManager::EnableWatchpoint(uint32 address, bool enable) {
-    address &= ~1u;
     auto it = m_watchpoints.find(address);
     if (it == m_watchpoints.end()) {
         return false;
@@ -136,7 +128,6 @@ bool SH2WatchpointsManager::EnableWatchpoint(uint32 address, bool enable) {
 }
 
 bool SH2WatchpointsManager::IsWatchpointEnabled(uint32 address) const {
-    address &= ~1u;
     auto it = m_watchpoints.find(address);
     if (it == m_watchpoints.end()) {
         return false;
@@ -154,7 +145,7 @@ void SH2WatchpointsManager::LoadState(std::filesystem::path path) {
         return;
     }
 
-    // Line format:
+    // Line format v1:
     // [!]<address> [R8] [R16] [R32] [W8] [W16] [W32]
     //   [!]        disabled watchpoint (optional; enabled if omitted)
     //   <address>  watchpoint address
@@ -164,6 +155,14 @@ void SH2WatchpointsManager::LoadState(std::filesystem::path path) {
     //   [W8]       trigger on 8-bit writes
     //   [W16]      trigger on 16-bit writes
     //   [W32]      trigger on 32-bit writes
+    //
+    // Line format v2:
+    // [!]<address> [R] [W]
+    //   [!]        disabled watchpoint (optional; enabled if omitted)
+    //   <address>  watchpoint address
+    //   [R]        trigger on reads
+    //   [W]        trigger on writes
+    // NOTE: addresses are force-aligned when upgrading from v1 to v2
     //
     // TODO: add condition expression
 
@@ -191,18 +190,34 @@ void SH2WatchpointsManager::LoadState(std::filesystem::path path) {
             std::string item{};
             while (lineIn) {
                 lineIn >> item;
-                if (item == "R8") {
-                    wtpt.flags |= debug::WatchpointFlags::Read8;
+                if (item == "R" || item == "R8") {
+                    wtpt.flags |= debug::WatchpointFlags::Read;
                 } else if (item == "R16") {
-                    wtpt.flags |= debug::WatchpointFlags::Read16;
+                    for (uint32 ofs = 0; ofs <= 1; ofs++) {
+                        SH2Watchpoint &wtpt16 = map[(address & ~1u) + ofs];
+                        wtpt16.enabled = enabled;
+                        wtpt16.flags |= debug::WatchpointFlags::Read;
+                    }
                 } else if (item == "R32") {
-                    wtpt.flags |= debug::WatchpointFlags::Read32;
-                } else if (item == "W8") {
-                    wtpt.flags |= debug::WatchpointFlags::Write8;
+                    for (uint32 ofs = 0; ofs <= 3; ofs++) {
+                        SH2Watchpoint &wtpt32 = map[(address & ~3u) + ofs];
+                        wtpt32.enabled = enabled;
+                        wtpt32.flags |= debug::WatchpointFlags::Read;
+                    }
+                } else if (item == "W" || item == "W8") {
+                    wtpt.flags |= debug::WatchpointFlags::Write;
                 } else if (item == "W16") {
-                    wtpt.flags |= debug::WatchpointFlags::Write16;
+                    for (uint32 ofs = 0; ofs <= 1; ofs++) {
+                        SH2Watchpoint &wtpt16 = map[(address & ~1u) + ofs];
+                        wtpt16.enabled = enabled;
+                        wtpt16.flags |= debug::WatchpointFlags::Write;
+                    }
                 } else if (item == "W32") {
-                    wtpt.flags |= debug::WatchpointFlags::Write32;
+                    for (uint32 ofs = 0; ofs <= 3; ofs++) {
+                        SH2Watchpoint &wtpt32 = map[(address & ~3u) + ofs];
+                        wtpt32.enabled = enabled;
+                        wtpt32.flags |= debug::WatchpointFlags::Write;
+                    }
                 }
             }
         }
@@ -227,23 +242,11 @@ void SH2WatchpointsManager::SaveState(std::filesystem::path path) const {
             }
             out << std::hex << address;
             BitmaskEnum bmFlags{wtpt.flags};
-            if (bmFlags.AnyOf(debug::WatchpointFlags::Read8)) {
-                out << " R8";
+            if (bmFlags.AnyOf(debug::WatchpointFlags::Read)) {
+                out << " R";
             }
-            if (bmFlags.AnyOf(debug::WatchpointFlags::Read16)) {
-                out << " R16";
-            }
-            if (bmFlags.AnyOf(debug::WatchpointFlags::Read32)) {
-                out << " R32";
-            }
-            if (bmFlags.AnyOf(debug::WatchpointFlags::Write8)) {
-                out << " W8";
-            }
-            if (bmFlags.AnyOf(debug::WatchpointFlags::Write16)) {
-                out << " W16";
-            }
-            if (bmFlags.AnyOf(debug::WatchpointFlags::Write32)) {
-                out << " W32";
+            if (bmFlags.AnyOf(debug::WatchpointFlags::Write)) {
+                out << " W";
             }
             out << '\n';
         }

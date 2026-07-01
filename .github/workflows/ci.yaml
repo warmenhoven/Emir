@@ -22,7 +22,7 @@ env:
 
 jobs:
   build-windows:
-    name: windows-${{ matrix.arch.name }}
+    name: windows-${{ matrix.arch.name }}-${{ matrix.build-set.name }}
     runs-on: ${{ matrix.arch.runner }}
 
     strategy:
@@ -36,6 +36,11 @@ jobs:
           - name: a64
             runner: windows-11-arm
             vcpkg_triplet: arm64-windows
+        build-set:
+          - name: full
+            library-only: "no"
+          - name: libonly
+            library-only: "yes"
 
     steps:
       # Set up MASM for lzma
@@ -53,10 +58,12 @@ jobs:
           echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
 
       - name: Bootstrap vcpkg
+        if: ${{ matrix.build-set.library-only == 'no' }}
         shell: pwsh
         run: ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.bat
 
       - name: Add NuGet sources to vcpkg
+        if: ${{ matrix.build-set.library-only == 'no' }}
         shell: pwsh
         run: |
           .$(${{ env.VCPKG_EXE }} fetch nuget) `
@@ -71,25 +78,40 @@ jobs:
             -Source "${{ env.FEED_URL }}"
 
       - name: Configure CMake
+        shell: pwsh
         env:
           CXX: clang++
           CC: clang
-        run: >
-          cmake -B ${{ steps.strings.outputs.build-output-dir }}
-          -DVCPKG_TARGET_TRIPLET=${{ matrix.arch.vcpkg_triplet }}
-          -DCMAKE_CXX_COMPILER=clang++
-          -DCMAKE_C_COMPILER=clang
-          -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-          -DBUILD_SHARED_LIBS=OFF
-          -DYmir_ENABLE_DEVLOG=OFF
-          -DYmir_ENABLE_IMGUI_DEMO=OFF
-          -DYmir_ENABLE_UPDATE_CHECKS=ON
-          -DYmir_ENABLE_SANDBOX=OFF
-          -DYmir_ENABLE_YMDASM=ON
-          -DYmir_ENABLE_IPO=OFF
-          -S ${{ github.workspace }}
-          -G Ninja
+        run: |
+          if ("${{ matrix.build-set.library-only }}" -eq "no") {
+            cmake -B ${{ steps.strings.outputs.build-output-dir }} `
+              -DVCPKG_TARGET_TRIPLET=${{ matrix.arch.vcpkg_triplet }} `
+              -DCMAKE_CXX_COMPILER=clang++ `
+              -DCMAKE_C_COMPILER=clang `
+              -DCMAKE_BUILD_TYPE=Debug `
+              -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake `
+              -DBUILD_SHARED_LIBS=OFF `
+              -DYmir_ENABLE_DEVLOG=OFF `
+              -DYmir_ENABLE_IMGUI_DEMO=OFF `
+              -DYmir_ENABLE_UPDATE_CHECKS=ON `
+              -DYmir_ENABLE_SANDBOX=OFF `
+              -DYmir_ENABLE_YMDASM=ON `
+              -DYmir_ENABLE_IPO=OFF `
+              -DYmir_LIBRARY_ONLY=OFF `
+              -S ${{ github.workspace }} `
+              -G Ninja
+          } else {
+            cmake -B ${{ steps.strings.outputs.build-output-dir }} `
+              -DCMAKE_CXX_COMPILER=clang++ `
+              -DCMAKE_C_COMPILER=clang `
+              -DCMAKE_BUILD_TYPE=Debug `
+              -DBUILD_SHARED_LIBS=OFF `
+              -DYmir_ENABLE_DEVLOG=OFF `
+              -DYmir_ENABLE_IPO=OFF `
+              -DYmir_LIBRARY_ONLY=ON `
+              -S ${{ github.workspace }} `
+              -G Ninja
+          }
 
       - name: Build
         env:
@@ -98,7 +120,7 @@ jobs:
         run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --parallel
 
   build-linux:
-    name: linux-${{ matrix.arch.name }}
+    name: linux-${{ matrix.arch.name }}-${{ matrix.build-set.name }}
     runs-on: ${{ matrix.arch.runner }}
 
     strategy:
@@ -110,6 +132,11 @@ jobs:
             runner: ubuntu-24.04
           - name: a64
             runner: ubuntu-24.04-arm
+        build-set:
+          - name: full
+            library-only: "no"
+          - name: libonly
+            library-only: "yes"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -138,10 +165,12 @@ jobs:
             autoconf autoconf-archive automake
 
       - name: Bootstrap vcpkg
+        if: ${{ matrix.build-set.library-only == 'no' }}
         shell: bash
         run: ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.sh
 
       - name: Cache vcpkg
+        if: ${{ matrix.build-set.library-only == 'no' }}
         id: cache-vcpkg
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
@@ -151,27 +180,41 @@ jobs:
       - name: Configure CMake
         env:
           VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
-        run: >
-          cmake -B ${{ steps.strings.outputs.build-output-dir }}
-          -DCMAKE_CXX_COMPILER=clang++-18
-          -DCMAKE_C_COMPILER=clang-18
-          -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-          -DBUILD_SHARED_LIBS=OFF
-          -DYmir_ENABLE_DEVLOG=OFF
-          -DYmir_ENABLE_IMGUI_DEMO=OFF
-          -DYmir_ENABLE_UPDATE_CHECKS=ON
-          -DYmir_ENABLE_SANDBOX=OFF
-          -DYmir_ENABLE_YMDASM=ON
-          -DYmir_ENABLE_IPO=OFF
-          -S ${{ github.workspace }}
-          -G Ninja
+        run: |
+          if [ ${{ matrix.build-set.library-only}} = 'no' ]; then
+            cmake -B ${{ steps.strings.outputs.build-output-dir }} \
+              -DCMAKE_CXX_COMPILER=clang++-18 \
+              -DCMAKE_C_COMPILER=clang-18 \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DYmir_ENABLE_DEVLOG=OFF \
+              -DYmir_ENABLE_IMGUI_DEMO=OFF \
+              -DYmir_ENABLE_UPDATE_CHECKS=ON \
+              -DYmir_ENABLE_SANDBOX=OFF \
+              -DYmir_ENABLE_YMDASM=ON \
+              -DYmir_ENABLE_IPO=OFF \
+              -DYmir_LIBRARY_ONLY=OFF \
+              -S ${{ github.workspace }} \
+              -G Ninja
+          else
+            cmake -B ${{ steps.strings.outputs.build-output-dir }} \
+              -DCMAKE_CXX_COMPILER=clang++-18 \
+              -DCMAKE_C_COMPILER=clang-18 \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DYmir_ENABLE_DEVLOG=OFF \
+              -DYmir_ENABLE_IPO=OFF \
+              -DYmir_LIBRARY_ONLY=ON \
+              -S ${{ github.workspace }} \
+              -G Ninja
+          fi
 
       - name: Build
         run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --parallel
 
   build-freebsd:
-    name: freebsd-${{ matrix.arch.name }}
+    name: freebsd-${{ matrix.arch.name }}-${{ matrix.build-set.name }}
     runs-on: ${{ matrix.arch.runner }}
 
     strategy:
@@ -183,6 +226,11 @@ jobs:
             runner: ubuntu-24.04
           # - name: arm64
           #   runner: ubuntu-24.04
+        build-set:
+          - name: full
+            library-only: "no"
+          - name: libonly
+            library-only: "yes"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -212,25 +260,37 @@ jobs:
               libXfixes libXi libXrandr libXrender libXScrnSaver libXtst libglvnd \
               libinotify llvm21 ninja patchelf pkgconf python3 vulkan-loader zip
 
-            ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.sh
+            if [ ${{ matrix.build-set.library-only}} = 'no' ]; then
+              ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.sh
 
-            cmake -B ${{ steps.strings.outputs.build-output-dir }} \
-              -DCMAKE_BUILD_TYPE=Debug \
-              -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
-              -DBUILD_SHARED_LIBS=OFF \
-              -DYmir_ENABLE_DEVLOG=OFF \
-              -DYmir_ENABLE_IMGUI_DEMO=OFF \
-              -DYmir_ENABLE_UPDATE_CHECKS=ON \
-              -DYmir_ENABLE_SANDBOX=OFF \
-              -DYmir_ENABLE_YMDASM=ON \
-              -DYmir_ENABLE_IPO=OFF \
-              -S ${{ github.workspace }} \
-              -G Ninja
+              cmake -B ${{ steps.strings.outputs.build-output-dir }} \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
+                -DBUILD_SHARED_LIBS=OFF \
+                -DYmir_ENABLE_DEVLOG=OFF \
+                -DYmir_ENABLE_IMGUI_DEMO=OFF \
+                -DYmir_ENABLE_UPDATE_CHECKS=ON \
+                -DYmir_ENABLE_SANDBOX=OFF \
+                -DYmir_ENABLE_YMDASM=ON \
+                -DYmir_ENABLE_IPO=OFF \
+                -DYmir_LIBRARY_ONLY=OFF \
+                -S ${{ github.workspace }} \
+                -G Ninja
+            else
+              cmake -B ${{ steps.strings.outputs.build-output-dir }} \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DBUILD_SHARED_LIBS=OFF \
+                -DYmir_ENABLE_DEVLOG=OFF \
+                -DYmir_ENABLE_IPO=OFF \
+                -DYmir_LIBRARY_ONLY=ON \
+                -S ${{ github.workspace }} \
+                -G Ninja
+            fi
 
             cmake --build ${{ steps.strings.outputs.build-output-dir }} --parallel
 
   build-macos:
-    name: macos-${{ matrix.arch.name }}
+    name: macos-${{ matrix.arch.name }}-${{ matrix.build-set.name }}
     runs-on: macos-latest
 
     strategy:
@@ -248,6 +308,11 @@ jobs:
           # See https://github.com/microsoft/vcpkg/discussions/19454
           #- name: "universal"
           #  isa_name: "'x86_64;arm64'"
+        build-set:
+          - name: full
+            library-only: "no"
+          - name: libonly
+            library-only: "yes"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -265,10 +330,12 @@ jobs:
         run: brew install mono nuget
 
       - name: Bootstrap vcpkg
+        if: ${{ matrix.build-set.library-only == 'no' }}
         shell: bash
         run: ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.sh
 
       - name: Add NuGet sources to vcpkg
+        if: ${{ matrix.build-set.library-only == 'no' }}
         shell: bash
         run: |
           nuget sources add \
@@ -281,21 +348,31 @@ jobs:
             -Source "${{ env.FEED_URL }}"
 
       - name: Configure CMake
-        run: >
-          cmake -B ${{ steps.strings.outputs.build-output-dir }}
-          -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-          -DBUILD_SHARED_LIBS=OFF
-          -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch.isa_name }}
-          -DVCPKG_TARGET_TRIPLET=${{ matrix.arch.triplet_arch }}-osx
-          -DYmir_ENABLE_DEVLOG=OFF
-          -DYmir_ENABLE_IMGUI_DEMO=OFF
-          -DYmir_ENABLE_UPDATE_CHECKS=ON
-          -DYmir_ENABLE_SANDBOX=OFF
-          -DYmir_ENABLE_YMDASM=ON
-          -DYmir_ENABLE_IPO=OFF
-          -S ${{ github.workspace }}
-          -G Ninja
+        run: |
+          if [ ${{ matrix.build-set.library-only}} = 'no' ]; then
+            cmake -B ${{ steps.strings.outputs.build-output-dir }} \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DYmir_ENABLE_DEVLOG=OFF \
+              -DYmir_ENABLE_IMGUI_DEMO=OFF \
+              -DYmir_ENABLE_UPDATE_CHECKS=ON \
+              -DYmir_ENABLE_SANDBOX=OFF \
+              -DYmir_ENABLE_YMDASM=ON \
+              -DYmir_ENABLE_IPO=OFF \
+              -DYmir_LIBRARY_ONLY=OFF \
+              -S ${{ github.workspace }} \
+              -G Ninja
+          else
+            cmake -B ${{ steps.strings.outputs.build-output-dir }} \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DYmir_ENABLE_DEVLOG=OFF \
+              -DYmir_ENABLE_IPO=OFF \
+              -DYmir_LIBRARY_ONLY=ON \
+              -S ${{ github.workspace }} \
+              -G Ninja
+          fi
 
       - name: Build
         run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --parallel

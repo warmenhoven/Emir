@@ -368,11 +368,11 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.carry = true;
             dsp.overflow = false;
 
-            dsp.AC.L = -123;
+            dsp.AC.L = 0xFFFFFF85; // -123
             dsp.P.L = 1;
             dsp.ALU_ADD();
 
-            CHECK(dsp.ALU.L == -122);
+            CHECK(dsp.ALU.L == 0xFFFFFF86); // -122
             CHECK(dsp.zero == false);
             CHECK(dsp.sign == true);
             CHECK(dsp.carry == false);
@@ -385,11 +385,11 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.carry = false;
             dsp.overflow = false;
 
-            dsp.AC.L = -123;
-            dsp.P.L = -1;
+            dsp.AC.L = 0xFFFFFF85; // -123
+            dsp.P.L = 0xFFFFFFFF;  // -1
             dsp.ALU_ADD();
 
-            CHECK(dsp.ALU.L == -124);
+            CHECK(dsp.ALU.L == 0xFFFFFF84); // -124
             CHECK(dsp.zero == false);
             CHECK(dsp.sign == true);
             CHECK(dsp.carry == true);
@@ -420,7 +420,7 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.overflow = false;
 
             dsp.AC.L = 100;
-            dsp.P.L = -1;
+            dsp.P.L = 0xFFFFFFFF; // -1
             dsp.ALU_ADD();
 
             CHECK(dsp.ALU.L == 99);
@@ -437,7 +437,7 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.overflow = false;
 
             dsp.AC.L = 0x80000000;
-            dsp.P.L = -1;
+            dsp.P.L = 0xFFFFFFFF; // -1
             dsp.ALU_ADD();
 
             CHECK(dsp.ALU.L == 0x7FFFFFFF);
@@ -528,11 +528,11 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.carry = true;
             dsp.overflow = false;
 
-            dsp.AC.L = -123;
+            dsp.AC.L = 0xFFFFFF85; // -123
             dsp.P.L = 1;
             dsp.ALU_SUB();
 
-            CHECK(dsp.ALU.L == -124);
+            CHECK(dsp.ALU.L == 0xFFFFFF84); // -124
             CHECK(dsp.zero == false);
             CHECK(dsp.sign == true);
             CHECK(dsp.carry == false);
@@ -549,7 +549,7 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.P.L = 123;
             dsp.ALU_SUB();
 
-            CHECK(dsp.ALU.L == -122);
+            CHECK(dsp.ALU.L == 0xFFFFFF86); // -122
             CHECK(dsp.zero == false);
             CHECK(dsp.sign == true);
             CHECK(dsp.carry == true);
@@ -635,7 +635,7 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.carry = false;
             dsp.overflow = false;
 
-            dsp.AC.u64 = -1;
+            dsp.AC.u64 = 0xFFFFFFFFFFFF; // -1
             dsp.P.u64 = 1;
             dsp.ALU_AD2();
 
@@ -669,11 +669,11 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.carry = true;
             dsp.overflow = false;
 
-            dsp.AC.u64 = -123;
+            dsp.AC.u64 = 0xFFFFFFFFFF85; // -123
             dsp.P.u64 = 1;
             dsp.ALU_AD2();
 
-            CHECK(dsp.ALU.s64 == -122);
+            CHECK(dsp.ALU.u64 == 0xFFFFFFFFFF86); // -122
             CHECK(dsp.zero == false);
             CHECK(dsp.sign == true);
             CHECK(dsp.carry == false);
@@ -686,11 +686,11 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.carry = false;
             dsp.overflow = false;
 
-            dsp.AC.u64 = -123;
-            dsp.P.u64 = -1;
+            dsp.AC.u64 = 0xFFFFFFFFFF85; // -123
+            dsp.P.u64 = 0xFFFFFFFFFFFF;  // -1
             dsp.ALU_AD2();
 
-            CHECK(dsp.ALU.s64 == -124);
+            CHECK(dsp.ALU.u64 == 0xFFFFFFFFFF84); // -124
             CHECK(dsp.zero == false);
             CHECK(dsp.sign == true);
             CHECK(dsp.carry == true);
@@ -721,7 +721,7 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.overflow = false;
 
             dsp.AC.u64 = 100;
-            dsp.P.u64 = -1;
+            dsp.P.u64 = 0xFFFFFFFFFFFF; // -1
             dsp.ALU_AD2();
 
             CHECK(dsp.ALU.u64 == 99);
@@ -738,7 +738,7 @@ TEST_CASE_PERSISTENT_FIXTURE(TestSubject, "SCU DSP ALU operations compute correc
             dsp.overflow = false;
 
             dsp.AC.u64 = 0x800000000000;
-            dsp.P.u64 = -1;
+            dsp.P.u64 = 0xFFFFFFFFFFFF; // -1
             dsp.ALU_AD2();
 
             CHECK(dsp.ALU.u64 == 0x7FFFFFFFFFFF);

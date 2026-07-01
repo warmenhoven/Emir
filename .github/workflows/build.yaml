@@ -56,6 +56,7 @@ env:
 jobs:
   get-project-version:
     runs-on: ubuntu-latest
+    name: Get project version
     outputs:
       cmake-project-version: ${{ steps.project-version.outputs.cmake-project-version }}
       project-version: ${{ steps.project-version.outputs.project-version }}
@@ -182,6 +183,7 @@ jobs:
           -DYmir_VERSION_BUILD=${{ inputs.build-version }}
           -DYmir_BUILD_TIMESTAMP=${{ needs.get-project-version.outputs.build-timestamp }}
           -DYmir_DEV_BUILD=${{ inputs.dev-build && 'ON' || 'OFF' }}
+          -DYmir_LIBRARY_ONLY=OFF
           -S ${{ github.workspace }}
           -G Ninja
 
@@ -241,7 +243,9 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: ${{ steps.strings.outputs.ymir-debug-symbols-name }}
-          path: build/apps/ymir-sdl3/ymir-sdl3.pdb
+          path: |
+            build/apps/ymir-sdl3/ymir-sdl3.exe
+            build/apps/ymir-sdl3/ymir-sdl3.pdb
 
   build-linux:
     name: linux-${{ matrix.compiler }}-${{ matrix.architecture.name }}
@@ -341,6 +345,7 @@ jobs:
           -DYmir_VERSION_BUILD=${{ inputs.build-version }}
           -DYmir_BUILD_TIMESTAMP=${{ needs.get-project-version.outputs.build-timestamp }}
           -DYmir_DEV_BUILD=${{ inputs.dev-build && 'ON' || 'OFF' }}
+          -DYmir_LIBRARY_ONLY=OFF
           -S ${{ github.workspace }}
           -G Ninja
 
@@ -471,6 +476,7 @@ jobs:
           -DYmir_VERSION_BUILD=${{ inputs.build-version }}
           -DYmir_BUILD_TIMESTAMP=${{ needs.get-project-version.outputs.build-timestamp }}
           -DYmir_DEV_BUILD=${{ inputs.dev-build && 'ON' || 'OFF' }}
+          -DYmir_LIBRARY_ONLY=OFF
           -S ${{ github.workspace }}
           -G Ninja
 

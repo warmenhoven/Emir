@@ -7,6 +7,7 @@ namespace app::ui::widgets {
 namespace settings::system {
 
     void EmulateSH2Cache(SharedContext &ctx);
+    void SH2ClockFactor(SharedContext &ctx);
 
 } // namespace settings::system
 
@@ -34,6 +35,7 @@ namespace settings::audio {
 
     void InterpolationMode(SharedContext &ctx);
     void StepGranularity(SharedContext &ctx);
+    void ThreadedSCSP(SharedContext &ctx);
 
     std::string StepGranularityToString(uint32 stepGranularity);
 

@@ -329,6 +329,22 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP1WriteVRAMImpl(uint32 address, T value
     }
 }
 
+void SoftwareVDPRenderer::VDP1SyncFB() {
+    if (m_threadedVDP1Rendering) {
+        auto &ctx = m_vdp1RenderingContext;
+        ctx.FlushPendingEvents();
+        for (;;) {
+            const uint32 curr = ctx.cmdFence.load();
+            if (ctx.cmdCount == curr) {
+                break;
+            }
+            ctx.cmdFence.wait(curr);
+        }
+    }
+}
+
+void SoftwareVDPRenderer::VDP1DebugSyncFB() {}
+
 void SoftwareVDPRenderer::VDP1WriteFB(uint32 address, uint8 value) {
     VDP1WriteFBImpl(address, value);
 }
@@ -341,6 +357,9 @@ template <mem_primitive_16 T>
 FORCE_INLINE void SoftwareVDPRenderer::VDP1WriteFBImpl(uint32 address, T value) {
     if (m_enhancements.deinterlace) {
         util::WriteBE<T>(&m_altSpriteFB[m_state.displayFB ^ 1][address & 0x3FFFF], value);
+    }
+    if (m_threadedVDP1Rendering) {
+        m_vdp1RenderingContext.EnqueueEvent(VDP1RenderEvent::FBRAMWrite<T>(address, value));
     }
 }
 
@@ -464,6 +483,9 @@ void SoftwareVDPRenderer::VDP1ExecuteCommand(uint32 cmdAddress, VDP1Command::Con
 }
 
 void SoftwareVDPRenderer::VDP1EndFrame() {
+    if (m_threadedVDP1Rendering) {
+        m_vdp1RenderingContext.EnqueueEvent(VDP1RenderEvent::EndDraw());
+    }
     Callbacks.VDP1DrawFinished();
 }
 
@@ -582,19 +604,39 @@ void SoftwareVDPRenderer::VDP1RenderThread() {
             switch (event.type) {
             case EvtType::Reset: rctx.Reset(); break;
 
-            case EvtType::EraseFramebuffer:
+            case EvtType::EraseFramebuffer: {
                 if (event.erase.cycles == 0) {
                     VDP1DoEraseFramebuffer<false>();
                 } else {
                     VDP1DoEraseFramebuffer<true>(event.erase.cycles);
                 }
+                const auto fbIndex = VDP1GetDisplayFBIndex();
+                rctx.vdp1.spriteFB[fbIndex] = m_state.spriteFB[fbIndex];
                 break;
-            case EvtType::SwapBuffers: rctx.swapBuffersSignal.Set(); break;
+            }
+            case EvtType::SwapBuffers: {
+                const auto fbIndex = VDP1GetDisplayFBIndex() ^ 1;
+                m_state.spriteFB[fbIndex] = rctx.vdp1.spriteFB[fbIndex];
+                rctx.swapBuffersSignal.Set();
+                break;
+            }
+            case EvtType::EndDraw: {
+                const auto fbIndex = VDP1GetDisplayFBIndex() ^ 1;
+                m_state.spriteFB[fbIndex] = rctx.vdp1.spriteFB[fbIndex];
+                break;
+            }
             case EvtType::Command: (this->*m_fnVDP1HandleCommand)(event.command.address, event.command.control); break;
 
             case EvtType::VRAMWriteByte: rctx.vdp1.mem.VRAM[event.write.address] = event.write.value; break;
             case EvtType::VRAMWriteWord:
                 util::WriteBE<uint16>(&rctx.vdp1.mem.VRAM[event.write.address], event.write.value);
+                break;
+            case EvtType::FBRAMWriteByte:
+                rctx.vdp1.spriteFB[VDP1GetDisplayFBIndex() ^ 1][event.write.address] = event.write.value;
+                break;
+            case EvtType::FBRAMWriteWord:
+                util::WriteBE<uint16>(&rctx.vdp1.spriteFB[VDP1GetDisplayFBIndex() ^ 1][event.write.address],
+                                      event.write.value);
                 break;
             case EvtType::RegWrite: rctx.vdp1.regs.Write<false>(event.write.address, event.write.value); break;
 
@@ -602,11 +644,15 @@ void SoftwareVDPRenderer::VDP1RenderThread() {
             case EvtType::PostLoadStateSync:
                 rctx.vdp1.regs = m_state.regs1;
                 rctx.vdp1.mem = m_state.mem1;
+                rctx.vdp1.spriteFB = m_state.spriteFB;
                 rctx.postLoadSyncSignal.Set();
                 break;
 
             case EvtType::Shutdown: running = false; break;
             }
+
+            ++rctx.cmdFence;
+            rctx.cmdFence.notify_all();
         }
     }
 }
@@ -841,6 +887,16 @@ FORCE_INLINE uint8 SoftwareVDPRenderer::VDP1GetDisplayFBIndex() const {
     return m_state.displayFB;
 }
 
+FORCE_INLINE std::array<SpriteFB, 2> &SoftwareVDPRenderer::VDP1GetRendererDrawFB(bool altFB) {
+    if (altFB) {
+        return m_altSpriteFB;
+    } else if (m_threadedVDP1Rendering) {
+        return m_vdp1RenderingContext.vdp1.spriteFB;
+    } else {
+        return m_state.spriteFB;
+    }
+}
+
 template <bool countCycles>
 FORCE_INLINE void SoftwareVDPRenderer::VDP1DoEraseFramebuffer(uint64 cycles) {
     const VDP1Regs &regs1 = VDP1GetRegs();
@@ -930,7 +986,8 @@ FORCE_INLINE bool SoftwareVDPRenderer::VDP1IsPixelUserClipped(CoordS32 coord) co
     if (x < ctx.userClipX0 || x > ctx.userClipX1) {
         return true;
     }
-    if (y < (ctx.userClipY0 << m_VDP1doubleV) || y > (ctx.userClipY1 << m_VDP1doubleV)) {
+    if (y < ((ctx.userClipY0 << m_VDP1doubleV) | m_VDP1doubleV) ||
+        y > ((ctx.userClipY1 << m_VDP1doubleV) | m_VDP1doubleV)) {
         return true;
     }
     return false;
@@ -943,7 +1000,7 @@ FORCE_INLINE bool SoftwareVDPRenderer::VDP1IsPixelSystemClipped(CoordS32 coord) 
     if (x < 0 || x > ctx.sysClipH) {
         return true;
     }
-    if (y < 0 || y > (ctx.sysClipV << m_VDP1doubleV)) {
+    if (y < 0 || y > ((ctx.sysClipV << m_VDP1doubleV) | m_VDP1doubleV)) {
         return true;
     }
     return false;
@@ -963,7 +1020,8 @@ FORCE_INLINE bool SoftwareVDPRenderer::VDP1IsLineSystemClipped(CoordS32 coord1, 
     if (x1 > ctx.sysClipH && x2 > ctx.sysClipH) {
         return true;
     }
-    if (y1 > (ctx.sysClipV << m_VDP1doubleV) && y2 > (ctx.sysClipV << m_VDP1doubleV)) {
+    if (y1 > ((ctx.sysClipV << m_VDP1doubleV) | m_VDP1doubleV) &&
+        y2 > ((ctx.sysClipV << m_VDP1doubleV) | m_VDP1doubleV)) {
         return true;
     }
     return false;
@@ -986,18 +1044,18 @@ bool SoftwareVDPRenderer::VDP1IsQuadSystemClipped(CoordS32 coord1, CoordS32 coor
     if (x1 > ctx.sysClipH && x2 > ctx.sysClipH && x3 > ctx.sysClipH && x4 > ctx.sysClipH) {
         return true;
     }
-    if (y1 > (ctx.sysClipV << m_VDP1doubleV) && y2 > (ctx.sysClipV << m_VDP1doubleV) &&
-        y3 > (ctx.sysClipV << m_VDP1doubleV) && y4 > (ctx.sysClipV << m_VDP1doubleV)) {
+    if (y1 > ((ctx.sysClipV << m_VDP1doubleV) | m_VDP1doubleV) &&
+        y2 > ((ctx.sysClipV << m_VDP1doubleV) | m_VDP1doubleV) &&
+        y3 > ((ctx.sysClipV << m_VDP1doubleV) | m_VDP1doubleV) &&
+        y4 > ((ctx.sysClipV << m_VDP1doubleV) | m_VDP1doubleV)) {
         return true;
     }
     return false;
 }
 
 template <bool deinterlace, bool transparentMeshes>
-FORCE_INLINE bool SoftwareVDPRenderer::VDP1PlotPixel(CoordS32 coord, const VDP1PixelParams &pixelParams) {
-    const VDP1Regs &regs1 = VDP1GetRegs();
-    const VDP2Regs &regs2 = VDP2GetRegs();
-
+FORCE_INLINE bool SoftwareVDPRenderer::VDP1PlotPixel(CoordS32 coord, const VDP1PixelParams &pixelParams,
+                                                     const VDP1Regs &regs1, bool doubleDensity) {
     auto [x, y] = coord;
 
     // Reject pixels outside of clipping area
@@ -1011,7 +1069,6 @@ FORCE_INLINE bool SoftwareVDPRenderer::VDP1PlotPixel(CoordS32 coord, const VDP1P
         }
     }
 
-    const bool doubleDensity = regs2.TVMD.LSMDn == InterlaceMode::DoubleDensity;
     const bool altFB = deinterlace && doubleDensity && (y & 1);
     if (doubleDensity) {
         if (!deinterlace && regs1.dblInterlaceEnable && (y & 1) != regs1.dblInterlaceDrawLine) {
@@ -1026,7 +1083,7 @@ FORCE_INLINE bool SoftwareVDPRenderer::VDP1PlotPixel(CoordS32 coord, const VDP1P
 
     uint32 fbOffset = y * regs1.fbSizeH + x;
     const auto fbIndex = VDP1GetDisplayFBIndex() ^ 1;
-    auto &drawFB = (altFB ? m_altSpriteFB : m_state.spriteFB)[fbIndex];
+    auto &drawFB = VDP1GetRendererDrawFB(altFB)[fbIndex];
     if (regs1.pixel8Bits) {
         fbOffset &= 0x3FFFF;
         // TODO: what happens if pixelParams.mode.colorCalcBits/gouraudEnable != 0?
@@ -1106,7 +1163,8 @@ FORCE_INLINE bool SoftwareVDPRenderer::VDP1PlotPixel(CoordS32 coord, const VDP1P
 }
 
 template <bool antiAlias, bool deinterlace, bool transparentMeshes>
-FORCE_INLINE bool SoftwareVDPRenderer::VDP1PlotLine(CoordS32 coord1, CoordS32 coord2, VDP1LineParams &lineParams) {
+FORCE_INLINE bool SoftwareVDPRenderer::VDP1PlotLine(CoordS32 coord1, CoordS32 coord2, VDP1LineParams &lineParams,
+                                                    const VDP1Regs &regs1, bool doubleDensity) {
     if (VDP1IsLineSystemClipped<deinterlace>(coord1, coord2)) {
         return false;
     }
@@ -1127,10 +1185,12 @@ FORCE_INLINE bool SoftwareVDPRenderer::VDP1PlotLine(CoordS32 coord1, CoordS32 co
     bool aa = false;
     bool plotted = false;
     for (line.Step(); line.CanStep(); aa = line.Step()) {
-        bool plottedPixel = VDP1PlotPixel<deinterlace, transparentMeshes>(line.Coord(), pixelParams);
+        bool plottedPixel =
+            VDP1PlotPixel<deinterlace, transparentMeshes>(line.Coord(), pixelParams, regs1, doubleDensity);
         if constexpr (antiAlias) {
             if (aa) {
-                plottedPixel |= VDP1PlotPixel<deinterlace, transparentMeshes>(line.AACoord(), pixelParams);
+                plottedPixel |=
+                    VDP1PlotPixel<deinterlace, transparentMeshes>(line.AACoord(), pixelParams, regs1, doubleDensity);
             }
         }
         if (plottedPixel) {
@@ -1149,12 +1209,13 @@ FORCE_INLINE bool SoftwareVDPRenderer::VDP1PlotLine(CoordS32 coord1, CoordS32 co
 }
 
 template <bool deinterlace, bool transparentMeshes>
-bool SoftwareVDPRenderer::VDP1PlotTexturedLine(CoordS32 coord1, CoordS32 coord2, VDP1TexturedLineParams &lineParams) {
+FORCE_INLINE bool SoftwareVDPRenderer::VDP1PlotTexturedLine(CoordS32 coord1, CoordS32 coord2,
+                                                            VDP1TexturedLineParams &lineParams, const VDP1Regs &regs1,
+                                                            bool doubleDensity) {
     if (VDP1IsLineSystemClipped<deinterlace>(coord1, coord2)) {
         return false;
     }
 
-    const VDP1Regs &regs1 = VDP1GetRegs();
     auto &ctx = m_state.state1;
 
     const uint32 charSizeH = std::max<uint32>(lineParams.charSizeH, 1u);
@@ -1217,34 +1278,34 @@ bool SoftwareVDPRenderer::VDP1PlotTexturedLine(CoordS32 coord1, CoordS32 coord2,
             color = (color >> ((~u & 1) * 4)) & 0xF;
             processEndCode(color == 0xF);
             transparent = color == 0x0;
-            color |= lineParams.colorBank & 0xFFF0;
+            color |= lineParams.colorBank;
             break;
         case 1: // 4 bpp, 16 colors, lookup table mode
             color = VDP1ReadRendererVRAM<uint8>(lineParams.charAddr + (charIndex >> 1));
             color = (color >> ((~u & 1) * 4)) & 0xF;
             processEndCode(color == 0xF);
             transparent = color == 0x0;
-            color = VDP1ReadRendererVRAM<uint16>(color * sizeof(uint16) + lineParams.colorBank * 8);
+            color = VDP1ReadRendererVRAM<uint16>(color * sizeof(uint16) + lineParams.colorBank);
             break;
         case 2: // 8 bpp, 64 colors, bank mode
             color = VDP1ReadRendererVRAM<uint8>(lineParams.charAddr + charIndex);
             processEndCode(color == 0xFF);
             transparent = color == 0x00;
             color &= 0x3F;
-            color |= lineParams.colorBank & 0xFFC0;
+            color |= lineParams.colorBank;
             break;
         case 3: // 8 bpp, 128 colors, bank mode
             color = VDP1ReadRendererVRAM<uint8>(lineParams.charAddr + charIndex);
             processEndCode(color == 0xFF);
             transparent = color == 0x00;
             color &= 0x7F;
-            color |= lineParams.colorBank & 0xFF80;
+            color |= lineParams.colorBank;
             break;
         case 4: // 8 bpp, 256 colors, bank mode
             color = VDP1ReadRendererVRAM<uint8>(lineParams.charAddr + charIndex);
             processEndCode(color == 0xFF);
             transparent = color == 0x00;
-            color |= lineParams.colorBank & 0xFF00;
+            color |= lineParams.colorBank;
             break;
         case 5: // 16 bpp, 32768 colors, RGB mode
             color = VDP1ReadRendererVRAM<uint16>(lineParams.charAddr + charIndex * sizeof(uint16));
@@ -1274,6 +1335,10 @@ bool SoftwareVDPRenderer::VDP1PlotTexturedLine(CoordS32 coord1, CoordS32 coord2,
         uStepper.StepPixel();
 
         if (hasEndCode || (transparent && !mode.transparentPixelDisable)) {
+            if (mode.gouraudEnable) {
+                pixelParams.gouraud.Step();
+            }
+
             // Check if the transparent pixel is in-bounds, but only if the clipping mode is set to reject outside
             if (!mode.clippingMode) {
                 if (!VDP1IsPixelClipped<deinterlace>(line.Coord(), mode.userClippingEnable, mode.clippingMode)) {
@@ -1299,9 +1364,11 @@ bool SoftwareVDPRenderer::VDP1PlotTexturedLine(CoordS32 coord1, CoordS32 coord2,
 
         pixelParams.color = color;
 
-        bool plottedPixel = VDP1PlotPixel<deinterlace, transparentMeshes>(line.Coord(), pixelParams);
+        bool plottedPixel =
+            VDP1PlotPixel<deinterlace, transparentMeshes>(line.Coord(), pixelParams, regs1, doubleDensity);
         if (aa) {
-            plottedPixel |= VDP1PlotPixel<deinterlace, transparentMeshes>(line.AACoord(), pixelParams);
+            plottedPixel |=
+                VDP1PlotPixel<deinterlace, transparentMeshes>(line.AACoord(), pixelParams, regs1, doubleDensity);
         }
         if (plottedPixel) {
             plotted = true;
@@ -1315,7 +1382,7 @@ bool SoftwareVDPRenderer::VDP1PlotTexturedLine(CoordS32 coord1, CoordS32 coord2,
         }
     }
 
-    if (endCodeCount == 2 && !plotted) {
+    if (endCodeCount == 2 && !plotted && !mode.clippingMode) {
         // Check that the line is indeed entirely out of bounds.
         // End codes cut the line short, so if it happens to cut the line before it managed to plot a pixel in-bounds,
         // the optimization could interrupt rendering the rest of the quad.
@@ -1324,7 +1391,7 @@ bool SoftwareVDPRenderer::VDP1PlotTexturedLine(CoordS32 coord1, CoordS32 coord2,
                 plotted = true;
                 break;
             }
-            if (aa && !VDP1IsPixelClipped<deinterlace>(line.Coord(), mode.userClippingEnable, mode.clippingMode)) {
+            if (aa && !VDP1IsPixelClipped<deinterlace>(line.AACoord(), mode.userClippingEnable, mode.clippingMode)) {
                 plotted = true;
                 break;
             }
@@ -1361,6 +1428,16 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP1PlotTexturedQuad(uint32 cmdAddress, V
         .charSizeV = charSizeV,
     };
 
+    // Precompute color bank masks/shifts
+    switch (mode.colorMode) {
+    case 0: lineParams.colorBank &= 0xFFF0; break; // 4 bpp, 16 colors, bank mode
+    case 1: lineParams.colorBank <<= 3u; break;    // 4 bpp, 16 colors, lookup table mode
+    case 2: lineParams.colorBank &= 0xFFC0; break; // 8 bpp, 64 colors, bank mode
+    case 3: lineParams.colorBank &= 0xFF80; break; // 8 bpp, 128 colors, bank mode
+    case 4: lineParams.colorBank &= 0xFF00; break; // 8 bpp, 256 colors, bank mode
+    case 5: break;                                 // 16 bpp, 32768 colors, RGB mode
+    }
+
     QuadStepper quad{coordA, coordB, coordC, coordD};
 
     if (mode.gouraudEnable) {
@@ -1381,8 +1458,10 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP1PlotTexturedQuad(uint32 cmdAddress, V
         lineParams.gouraudRight = &quad.RightEdge().Gouraud();
     }
 
+    // A width of zero results in the first fetched texel being used for the entire texture.
+    // We simulate this by reducing the texture height to one.
     const bool flipV = control.flipV;
-    quad.SetupTexture(lineParams.texVStepper, charSizeV, flipV);
+    quad.SetupTexture(lineParams.texVStepper, charSizeH == 0 ? 1 : charSizeV, flipV);
 
     // Optimization for the case where the quad goes outside the system clipping area.
     // Skip rendering the rest of the quad when a line is clipped after plotting at least one line.
@@ -1409,6 +1488,10 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP1PlotTexturedQuad(uint32 cmdAddress, V
     int plottedSegmentsCount = 0;
     const int plottedSegmentsMax = quad.IsDegenerate() ? 2 : 1;
 
+    const VDP1Regs &regs1 = VDP1GetRegs();
+    const VDP2Regs &regs2 = VDP2GetRegs();
+    const bool doubleDensity = regs2.TVMD.LSMDn == InterlaceMode::DoubleDensity;
+
     // Interpolate linearly over edges A-D and B-C
     for (; quad.CanStep(); quad.Step()) {
         // Plot lines between the interpolated points
@@ -1425,7 +1508,7 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP1PlotTexturedQuad(uint32 cmdAddress, V
             lineParams.gouraudRight = &quad.RightEdge().Gouraud();
         }
 
-        if (VDP1PlotTexturedLine<deinterlace, transparentMeshes>(coordL, coordR, lineParams)) {
+        if (VDP1PlotTexturedLine<deinterlace, transparentMeshes>(coordL, coordR, lineParams, regs1, doubleDensity)) {
             if (!linePlotted) {
                 linePlotted = true;
                 ++plottedSegmentsCount;
@@ -1481,11 +1564,12 @@ void SoftwareVDPRenderer::VDP1Cmd_DrawNormalSprite(uint32 cmdAddress, VDP1Comman
     const sint32 yb = ya + std::max(charSizeV, 1u) - 1u; // bottom Y
 
     const sint32 doubleV = m_VDP1doubleV;
+    const sint32 yAdd = deinterlace ? doubleV : 0;
 
     const CoordS32 coordA{xa, ya << doubleV};
     const CoordS32 coordB{xb, ya << doubleV};
-    const CoordS32 coordC{xb, yb << doubleV};
-    const CoordS32 coordD{xa, yb << doubleV};
+    const CoordS32 coordC{xb, (yb << doubleV) + yAdd};
+    const CoordS32 coordD{xa, (yb << doubleV) + yAdd};
 
     devlog::trace<grp::swvdp1_cmd>("[{:05X}] Draw normal sprite: {:3d}x{:<3d} {:3d}x{:<3d} {:3d}x{:<3d} {:3d}x{:<3d}",
                                    cmdAddress, xa, ya, xb, ya, xb, yb, xa, yb);
@@ -1580,11 +1664,12 @@ void SoftwareVDPRenderer::VDP1Cmd_DrawScaledSprite(uint32 cmdAddress, VDP1Comman
     qyd += ctx.localCoordY;
 
     const sint32 doubleV = m_VDP1doubleV;
+    const sint32 yAdd = deinterlace ? doubleV : 0;
 
     const CoordS32 coordA{qxa, qya << doubleV};
     const CoordS32 coordB{qxb, qyb << doubleV};
-    const CoordS32 coordC{qxc, qyc << doubleV};
-    const CoordS32 coordD{qxd, qyd << doubleV};
+    const CoordS32 coordC{qxc, (qyc << doubleV) + yAdd};
+    const CoordS32 coordD{qxd, (qyd << doubleV) + yAdd};
 
     devlog::trace<grp::swvdp1_cmd>("[{:05X}] Draw scaled sprite: {:3d}x{:<3d} {:3d}x{:<3d} {:3d}x{:<3d} {:3d}x{:<3d}",
                                    cmdAddress, qxa, qya, qxb, qyb, qxc, qyc, qxd, qyd);
@@ -1610,11 +1695,16 @@ void SoftwareVDPRenderer::VDP1Cmd_DrawDistortedSprite(uint32 cmdAddress, VDP1Com
     const sint32 xd = bit::sign_extend<13>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x18)) + ctx.localCoordX;
     const sint32 yd = bit::sign_extend<13>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x1A)) + ctx.localCoordY;
 
+    const bool isRegularRect = (xa == xd) && (xb == xc) && (ya == yb) && (yc == yd);
+
     const sint32 doubleV = m_VDP1doubleV;
-    const CoordS32 coordA{xa, ya << doubleV};
-    const CoordS32 coordB{xb, yb << doubleV};
-    const CoordS32 coordC{xc, yc << doubleV};
-    const CoordS32 coordD{xd, yd << doubleV};
+    const sint32 yAddAB = deinterlace && isRegularRect && (ya >= yc) ? doubleV : 0;
+    const sint32 yAddCD = deinterlace && isRegularRect && (ya < yc) ? doubleV : 0;
+
+    const CoordS32 coordA{xa, (ya << doubleV) + yAddAB};
+    const CoordS32 coordB{xb, (yb << doubleV) + yAddAB};
+    const CoordS32 coordC{xc, (yc << doubleV) + yAddCD};
+    const CoordS32 coordD{xd, (yd << doubleV) + yAddCD};
 
     devlog::trace<grp::swvdp1_cmd>(
         "[{:05X}] Draw distorted sprite: {:6d}x{:<6d} {:6d}x{:<6d} {:6d}x{:<6d} {:6d}x{:<6d}", cmdAddress, xa, ya, xb,
@@ -1643,11 +1733,16 @@ void SoftwareVDPRenderer::VDP1Cmd_DrawPolygon(uint32 cmdAddress) {
     const sint32 yd = bit::sign_extend<13>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x1A)) + ctx.localCoordY;
     const uint32 gouraudTable = static_cast<uint32>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x1C)) << 3u;
 
+    const bool isRegularRect = (xa == xd) && (xb == xc) && (ya == yb) && (yc == yd);
+
     const sint32 doubleV = m_VDP1doubleV;
-    const CoordS32 coordA{xa, ya << doubleV};
-    const CoordS32 coordB{xb, yb << doubleV};
-    const CoordS32 coordC{xc, yc << doubleV};
-    const CoordS32 coordD{xd, yd << doubleV};
+    const sint32 yAddAB = deinterlace && isRegularRect && (ya >= yc) ? doubleV : 0;
+    const sint32 yAddCD = deinterlace && isRegularRect && (ya < yc) ? doubleV : 0;
+
+    const CoordS32 coordA{xa, (ya << doubleV) + yAddAB};
+    const CoordS32 coordB{xb, (yb << doubleV) + yAddAB};
+    const CoordS32 coordC{xc, (yc << doubleV) + yAddCD};
+    const CoordS32 coordD{xd, (yd << doubleV) + yAddCD};
 
     devlog::trace<grp::swvdp1_cmd>("[{:05X}] Draw polygon: {:6d}x{:<6d} {:6d}x{:<6d} {:6d}x{:<6d} {:6d}x{:<6d}, color "
                                    "{:04X}, gouraud table {:05X}, CMDPMOD = {:04X}",
@@ -1703,6 +1798,10 @@ void SoftwareVDPRenderer::VDP1Cmd_DrawPolygon(uint32 cmdAddress) {
     int plottedSegmentsCount = 0;
     const int plottedSegmentsMax = quad.IsDegenerate() ? 2 : 1;
 
+    const VDP1Regs &regs1 = VDP1GetRegs();
+    const VDP2Regs &regs2 = VDP2GetRegs();
+    const bool doubleDensity = regs2.TVMD.LSMDn == InterlaceMode::DoubleDensity;
+
     // Interpolate linearly over edges A-D and B-C
     for (; quad.CanStep(); quad.Step()) {
         // Plot lines between the interpolated points
@@ -1714,7 +1813,7 @@ void SoftwareVDPRenderer::VDP1Cmd_DrawPolygon(uint32 cmdAddress) {
             lineParams.gouraudRight = quad.RightEdge().GouraudValue();
         }
 
-        if (VDP1PlotLine<true, deinterlace, transparentMeshes>(coordL, coordR, lineParams)) {
+        if (VDP1PlotLine<true, deinterlace, transparentMeshes>(coordL, coordR, lineParams, regs1, doubleDensity)) {
             if (!linePlotted) {
                 linePlotted = true;
                 ++plottedSegmentsCount;
@@ -1748,11 +1847,16 @@ void SoftwareVDPRenderer::VDP1Cmd_DrawPolylines(uint32 cmdAddress) {
     const sint32 yd = bit::sign_extend<13>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x1A)) + ctx.localCoordY;
     const uint32 gouraudTable = static_cast<uint32>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x1C)) << 3u;
 
+    const bool isRegularRect = (xa == xd) && (xb == xc) && (ya == yb) && (yc == yd);
+
     const sint32 doubleV = m_VDP1doubleV;
-    const CoordS32 coordA{xa, ya << doubleV};
-    const CoordS32 coordB{xb, yb << doubleV};
-    const CoordS32 coordC{xc, yc << doubleV};
-    const CoordS32 coordD{xd, yd << doubleV};
+    const sint32 yAddAB = deinterlace && isRegularRect && (ya >= yc) ? doubleV : 0;
+    const sint32 yAddCD = deinterlace && isRegularRect && (ya < yc) ? doubleV : 0;
+
+    const CoordS32 coordA{xa, (ya << doubleV) + yAddAB};
+    const CoordS32 coordB{xb, (yb << doubleV) + yAddAB};
+    const CoordS32 coordC{xc, (yc << doubleV) + yAddCD};
+    const CoordS32 coordD{xd, (yd << doubleV) + yAddCD};
 
     devlog::trace<grp::swvdp1_cmd>(
         "[{:05X}] Draw polylines: {}x{} - {}x{} - {}x{} - {}x{}, color {:04X}, gouraud table {:05X}, CMDPMOD = {:04X}",
@@ -1776,26 +1880,30 @@ void SoftwareVDPRenderer::VDP1Cmd_DrawPolylines(uint32 cmdAddress) {
                                    (uint8)gouraudB.b, (uint8)gouraudC.r, (uint8)gouraudC.g, (uint8)gouraudC.b,
                                    (uint8)gouraudD.r, (uint8)gouraudD.g, (uint8)gouraudD.b);
 
+    const VDP1Regs &regs1 = VDP1GetRegs();
+    const VDP2Regs &regs2 = VDP2GetRegs();
+    const bool doubleDensity = regs2.TVMD.LSMDn == InterlaceMode::DoubleDensity;
+
     if (mode.gouraudEnable) {
         lineParams.gouraudLeft = gouraudA;
         lineParams.gouraudRight = gouraudB;
     }
-    VDP1PlotLine<false, deinterlace, transparentMeshes>(coordA, coordB, lineParams);
+    VDP1PlotLine<false, deinterlace, transparentMeshes>(coordA, coordB, lineParams, regs1, doubleDensity);
     if (mode.gouraudEnable) {
         lineParams.gouraudLeft = gouraudB;
         lineParams.gouraudRight = gouraudC;
     }
-    VDP1PlotLine<false, deinterlace, transparentMeshes>(coordB, coordC, lineParams);
+    VDP1PlotLine<false, deinterlace, transparentMeshes>(coordB, coordC, lineParams, regs1, doubleDensity);
     if (mode.gouraudEnable) {
         lineParams.gouraudLeft = gouraudC;
         lineParams.gouraudRight = gouraudD;
     }
-    VDP1PlotLine<false, deinterlace, transparentMeshes>(coordC, coordD, lineParams);
+    VDP1PlotLine<false, deinterlace, transparentMeshes>(coordC, coordD, lineParams, regs1, doubleDensity);
     if (mode.gouraudEnable) {
         lineParams.gouraudLeft = gouraudD;
         lineParams.gouraudRight = gouraudA;
     }
-    VDP1PlotLine<false, deinterlace, transparentMeshes>(coordD, coordA, lineParams);
+    VDP1PlotLine<false, deinterlace, transparentMeshes>(coordD, coordA, lineParams, regs1, doubleDensity);
 }
 
 template <bool deinterlace, bool transparentMeshes>
@@ -1831,6 +1939,10 @@ void SoftwareVDPRenderer::VDP1Cmd_DrawLine(uint32 cmdAddress) {
         .color = color,
     };
 
+    const VDP1Regs &regs1 = VDP1GetRegs();
+    const VDP2Regs &regs2 = VDP2GetRegs();
+    const bool doubleDensity = regs2.TVMD.LSMDn == InterlaceMode::DoubleDensity;
+
     if (mode.gouraudEnable) {
         const Color555 colorA{.u16 = VDP1ReadRendererVRAM<uint16>(gouraudTable + 0u)};
         const Color555 colorB{.u16 = VDP1ReadRendererVRAM<uint16>(gouraudTable + 2u)};
@@ -1842,22 +1954,22 @@ void SoftwareVDPRenderer::VDP1Cmd_DrawLine(uint32 cmdAddress) {
                                        (uint8)colorA.b, (uint8)colorB.r, (uint8)colorB.g, (uint8)colorB.b);
     }
 
-    VDP1PlotLine<false, deinterlace, transparentMeshes>(coordA, coordB, lineParams);
+    VDP1PlotLine<false, deinterlace, transparentMeshes>(coordA, coordB, lineParams, regs1, doubleDensity);
 }
 
 void SoftwareVDPRenderer::VDP1Cmd_SetSystemClipping(uint32 cmdAddress) {
     auto &ctx = m_state.state1;
-    ctx.sysClipH = bit::extract<0, 9>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x14));
-    ctx.sysClipV = bit::extract<0, 8>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x16));
+    ctx.sysClipH = VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x14);
+    ctx.sysClipV = VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x16);
     devlog::trace<grp::swvdp1_cmd>("[{:05X}] Set system clipping: {}x{}", cmdAddress, ctx.sysClipH, ctx.sysClipV);
 }
 
 void SoftwareVDPRenderer::VDP1Cmd_SetUserClipping(uint32 cmdAddress) {
     auto &ctx = m_state.state1;
-    ctx.userClipX0 = bit::extract<0, 9>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x0C));
-    ctx.userClipY0 = bit::extract<0, 8>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x0E));
-    ctx.userClipX1 = bit::extract<0, 9>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x14));
-    ctx.userClipY1 = bit::extract<0, 8>(VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x16));
+    ctx.userClipX0 = VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x0C);
+    ctx.userClipY0 = VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x0E);
+    ctx.userClipX1 = VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x14);
+    ctx.userClipY1 = VDP1ReadRendererVRAM<uint16>(cmdAddress + 0x16);
     devlog::trace<grp::swvdp1_cmd>("[{:05X}] Set user clipping: {}x{} - {}x{}", cmdAddress, ctx.userClipX0,
                                    ctx.userClipY0, ctx.userClipX1, ctx.userClipY1);
 }
@@ -1920,7 +2032,6 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2InitNormalBG(const VDP2Regs &regs2) {
         bgState.fracScrollY += bgParams.scrollIncV;
     }
 
-    bgState.scrollIncH = bgParams.scrollIncH;
     bgState.mosaicCounterY = 0;
     if constexpr (index < 2) {
         bgState.lineScrollTableAddress = bgParams.lineScrollTableAddress;
@@ -1941,6 +2052,8 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2UpdateLineScreenScrollParams(uint32 y
 
 FORCE_INLINE void SoftwareVDPRenderer::VDP2UpdateLineScreenScroll(uint32 y, const VDP2Regs &regs2,
                                                                   const BGParams &bgParams, NBGLayerState &bgState) {
+    bgState.scrollIncH = bgParams.scrollIncH;
+
     if ((y & ((1u << bgParams.lineScrollInterval) - 1)) != 0) {
         return;
     }
@@ -2523,17 +2636,17 @@ NO_INLINE void SoftwareVDPRenderer::VDP2DrawSpriteLayer(uint32 y, const VDP2Regs
             const auto &rotParamOut = m_rotParamLineOutputs[0];
             const auto &coord = rotParamOut.spriteCoords[x];
             if (coord.x() < 0 || coord.x() >= regs1.fbSizeH || coord.y() < 0 || coord.y() >= regs1.fbSizeV) {
-                layerOut.pixels.transparent[xx] = true;
+                layerOut.pixels.priority[xx] = 0;
                 layerAttrs.shadowOrWindow[xx] = false;
-                layerAttrs.normalShadow[xx] = false;
+                layerAttrs.specialType[xx] = SpriteData::Special::Transparent;
                 if (doubleResH) {
                     layerOut.pixels.CopyPixel(xx, xx + 1);
                     layerAttrs.CopyAttrs(xx, xx + 1);
                 }
                 if constexpr (transparentMeshes) {
-                    meshLayerOut.pixels.transparent[xx] = true;
+                    meshLayerOut.pixels.priority[xx] = 0;
                     meshLayerAttrs.shadowOrWindow[xx] = false;
-                    layerAttrs.normalShadow[xx] = false;
+                    layerAttrs.specialType[xx] = SpriteData::Special::Transparent;
                     if (doubleResH) {
                         meshLayerOut.pixels.CopyPixel(xx, xx + 1);
                         meshLayerAttrs.CopyAttrs(xx, xx + 1);
@@ -2581,9 +2694,9 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2DrawSpritePixel(uint32 x, const VDP2R
 
     // NOTE: intentionally using the base sprite layer here as the windows are not computed for the mesh layer
     if (m_spriteLayerAttrs[altField].window[x]) {
-        layerOut.pixels.transparent[x] = true;
+        layerOut.pixels.priority[x] = 0;
         layerAttrs.shadowOrWindow[x] = false;
-        layerAttrs.normalShadow[x] = false;
+        layerAttrs.specialType[x] = SpriteData::Special::Transparent;
         return;
     }
 
@@ -2598,27 +2711,27 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2DrawSpritePixel(uint32 x, const VDP2R
             //   window is enabled, and the lower 15 bits are all zero
             if (params.type >= 8) {
                 if (bit::extract<0, 7>(spriteDataValue) == 0) {
-                    layerOut.pixels.transparent[x] = true;
+                    layerOut.pixels.priority[x] = 0;
                     layerAttrs.shadowOrWindow[x] = false;
-                    layerAttrs.normalShadow[x] = false;
+                    layerAttrs.specialType[x] = SpriteData::Special::Transparent;
                     return;
                 }
             } else if (params.type >= 2) {
                 if (params.useSpriteWindow && bit::extract<0, 14>(spriteDataValue) == 0) {
-                    layerOut.pixels.transparent[x] = true;
+                    layerOut.pixels.priority[x] = 0;
                     layerAttrs.shadowOrWindow[x] = false;
-                    layerAttrs.normalShadow[x] = false;
+                    layerAttrs.specialType[x] = SpriteData::Special::Transparent;
                     return;
                 }
             }
 
             layerOut.pixels.color[x] = ConvertRGB555to888(Color555{spriteDataValue});
-            layerOut.pixels.transparent[x] = false;
             layerOut.pixels.priority[x] = params.priorities[0];
+            layerOut.pixels.specialColorCalc[x] = false;
 
             layerAttrs.colorCalcRatio[x] = params.colorCalcRatios[0];
             layerAttrs.shadowOrWindow[x] = false;
-            layerAttrs.normalShadow[x] = false;
+            layerAttrs.specialType[x] = SpriteData::Special::Normal;
             return;
         }
     }
@@ -2629,9 +2742,9 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2DrawSpritePixel(uint32 x, const VDP2R
     // Handle sprite window
     if (params.useSpriteWindow && params.spriteWindowEnabled &&
         spriteData.shadowOrWindow != params.spriteWindowInverted) {
-        layerOut.pixels.transparent[x] = true;
+        layerOut.pixels.priority[x] = 0;
         layerAttrs.shadowOrWindow[x] = true;
-        layerAttrs.normalShadow[x] = false;
+        layerAttrs.specialType[x] = SpriteData::Special::Transparent;
         return;
     }
 
@@ -2639,12 +2752,14 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2DrawSpritePixel(uint32 x, const VDP2R
     const Color888 color = VDP2FetchCRAMColor<colorMode>(0, colorIndex);
 
     layerOut.pixels.color[x] = color;
-    layerOut.pixels.transparent[x] = spriteData.special == SpriteData::Special::Transparent;
-    layerOut.pixels.priority[x] = params.priorities[spriteData.priority];
+    layerOut.pixels.priority[x] = spriteData.special == SpriteData::Special::Transparent && !spriteData.shadowOrWindow
+                                      ? 0
+                                      : params.priorities[spriteData.priority];
+    layerOut.pixels.specialColorCalc[x] = true;
 
     layerAttrs.colorCalcRatio[x] = params.colorCalcRatios[spriteData.colorCalcRatio];
     layerAttrs.shadowOrWindow[x] = spriteData.shadowOrWindow;
-    layerAttrs.normalShadow[x] = spriteData.special == SpriteData::Special::Shadow;
+    layerAttrs.specialType[x] = spriteData.special;
 }
 
 template <uint32 bgIndex, bool deinterlace>
@@ -3320,6 +3435,103 @@ FORCE_INLINE static void Color888SelectMasked(const std::span<Color888> dest,
     }
 }
 
+FORCE_INLINE static void Color888GradationMasked(const std::span<Color888> dest,
+                                                 const std::span<const bool, kMaxResH> mask,
+                                                 const std::span<const Color888> src) {
+    size_t i = 0;
+
+#if defined(_M_X64) || defined(__x86_64__)
+    #if defined(__AVX2__)
+    // Eight pixels at a time
+    for (; (i + 8) < dest.size(); i += 8) {
+        // Load eight mask bytes into 32-bit lanes of 000... or 111...
+        __m256i mask_x8 = _mm256_cvtepu8_epi32(_mm_loadu_si64(mask.data() + i));
+        mask_x8 = _mm256_sub_epi32(_mm256_setzero_si256(), mask_x8);
+
+        const __m256i color0_x8 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(&src[i]));
+        const __m256i color1_x8 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(&src[i + 1]));
+        const __m256i color2_x8 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(&src[i + 2]));
+
+        const __m256i blend01_x8 = _mm256_add_epi32(
+            _mm256_srli_epi32(_mm256_and_si256(_mm256_xor_si256(color0_x8, color1_x8), _mm256_set1_epi8(0xFE)), 1),
+            _mm256_and_si256(color0_x8, color1_x8));
+        const __m256i blend2_x8 = _mm256_add_epi32(
+            _mm256_srli_epi32(_mm256_and_si256(_mm256_xor_si256(blend01_x8, color2_x8), _mm256_set1_epi8(0xFE)), 1),
+            _mm256_and_si256(blend01_x8, color2_x8));
+
+        // Blend with mask
+        const __m256i dstColor_x8 = _mm256_blendv_epi8(color2_x8, blend2_x8, mask_x8);
+
+        // Write
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(&dest[i]), dstColor_x8);
+    }
+    #endif
+
+    #if defined(__SSE2__)
+    // Four pixels at a time
+    for (; (i + 4) < dest.size(); i += 4) {
+        // Load four mask values and expand each byte into 32-bit 000... or 111...
+        __m128i mask_x4 = _mm_loadu_si32(mask.data() + i);
+        mask_x4 = _mm_unpacklo_epi8(mask_x4, _mm_setzero_si128());
+        mask_x4 = _mm_unpacklo_epi16(mask_x4, _mm_setzero_si128());
+        mask_x4 = _mm_sub_epi32(_mm_setzero_si128(), mask_x4);
+
+        const __m128i color0_x4 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(&src[i]));
+        const __m128i color1_x4 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(&src[i + 1]));
+        const __m128i color2_x4 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(&src[i + 2]));
+
+        const __m128i blend01_x4 =
+            _mm_add_epi32(_mm_srli_epi32(_mm_and_si128(_mm_xor_si128(color0_x4, color1_x4), _mm_set1_epi8(0xFE)), 1),
+                          _mm_and_si128(color0_x4, color1_x4));
+        const __m128i blend2_x4 =
+            _mm_add_epi32(_mm_srli_epi32(_mm_and_si128(_mm_xor_si128(blend01_x4, color2_x4), _mm_set1_epi8(0xFE)), 1),
+                          _mm_and_si128(blend01_x4, color2_x4));
+
+        // Blend with mask
+        const __m128i dstColor_x4 =
+            _mm_or_si128(_mm_and_si128(color2_x4, blend2_x4), _mm_andnot_si128(mask_x4, color2_x4));
+
+        // Write
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(&dest[i]), dstColor_x4);
+    }
+    #endif
+#elif defined(_M_ARM64) || defined(__aarch64__)
+    // Four pixels at a time
+    for (; (i + 4) < dest.size(); i += 4) {
+        // Load four mask values and expand each byte into 32-bit 000... or 111...
+        uint32x4_t mask_x4 = vld1q_lane_u32(reinterpret_cast<const uint32 *>(mask.data() + i), vdupq_n_u32(0), 0);
+        mask_x4 = vmovl_u16(vget_low_u16(vmovl_u8(vget_low_u8(mask_x4))));
+        mask_x4 = vnegq_s32(mask_x4);
+
+        const uint32x4_t color0_x4 = vld1q_u32(reinterpret_cast<const uint32 *>(&src[i]));
+        const uint32x4_t color1_x4 = vld1q_u32(reinterpret_cast<const uint32 *>(&src[i + 1]));
+        const uint32x4_t color2_x4 = vld1q_u32(reinterpret_cast<const uint32 *>(&src[i + 2]));
+
+        // Halving average
+        const uint32x4_t blend01_x4 = vhaddq_u8(color0_x4, color1_x4);
+        const uint32x4_t blend2_x4 = vhaddq_u8(blend01_x4, color2_x4);
+
+        // Blend with mask
+        const uint32x4_t dstColor_x4 = vbslq_u32(mask_x4, color2_x4, blend2_x4);
+
+        // Write
+        vst1q_u32(reinterpret_cast<uint32 *>(&dest[i]), dstColor_x4);
+    }
+#endif
+
+    for (; i < dest.size(); i++) {
+        const Color888 &color0 = src[i];
+        const Color888 &color1 = src[i + 1];
+        const Color888 &color2 = src[i + 2];
+        Color888 &dstColor = dest[i];
+        if (mask[i]) {
+            dstColor = AverageRGB888(AverageRGB888(color0, color1), color2);
+        } else {
+            dstColor = color2;
+        }
+    }
+}
+
 FORCE_INLINE static void Color888AverageMasked(const std::span<Color888> dest,
                                                const std::span<const bool, kMaxResH> mask,
                                                const std::span<const Color888> topColors,
@@ -3581,8 +3793,9 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
     }
 
     auto &composeLineBuffers = m_composeLineBuffers[altField];
+    auto &spriteLayerAttrs = m_spriteLayerAttrs[altField];
 
-    const auto &scanline_layers = composeLineBuffers.scanline_layers;
+    auto &scanline_layers = composeLineBuffers.scanline_layers;
     const auto &scanline_layerPrios = composeLineBuffers.scanline_layerPrios;
 
     // Determine layer order
@@ -3597,11 +3810,6 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         }
 
         const LayerOutput &output = m_layerOutputs[altField][layer];
-
-        if (AllBool(std::span{output.pixels.transparent}.first(m_HRes))) {
-            // All pixels are transparent
-            continue;
-        }
 
         if (AllZeroU8(std::span{output.pixels.priority}.first(m_HRes))) {
             // All priorities are zero
@@ -3631,14 +3839,11 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
 
         if (layer == LYR_Sprite) {
             for (uint32 x = 0; x < m_HRes; x++) {
-                if (output.pixels.transparent[x]) {
-                    continue;
-                }
                 const uint8 priority = output.pixels.priority[x];
                 if (priority == 0) {
                     continue;
                 }
-                if (m_spriteLayerAttrs[altField].normalShadow[x]) {
+                if (spriteLayerAttrs.specialType[x] != SpriteData::Special::Normal) {
                     continue;
                 }
 
@@ -3646,9 +3851,6 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
             }
         } else {
             for (uint32 x = 0; x < m_HRes; x++) {
-                if (output.pixels.transparent[x]) {
-                    continue;
-                }
                 const uint8 priority = output.pixels.priority[x];
                 if (priority == 0) {
                     continue;
@@ -3672,18 +3874,14 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         std::fill_n(scanline_meshLayers.begin(), m_HRes, 0xFF);
 
         if (state2.layerEnabled[0] &&
-            !AllBool(std::span{m_meshLayerOutput[altField].pixels.transparent}.first(m_HRes)) &&
             !AllZeroU8(std::span{m_meshLayerOutput[altField].pixels.priority}.first(m_HRes))) {
 
             for (uint32 x = 0; x < m_HRes; x++) {
-                if (m_meshLayerOutput[altField].pixels.transparent[x]) {
-                    continue;
-                }
                 const uint8 priority = m_meshLayerOutput[altField].pixels.priority[x];
                 if (priority == 0) {
                     continue;
                 }
-                if (m_meshLayerAttrs[altField].normalShadow[x]) {
+                if (m_meshLayerAttrs[altField].specialType[x] != SpriteData::Special::Normal) {
                     continue;
                 }
 
@@ -3710,6 +3908,8 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         }
     };
 
+    const bool restrictedColorCalc = regs2.restrictedColorCalc;
+
     // Determines if color calculation is enabled for the given layer
     const auto isColorCalcEnabled = [&](LayerIndex layer, uint32 x) {
         if (layer == LYR_Sprite) {
@@ -3717,8 +3917,12 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
             if (!spriteParams.colorCalcEnable) {
                 return false;
             }
+            const auto &pixels = m_layerOutputs[altField][LYR_Sprite].pixels;
+            if (restrictedColorCalc && pixels.specialColorCalc[x]) {
+                return false;
+            }
 
-            const uint8 pixelPriority = m_layerOutputs[altField][LYR_Sprite].pixels.priority[x];
+            const uint8 pixelPriority = pixels.priority[x];
 
             using enum SpriteColorCalculationCondition;
             switch (spriteParams.colorCalcCond) {
@@ -3731,7 +3935,14 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         } else if (layer == LYR_Back) {
             return regs2.backScreenParams.colorCalcEnable;
         } else {
-            return regs2.bgParams[layer - LYR_RBG0].colorCalcEnable;
+            const auto &bgParams = regs2.bgParams[layer - LYR_RBG0];
+            if (!bgParams.colorCalcEnable) {
+                return false;
+            }
+            if (restrictedColorCalc && IsPaletteColorFormat(bgParams.colorFormat)) {
+                return false;
+            }
+            return true;
         }
     };
 
@@ -3769,8 +3980,7 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
             layer0ShadowEnabled[x] = false;
         } else {
             // Sprite layer doesn't have shadow
-            const auto &spriteLayerAttrs = m_spriteLayerAttrs[altField];
-            const bool isNormalShadow = spriteLayerAttrs.normalShadow[x];
+            const bool isNormalShadow = spriteLayerAttrs.specialType[x] == SpriteData::Special::Shadow;
             const bool isMSBShadow = !regs2.spriteParams.useSpriteWindow && spriteLayerAttrs.shadowOrWindow[x];
             if (!isNormalShadow && !isMSBShadow) {
                 layer0ShadowEnabled[x] = false;
@@ -3794,6 +4004,17 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
 
     const std::span<Color888> framebufferOutput(reinterpret_cast<Color888 *>(&m_framebuffer[y * m_HRes]), m_HRes);
 
+    const bool normalTVMode = regs2.TVMD.HRESOn < 2;
+    const bool colorGradEnabled = normalTVMode && colorCalcParams.colorGradEnable;
+    static constexpr LayerIndex kColorGradLayers[] = {
+        LYR_Sprite, LYR_RBG0, LYR_NBG0_RBG1, LYR_Invalid, LYR_NBG1_EXBG, LYR_NBG2, LYR_NBG3, LYR_Invalid,
+    };
+
+    static constexpr ColorGradScreen kColorGradScreens[] = {
+        ColorGradScreen::Sprite,    ColorGradScreen::RBG0, ColorGradScreen::NBG0_RBG1,
+        ColorGradScreen::NBG1_EXBG, ColorGradScreen::NBG2, ColorGradScreen::NBG3,
+    };
+
     if (AnyBool(std::span{layer0ColorCalcEnabled}.first(m_HRes))) {
         const bool doubleResH = regs2.TVMD.HRESOn & 0b010;
         const uint32 xShift = doubleResH ? 1 : 0;
@@ -3814,32 +4035,60 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
             }
 
             // Line color
-            switch (layer0) {
-            case LYR_Sprite:
-                layer0LineColorEnabled[x] = regs2.spriteParams.lineColorScreenEnable;
-                if (layer0LineColorEnabled[x]) {
-                    layer0LineColors[x] = state2.lineBackLayerState.lineColor;
-                }
-                break;
-            case LYR_Back: layer0LineColorEnabled[x] = false; break;
-            default:
-                layer0LineColorEnabled[x] = regs2.bgParams[layer0 - LYR_RBG0].lineColorScreenEnable;
-                if (layer0LineColorEnabled[x]) {
-                    if (layer0 == LYR_RBG0 || (layer0 == LYR_NBG0_RBG1 && regs2.bgEnabled[5])) {
-                        layer0LineColors[x] = m_rbgLineColors[layer0 - LYR_RBG0][x >> xShift];
-                    } else {
+            if (colorGradEnabled) {
+                // Color gradation prevents line color screen insertion
+                layer0LineColorEnabled[x] = false;
+            } else {
+                switch (layer0) {
+                case LYR_Sprite:
+                    layer0LineColorEnabled[x] = regs2.spriteParams.lineColorScreenEnable;
+                    if (layer0LineColorEnabled[x]) {
                         layer0LineColors[x] = state2.lineBackLayerState.lineColor;
                     }
+                    break;
+                case LYR_Back: layer0LineColorEnabled[x] = false; break;
+                default:
+                    layer0LineColorEnabled[x] = regs2.bgParams[layer0 - LYR_RBG0].lineColorScreenEnable;
+                    if (layer0LineColorEnabled[x]) {
+                        if (layer0 == LYR_RBG0 || (layer0 == LYR_NBG0_RBG1 && regs2.bgEnabled[5])) {
+                            layer0LineColors[x] = m_rbgLineColors[layer0 - LYR_RBG0][x >> xShift];
+                        } else {
+                            layer0LineColors[x] = state2.lineBackLayerState.lineColor;
+                        }
+                    }
+                    break;
                 }
-                break;
             }
         }
 
-        // Extended color calculations (only in normal TV modes)
-        const bool useExtendedColorCalc = colorCalcParams.extendedColorCalcEnable && regs2.TVMD.HRESOn < 2;
+        // Color gradation
+        if (colorGradEnabled) {
+            const auto colorGradIndex = static_cast<size_t>(colorCalcParams.colorGradScreen);
+            const LayerIndex colorGradLayer = kColorGradLayers[colorGradIndex];
 
-        // Apply extended color calculations to layer 1
-        if (useExtendedColorCalc) {
+            // Compute color gradation
+            auto &mask = composeLineBuffers.colorGradEnabled;
+            for (uint32 x = 0; x < m_HRes; x++) {
+                mask[x] = scanline_layers[x][0] == colorGradLayer || scanline_layers[x][1] == colorGradLayer;
+            }
+
+            auto &input = m_layerOutputs[altField][colorGradLayer].pixels.color;
+            auto &output = composeLineBuffers.colorGradLayerColors;
+
+            // TODO: should pixels 0 and 1 pull from pixels -1 and -2?
+            output[0] = input[0];
+            output[1] = AverageRGB888(input[0], input[1]);
+            Color888GradationMasked(std::span{output}.subspan(2, m_HRes - 2), std::span{mask}, std::span{input});
+
+            // Replace layer 1 with color gradation screen where layer 0 is also the color gradation layer
+            for (uint32 x = 0; x < m_HRes; x++) {
+                if (scanline_layers[x][0] == colorGradLayer) {
+                    scanline_layers[x][1] = colorGradLayer;
+                    layer1Pixels[x] = output[x];
+                }
+            }
+        } else if (normalTVMode && colorCalcParams.extendedColorCalcEnable) {
+            // Apply color gradation or extended color calculations to layer 1
             auto &layer1ColorCalcEnabled = composeLineBuffers.layer1ColorCalcEnabled;
             auto &layer2Pixels = composeLineBuffers.layer2Pixels;
             auto &layer2BlendMeshLayer = composeLineBuffers.layer2BlendMeshLayer;
@@ -3862,9 +4111,6 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
                                       m_meshLayerOutput[altField].pixels.color);
             }
 
-            // TODO: honor color RAM mode + palette/RGB format restrictions
-            // - modes 1 and 2 don't blend layers if the bottom layer uses palette color
-            // HACK: assuming color RAM mode 0 for now (aka no restrictions)
             Color888AverageMasked(std::span{layer1Pixels}.first(m_HRes), layer1ColorCalcEnabled, layer1Pixels,
                                   layer2Pixels);
 
@@ -3907,7 +4153,7 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
                 } else {
                     const LayerIndex layer = scanline_layers[x][colorCalcParams.useSecondScreenRatio];
                     switch (layer) {
-                    case LYR_Sprite: scanline_ratio[x] = m_spriteLayerAttrs[altField].colorCalcRatio[x]; break;
+                    case LYR_Sprite: scanline_ratio[x] = spriteLayerAttrs.colorCalcRatio[x]; break;
                     case LYR_Back: scanline_ratio[x] = regs2.backScreenParams.colorCalcRatio; break;
                     default: scanline_ratio[x] = regs2.bgParams[layer - LYR_RBG0].colorCalcRatio; break;
                     }
@@ -4028,11 +4274,16 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
                 case OverlayType::None: break;
                 case OverlayType::SingleLayer: //
                 {
-                    const uint8 layerLevel = std::min<uint8>(overlay.singleLayerIndex, 8);
+                    const uint8 layerLevel = std::min<uint8>(overlay.singleLayerIndex, 9);
                     switch (layerLevel) {
                     case LYR_Back: overlayColor = state2.lineBackLayerState.backColor; break;
                     case LYR_LineColor: overlayColor = state2.lineBackLayerState.lineColor; break;
                     case 8 /*transparent meshes*/: overlayColor = m_meshLayerOutput[altField].pixels.color[x]; break;
+                    case 9 /*gradation screen*/:
+                        if (colorGradEnabled) {
+                            overlayColor = composeLineBuffers.colorGradLayerColors[x];
+                        }
+                        break;
                     default: overlayColor = m_layerOutputs[altField][layerLevel].pixels.color[x];
                     }
                     break;
@@ -4056,8 +4307,8 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
                     const uint8 layerIndex = overlay.windowLayerIndex;
                     switch (layerIndex) {
                     case 0: // Sprite
-                        overlayColor = m_spriteLayerAttrs[altField].window[x] ? overlay.windowInsideColor
-                                                                              : overlay.windowOutsideColor;
+                        overlayColor =
+                            spriteLayerAttrs.window[x] ? overlay.windowInsideColor : overlay.windowOutsideColor;
                         break;
                     case 1: [[fallthrough]]; // RBG0
                     case 2: [[fallthrough]]; // NBG0/RBG1
@@ -4094,6 +4345,17 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
                     overlayColor = isColorCalcEnabled(scanline_layers[x][stackIndex], x)
                                        ? overlay.colorCalcEnableColor
                                        : overlay.colorCalcDisableColor;
+                    break;
+                }
+                case OverlayType::ColorGradation: //
+                {
+                    const uint8 stackIndex = overlay.colorGradStackIndex <= 1 ? overlay.colorGradStackIndex : 0;
+                    const LayerIndex stackLayer = scanline_layers[x][stackIndex];
+                    if (stackLayer <= LYR_NBG3) {
+                        const ColorGradScreen screen = kColorGradScreens[stackLayer];
+                        overlayColor = screen == colorCalcParams.colorGradScreen ? overlay.colorGradEnableColor
+                                                                                 : overlay.colorGradDisableColor;
+                    }
                     break;
                 }
                 case OverlayType::Shadow: //
@@ -4185,7 +4447,7 @@ NO_INLINE void SoftwareVDPRenderer::VDP2DrawNormalScrollBG(const VDP2Regs &regs2
 
         if (windowState[x]) {
             // Make pixel transparent if inside active window area
-            layerOut.pixels.transparent[x] = true;
+            layerOut.pixels.priority[x] = 0;
         } else {
             // Compute integer scroll screen coordinates
             const uint32 scrollX = fracScrollX >> 8u;
@@ -4289,7 +4551,7 @@ NO_INLINE void SoftwareVDPRenderer::VDP2DrawNormalBitmapBG(const VDP2Regs &regs2
 
         if (windowState[x]) {
             // Make pixel transparent if inside active window area
-            layerOut.pixels.transparent[x] = true;
+            layerOut.pixels.priority[x] = 0;
         } else {
             // Compute integer scroll screen coordinates
             const uint32 scrollX = fracScrollX >> 8u;
@@ -4350,9 +4612,9 @@ NO_INLINE void SoftwareVDPRenderer::VDP2DrawRotationScrollBG(const VDP2Regs &reg
 
         // Handle transparent pixels in coefficient table
         if (rotParams.coeffTableEnable && rotParamOut.transparent[x]) {
-            layerOut.pixels.transparent[xx] = true;
+            layerOut.pixels.priority[xx] = 0;
             if (doubleResH) {
-                layerOut.pixels.transparent[xx + 1] = true;
+                layerOut.pixels.priority[xx + 1] = 0;
             }
             continue;
         }
@@ -4372,9 +4634,9 @@ NO_INLINE void SoftwareVDPRenderer::VDP2DrawRotationScrollBG(const VDP2Regs &reg
 
         if (windowState[xx] && (!doubleResH || windowState[xx + 1])) {
             // Make pixel transparent if inside a window
-            layerOut.pixels.transparent[xx] = true;
+            layerOut.pixels.priority[xx] = 0;
             if (doubleResH) {
-                layerOut.pixels.transparent[xx + 1] = true;
+                layerOut.pixels.priority[xx + 1] = 0;
             }
         } else if ((scrollX < maxScrollX && scrollY < maxScrollY) || usingRepeat) {
             // Plot pixel
@@ -4413,9 +4675,9 @@ NO_INLINE void SoftwareVDPRenderer::VDP2DrawRotationScrollBG(const VDP2Regs &reg
             VDP2StoreRotationLineColorData<bgIndex>(x, regs2, bgParams, rotParamSelector);
         } else {
             // Out of bounds - transparent
-            layerOut.pixels.transparent[xx] = true;
+            layerOut.pixels.priority[xx] = 0;
             if (doubleResH) {
-                layerOut.pixels.transparent[xx + 1] = true;
+                layerOut.pixels.priority[xx + 1] = 0;
             }
         }
     }
@@ -4442,9 +4704,9 @@ NO_INLINE void SoftwareVDPRenderer::VDP2DrawRotationBitmapBG(const VDP2Regs &reg
 
         // Handle transparent pixels in coefficient table
         if (rotParams.coeffTableEnable && rotParamOut.transparent[x]) {
-            layerOut.pixels.transparent[xx] = true;
+            layerOut.pixels.priority[xx] = 0;
             if (doubleResH) {
-                layerOut.pixels.transparent[xx + 1] = true;
+                layerOut.pixels.priority[xx + 1] = 0;
             }
             continue;
         }
@@ -4463,9 +4725,9 @@ NO_INLINE void SoftwareVDPRenderer::VDP2DrawRotationBitmapBG(const VDP2Regs &reg
 
         if (windowState[xx] && (!doubleResH || windowState[xx + 1])) {
             // Make pixel transparent if inside a window
-            layerOut.pixels.transparent[xx] = true;
+            layerOut.pixels.priority[xx] = 0;
             if (doubleResH) {
-                layerOut.pixels.transparent[xx + 1] = true;
+                layerOut.pixels.priority[xx + 1] = 0;
             }
         } else if ((scrollX < maxScrollX && scrollY < maxScrollY) || usingRepeat) {
             // Plot pixel
@@ -4482,9 +4744,9 @@ NO_INLINE void SoftwareVDPRenderer::VDP2DrawRotationBitmapBG(const VDP2Regs &reg
             VDP2StoreRotationLineColorData<bgIndex>(x, regs2, bgParams, rotParamSelector);
         } else {
             // Out of bounds and no repeat
-            layerOut.pixels.transparent[xx] = true;
+            layerOut.pixels.priority[xx] = 0;
             if (doubleResH) {
-                layerOut.pixels.transparent[xx + 1] = true;
+                layerOut.pixels.priority[xx + 1] = 0;
             }
         }
     }
@@ -5008,46 +5270,61 @@ SoftwareVDPRenderer::VDP2FetchPixel(const BGParams &bgParams, const VDP2Regs &re
         const uint32 dotAddress = baseAddress + (dotOffset >> 1u);
         fetchCharData(dotAddress);
         const uint8 dotData = (vramFetcher.charData[dotAddress & 7] >> ((~dotX & 1) * 4)) & 0xF;
+        if (bgParams.enableTransparency && dotData == 0) {
+            pixel.priority = 0;
+            return pixel;
+        }
         const uint32 colorIndex = palNum | dotData;
         colorData = bit::extract<1, 3>(dotData);
         pixel.color = VDP2FetchCRAMColor<colorMode>(bgParams.cramOffset, colorIndex);
-        pixel.transparent = bgParams.enableTransparency && dotData == 0;
         pixel.specialColorCalc = getSpecialColorCalcFlag(colorData, pixel.color.msb);
 
     } else if constexpr (colorFormat == ColorFormat::Palette256) {
         const uint32 dotAddress = baseAddress + dotOffset;
         fetchCharData(dotAddress);
         const uint8 dotData = vramFetcher.charData[dotAddress & 7];
+        if (bgParams.enableTransparency && dotData == 0) {
+            pixel.priority = 0;
+            return pixel;
+        }
         const uint32 colorIndex = (palNum & 0x700) | dotData;
         colorData = bit::extract<1, 3>(dotData);
         pixel.color = VDP2FetchCRAMColor<colorMode>(bgParams.cramOffset, colorIndex);
-        pixel.transparent = bgParams.enableTransparency && dotData == 0;
         pixel.specialColorCalc = getSpecialColorCalcFlag(colorData, pixel.color.msb);
 
     } else if constexpr (colorFormat == ColorFormat::Palette2048) {
         const uint32 dotAddress = baseAddress + dotOffset * sizeof(uint16);
         fetchCharData(dotAddress);
         const uint16 dotData = util::ReadBE<uint16>(&vramFetcher.charData[dotAddress & 6]);
+        if (bgParams.enableTransparency && (dotData & 0x7FF) == 0) {
+            pixel.priority = 0;
+            return pixel;
+        }
         const uint32 colorIndex = dotData & 0x7FF;
         colorData = bit::extract<1, 3>(dotData);
         pixel.color = VDP2FetchCRAMColor<colorMode>(bgParams.cramOffset, colorIndex);
-        pixel.transparent = bgParams.enableTransparency && (dotData & 0x7FF) == 0;
         pixel.specialColorCalc = getSpecialColorCalcFlag(colorData, pixel.color.msb);
 
     } else if constexpr (colorFormat == ColorFormat::RGB555) {
         const uint32 dotAddress = baseAddress + dotOffset * sizeof(uint16);
         fetchCharData(dotAddress);
         const uint16 dotData = util::ReadBE<uint16>(&vramFetcher.charData[dotAddress & 6]);
+        if (bgParams.enableTransparency && !bit::test<15>(dotData)) {
+            pixel.priority = 0;
+            return pixel;
+        }
         pixel.color = ConvertRGB555to888(Color555{.u16 = dotData});
-        pixel.transparent = bgParams.enableTransparency && bit::extract<15>(dotData) == 0;
         pixel.specialColorCalc = getSpecialColorCalcFlag(0b111, true);
 
     } else if constexpr (colorFormat == ColorFormat::RGB888) {
         const uint32 dotAddress = baseAddress + dotOffset * sizeof(uint32);
         fetchCharData(dotAddress);
         const uint32 dotData = util::ReadBE<uint32>(&vramFetcher.charData[dotAddress & 4]);
+        if (bgParams.enableTransparency && !bit::test<31>(dotData)) {
+            pixel.priority = 0;
+            return pixel;
+        }
         pixel.color.u32 = dotData;
-        pixel.transparent = bgParams.enableTransparency && bit::extract<31>(dotData) == 0;
         pixel.specialColorCalc = getSpecialColorCalcFlag(0b111, true);
     }
 

@@ -76,7 +76,7 @@ bool RewindBuffer::PopState() {
     }
 
     // Determine buffer size
-    const size_t maxSize = std::max(m_buffers[0].size(), m_buffers[1].size());
+    const size_t maxSize = m_maxBufferSize;
 
     // Decompress last delta frame into the "next" buffer, but don't flip buffers
     const std::vector<char> &lastDelta = m_deltas[m_deltaWritePos];
@@ -189,6 +189,8 @@ void RewindBuffer::ProcessFrame() {
     int compSize = LZ4_compress_fast(src, dst, srcSize, dstSize, LZ4Accel);
     outBuffer.resize(compSize);
     outBuffer.shrink_to_fit();
+
+    m_maxBufferSize = std::max(m_maxBufferSize, maxSize);
 }
 
 } // namespace app

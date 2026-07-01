@@ -156,6 +156,8 @@ struct Settings {
         util::Observable<bool> useAltSpeed;
 
         bool pauseWhenUnfocused;
+        bool unpauseOnDiscLoad;
+        bool startPaused;
 
         bool checkForUpdates;
         bool includeNightlyBuilds;
@@ -169,6 +171,8 @@ struct Settings {
 
         bool rememberWindowGeometry;
         bool showMessages;
+        bool showGameNameOnTitleBar;
+        bool showPerformanceOnTitleBar;
         bool showFrameRateOSD;
         FrameRateOSDPosition frameRateOSDPosition;
         bool showSpeedIndicatorForAllSpeeds;
@@ -181,6 +185,7 @@ struct Settings {
         util::Observable<ymir::core::config::sys::VideoStandard> videoStandard;
 
         bool emulateSH2Cache;
+        util::Observable<uint32> sh2ClockFactor;
 
         std::filesystem::path internalBackupRAMImagePath;
         bool internalBackupRAMPerGame;
@@ -203,6 +208,7 @@ struct Settings {
         input::InputBind openSettings{actions::general::OpenSettings};
         input::InputBind toggleWindowedVideoOutput{actions::general::ToggleWindowedVideoOutput};
         input::InputBind toggleFullScreen{actions::general::ToggleFullScreen};
+        input::InputBind showMessageHistory{actions::general::ShowMessageHistory};
         input::InputBind takeScreenshot{actions::general::TakeScreenshot};
         input::InputBind exitApp{actions::general::ExitApp};
 
@@ -438,6 +444,7 @@ struct Settings {
             enum class CaptureMode { SystemCursor, PhysicalMouse };
 
             util::Observable<CaptureMode> captureMode;
+            bool lockToDisplay;
         } mouse;
 
         struct Gamepad {

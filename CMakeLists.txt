@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
-project(Ymir VERSION 0.3.1)
+project(Ymir VERSION 0.4.0)
 
 include(cmake/CMakeRC.cmake)
 include(cmake/CopyRuntimeDLLs.cmake)
 include(cmake/TargetConditionalSources.cmake)
+include(CMakeDependentOption)
 
 # CMake project structured adapted from Alex Reinking's SharedStaticStarter
 # GitHub: https://github.com/alexreinking/SharedStaticStarter
@@ -17,6 +18,8 @@ option(Ymir_EXTRA_INLINING "Enable more aggressive inlining (slows down build!)"
 option(Ymir_ENABLE_TESTS "Enable tests for Ymir" "${is_top_level}")
 option(Ymir_ENABLE_SANDBOX "Compile the sandbox app" "${is_top_level}")
 option(Ymir_ENABLE_YMDASM "Compile the disassembly tool" "${is_top_level}")
+option(Ymir_ENABLE_YMIR_HEADLESS "Compile the headless debug worker" "${is_top_level}")
+option(Ymir_ENABLE_YMIR_DBG "Compile the command-line debug frontend" "${is_top_level}")
 option(Ymir_ENABLE_IPO "Enable IPO / LTO for Ymir" ON)
 option(Ymir_ENABLE_DEVLOG "Enable development logs" ${Ymir_DEV_BUILD})
 option(Ymir_ENABLE_DEV_ASSERTIONS "Enable development-time assertions" OFF)
@@ -24,6 +27,7 @@ option(Ymir_ENABLE_IMGUI_DEMO "Enable ImGui demo window" ON)
 option(Ymir_ENABLE_SDL3_APP "Compile the SDL3 frontend" "${is_top_level}")
 option(Ymir_ENABLE_UPDATE_CHECKS "Enable update checks" ON)
 option(Ymir_ENABLE_LIBRETRO "Compile the libretro core" OFF)
+cmake_dependent_option(Ymir_LIBRARY_ONLY "Compile ymir-core only" OFF is_top_level ON)
 
 ## Feature flags
 ## If ON, all feature flags will be enabled by default
@@ -31,8 +35,12 @@ option(Ymir_ENABLE_LIBRETRO "Compile the libretro core" OFF)
 option(Ymir_FEATUREFLAG_DEFAULT "Enable all feature flags by default" ${Ymir_DEV_BUILD})
 
 ## Selectively enable in-development features
-option(Ymir_FF_VIRTUA_GUN "Enable Virtua Gun peripheral" ${Ymir_FEATUREFLAG_DEFAULT})
+## Template:
+## option(Ymir_FF_[NAME] "[description]" ${Ymir_FEATUREFLAG_DEFAULT})
 
+if (Ymir_LIBRARY_ONLY)
+    message(STATUS "Ymir: Library-only build")
+endif ()
 if (Ymir_DEV_BUILD)
     message(STATUS "Ymir: Development build")
 else ()
@@ -42,8 +50,8 @@ message(STATUS "Ymir: Devlog ${Ymir_ENABLE_DEVLOG}")
 message(STATUS "Ymir: Extra inlining ${Ymir_EXTRA_INLINING}")
 message(STATUS "Ymir: Update checks ${Ymir_ENABLE_UPDATE_CHECKS}")
 
-message(STATUS "Ymir: Feature flags:")
-message(STATUS "- Virtua Gun: ${Ymir_FF_VIRTUA_GUN}")
+#message(STATUS "Ymir: Feature flags:")
+#message(STATUS "- [Name]: ${Ymir_FF_[NAME]}")
 
 # Create Universal Binary on MacOS
 #if (APPLE)
@@ -125,16 +133,21 @@ add_subdirectory(vendor)
 include(cmake/PGO.cmake)
 ymir_configure_pgo()
 
-## Include project libraries and apps
+## Include project libraries
 add_subdirectory(libs)
-add_subdirectory(apps)
 
-## Include the unit tests if the user wanted them (included by default when top-level)
-if (Ymir_ENABLE_TESTS)
-    add_subdirectory(tests)
-endif ()
+if (NOT Ymir_LIBRARY_ONLY)
+    ## Include apps
+    add_subdirectory(apps)
 
-## Configure Visual Studio solution
-if (MSVC AND Ymir_ENABLE_SDL3_APP)
-    set_property(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}" PROPERTY VS_STARTUP_PROJECT ymir-sdl3)
+    ## Include the unit tests if the user wanted them (included by default when top-level)
+    if (Ymir_ENABLE_TESTS)
+        enable_testing()
+        add_subdirectory(tests)
+    endif ()
+
+    ## Configure Visual Studio solution
+    if (MSVC AND Ymir_ENABLE_SDL3_APP)
+        set_property(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}" PROPERTY VS_STARTUP_PROJECT ymir-sdl3)
+    endif ()
 endif ()

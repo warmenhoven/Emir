@@ -6,16 +6,15 @@
 
 #include <app/services/save_state_service.hpp>
 
-#include <memory>
 #include <ymir/sys/saturn.hpp>
 
-#include <util/rom_loader.hpp>
 #include <ymir/util/dev_log.hpp>
 #include <ymir/util/scope_guard.hpp>
 
 #include <util/file_loader.hpp>
 
 #include <fstream>
+#include <memory>
 
 using namespace ymir;
 
@@ -384,6 +383,13 @@ EmuEvent InsertCartridgeFromSettings() {
             break;
 
         case Settings::Cartridge::Type::BackupRAM: {
+            // Use default path for specified size
+            if (cartSettings.backupRAM.imagePath.empty()) {
+                cartSettings.backupRAM.imagePath =
+                    ctx.profile.GetPath(ProfilePath::PersistentState) /
+                    fmt::format("bup-ext-{}M.bin", CapacityToSize(cartSettings.backupRAM.capacity) * 8 / 1024 / 1024);
+            }
+
             // Prevent loading the internal backup RAM file as backup memory cartridge
             if (std::filesystem::absolute(cartSettings.backupRAM.imagePath) ==
                 std::filesystem::absolute(settings.system.internalBackupRAMImagePath)) {
@@ -391,13 +397,6 @@ EmuEvent InsertCartridgeFromSettings() {
                     "Failed to load external backup memory: file {} is already in use as internal backup memory",
                     cartSettings.backupRAM.imagePath)));
                 return;
-            }
-
-            // Use default path for specified size
-            if (cartSettings.backupRAM.imagePath.empty()) {
-                cartSettings.backupRAM.imagePath =
-                    ctx.profile.GetPath(ProfilePath::PersistentState) /
-                    fmt::format("bup-ext-{}M.bin", CapacityToSize(cartSettings.backupRAM.capacity) * 8 / 1024 / 1024);
             }
 
             // If a backup RAM cartridge is inserted, remove it first to unlock the file and reinsert the previous
@@ -556,6 +555,11 @@ EmuEvent SetEmulateSH2Cache(bool enable) {
             devlog::info<grp::base>("SH2 cache emulation {}", (enable ? "enabled" : "disabled"));
         }
     });
+}
+
+EmuEvent SetSH2ClockFactor(uint32 factor) {
+    return RunFunction(
+        [=](SharedContext &ctx) { ctx.saturn.instance->SetSH2ClockFactor(RatioU32::FromPercentage(factor)); });
 }
 
 EmuEvent SetCDBlockLLE(bool enable) {
