@@ -73,6 +73,29 @@ static struct retro_core_option_v2_definition option_definitions[] = {
         "disabled",
     },
     {
+        "ymir_sh2_clock",
+        "SH-2 Clock Factor",
+        "SH-2 Clock",
+        "Adjusts the SH-2 CPU clock speed. Lower values improve performance but may cause slowdowns; higher values "
+        "may reduce lag in CPU-heavy games. Values other than 100% may lower compatibility with some games.",
+        nullptr,
+        "system",
+        {
+            {"25", "25%"},
+            {"50", "50%"},
+            {"75", "75%"},
+            {"100", "100% (Recommended)"},
+            {"125", "125%"},
+            {"150", "150%"},
+            {"200", "200%"},
+            {"300", "300%"},
+            {"400", "400%"},
+            {"500", "500%"},
+            {nullptr, nullptr},
+        },
+        "100",
+    },
+    {
         "ymir_rtc_mode",
         "RTC Mode",
         "RTC",
@@ -189,6 +212,20 @@ static struct retro_core_option_v2_definition option_definitions[] = {
             {nullptr, nullptr},
         },
         "linear",
+    },
+    {
+        "ymir_threaded_scsp",
+        "Threaded SCSP",
+        "Threaded SCSP",
+        "Run the SCSP and its MC68EC000 sound CPU in a dedicated thread for improved performance.",
+        nullptr,
+        "audio",
+        {
+            {"disabled", "Disabled"},
+            {"enabled", "Enabled"},
+            {nullptr, nullptr},
+        },
+        "disabled",
     },
     {
         "ymir_audio_step_granularity",
@@ -483,6 +520,10 @@ static void apply_core_options() {
     // --- System ---
     config.system.emulateSH2Cache = (get_variable("ymir_sh2_cache") == "enabled");
 
+    auto sh2_clock = get_variable("ymir_sh2_clock");
+    if (!sh2_clock.empty())
+        core.saturn->SetSH2ClockFactor(RatioU32::FromPercentage(static_cast<uint32_t>(std::stoi(sh2_clock))));
+
     auto rtc_mode = get_variable("ymir_rtc_mode");
     if (rtc_mode == "host")
         config.rtc.mode = ymir::core::config::rtc::Mode::Host;
@@ -502,6 +543,8 @@ static void apply_core_options() {
     });
 
     // --- Audio ---
+    config.audio.threadedSCSP = (get_variable("ymir_threaded_scsp") == "enabled");
+
     auto interp = get_variable("ymir_audio_interpolation");
     if (interp == "nearest_neighbor")
         config.audio.interpolation = ymir::core::config::audio::SampleInterpolationMode::NearestNeighbor;
