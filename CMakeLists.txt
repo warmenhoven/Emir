@@ -24,10 +24,15 @@ option(Ymir_ENABLE_IPO "Enable IPO / LTO for Ymir" ON)
 option(Ymir_ENABLE_DEVLOG "Enable development logs" ${Ymir_DEV_BUILD})
 option(Ymir_ENABLE_DEV_ASSERTIONS "Enable development-time assertions" OFF)
 option(Ymir_ENABLE_IMGUI_DEMO "Enable ImGui demo window" ON)
-option(Ymir_ENABLE_SDL3_APP "Compile the SDL3 frontend" "${is_top_level}")
 option(Ymir_ENABLE_UPDATE_CHECKS "Enable update checks" ON)
 option(Ymir_ENABLE_LIBRETRO "Compile the libretro core" OFF)
 cmake_dependent_option(Ymir_LIBRARY_ONLY "Compile ymir-core only" OFF is_top_level ON)
+
+## The libretro core links only against ymir-core, so reuse the library-only
+## build path to exclude the apps, tests and app-only vendored dependencies.
+if (Ymir_ENABLE_LIBRETRO)
+    set(Ymir_LIBRARY_ONLY ON)
+endif ()
 
 ## Feature flags
 ## If ON, all feature flags will be enabled by default
@@ -120,10 +125,11 @@ else ()
     message(STATUS "IPO / LTO not supported: ${IPO_ERROR}")
 endif ()
 
-## Provide dependencies for libretro builds (no vcpkg)
+## The libretro core is a shared library linking the static ymir-core, so build
+## everything with position-independent code. The library-only build path (forced
+## on above) already provides ymir-core's dependencies without vcpkg.
 if (Ymir_ENABLE_LIBRETRO)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-    include(cmake/LibretroDeps.cmake)
 endif ()
 
 ## Include third-party libraries
@@ -147,7 +153,12 @@ if (NOT Ymir_LIBRARY_ONLY)
     endif ()
 
     ## Configure Visual Studio solution
-    if (MSVC AND Ymir_ENABLE_SDL3_APP)
+    if (MSVC)
         set_property(DIRECTORY "${CMAKE_CURRENT_LIST_DIR}" PROPERTY VS_STARTUP_PROJECT ymir-sdl3)
     endif ()
+endif ()
+
+if (Ymir_ENABLE_LIBRETRO)
+    ## Build the libretro core against ymir-core (see the library-only path above)
+    add_subdirectory(apps/ymir-libretro)
 endif ()

@@ -12,14 +12,11 @@
     # CORE_ARCH_ARGS is filled in per-arch (e.g. AVX2 on x86_64). Default empty
     # so non-x86_64 jobs don't pick up x86-only flags.
     CORE_ARCH_ARGS: ""
+    # Ymir_ENABLE_LIBRETRO forces Ymir_LIBRARY_ONLY, which already excludes the
+    # apps, tests and app-only vendored deps, so no further -DYmir_ENABLE_*=OFF
+    # flags are needed here.
     CORE_ARGS: >-
       -DYmir_ENABLE_LIBRETRO=ON
-      -DYmir_ENABLE_SDL3_APP=OFF
-      -DYmir_ENABLE_SANDBOX=OFF
-      -DYmir_ENABLE_YMDASM=OFF
-      -DYmir_ENABLE_TESTS=OFF
-      -DYmir_ENABLE_YMIR_HEADLESS=OFF
-      -DYmir_ENABLE_YMIR_DBG=OFF
       -DYmir_DEV_BUILD=OFF
       $CORE_ARCH_ARGS
     GIT_SUBMODULE_STRATEGY: recursive
