@@ -17,6 +17,7 @@
 #include <ymir/sys/backup_ram.hpp>
 #include <ymir/sys/clocks.hpp>
 #include <ymir/sys/memory_defs.hpp>
+#include <ymir/version.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1147,7 +1148,7 @@ RETRO_API unsigned retro_api_version(void) {
 RETRO_API void retro_get_system_info(struct retro_system_info *info) {
     std::memset(info, 0, sizeof(*info));
     info->library_name = "Emir";
-    info->library_version = "0.3.0";
+    info->library_version = ymir::version::string;
     info->valid_extensions = "cue|chd|mds|ccd|iso|m3u";
     info->need_fullpath = true;
     info->block_extract = false;
