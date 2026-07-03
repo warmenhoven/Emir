@@ -1146,7 +1146,7 @@ RETRO_API unsigned retro_api_version(void) {
 
 RETRO_API void retro_get_system_info(struct retro_system_info *info) {
     std::memset(info, 0, sizeof(*info));
-    info->library_name = "Ymir";
+    info->library_name = "Emir";
     info->library_version = "0.3.0";
     info->valid_extensions = "cue|chd|mds|ccd|iso|m3u";
     info->need_fullpath = true;
