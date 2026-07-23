@@ -18,12 +18,6 @@ struct SaturnHeader {
         Invalidate();
     }
 
-    SaturnHeader(const SaturnHeader &) = delete;
-    SaturnHeader(SaturnHeader &&) = default;
-
-    SaturnHeader &operator=(const SaturnHeader &) = delete;
-    SaturnHeader &operator=(SaturnHeader &&) = default;
-
     void Swap(SaturnHeader &&header) {
         hwID.swap(header.hwID);
         makerID.swap(header.makerID);
@@ -103,7 +97,7 @@ struct SaturnHeader {
     uint32 firstReadAddress;          // [F0-F3] 1st read address
     uint32 firstReadSize;             // [F4-F7] 1st read size
 
-    bool ReadFrom(std::span<uint8, 256> data);
+    bool ReadFrom(std::span<uint8> data);
 };
 
 } // namespace ymir::media

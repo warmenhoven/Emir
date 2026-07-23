@@ -20,7 +20,6 @@ See @ref index for instructions on how to use the emulator.
 #include "system.hpp"
 
 #include <ymir/hw/cart/cart.hpp>
-#include <ymir/hw/cart/cart_slot.hpp>
 #include <ymir/hw/cdblock/cd_drive.hpp>
 #include <ymir/hw/cdblock/cdblock.hpp>
 #include <ymir/hw/cdblock/ygr.hpp>
@@ -31,9 +30,7 @@ See @ref index for instructions on how to use the emulator.
 #include <ymir/hw/smpc/smpc.hpp>
 #include <ymir/hw/vdp/vdp.hpp>
 
-#include <ymir/media/disc.hpp>
-
-#include <memory>
+#include <ymir/media/cd_interface.hpp>
 
 namespace ymir {
 
@@ -102,13 +99,15 @@ struct Saturn {
     /// @return the hash code of the currently loaded IPL ROM image
     [[nodiscard]] XXH128Hash GetIPLHash() const noexcept;
 
-    /// @brief Retrieves the currently loaded disc.
-    /// @return a read-only reference to the currently loaded disc
-    [[nodiscard]] const media::Disc &GetDisc() const noexcept;
-
     /// @brief Retrieves the game disc image hash code.
     /// @return the hash code of the currently loaded game disc image
     [[nodiscard]] XXH128Hash GetDiscHash() const noexcept;
+
+    /// @brief Retrieves the CD interface currently in use.
+    /// @return the current CD interface
+    [[nodiscard]] const media::CDInterface &GetCDInterface() const noexcept {
+        return m_cdif;
+    }
 
     /// @brief Inserts a cartridge into the cartridge slot.
     /// @tparam T the cartridge type, which must be a specialization of `ymir::cart::BaseCartridge`
@@ -138,6 +137,11 @@ struct Saturn {
     /// @param[in] disc the disc to be moved
     void LoadDisc(media::Disc &&disc);
 
+    /// @brief Connects to a host CD drive.
+    /// @param path[in] the path to the host CD drive
+    /// @return `true` if the device was opened successfully, `false` if there was an error
+    bool OpenHostCDDrive(std::string path);
+
     /// @brief Ejects the disc from the CD drive.
     void EjectDisc();
 
@@ -154,10 +158,9 @@ struct Saturn {
     /// @brief Switches the SMPC area code to the preferred region.
     void UsePreferredRegion();
 
-    /// @brief Switches the SMPC area code to the region that best matches the given area codes, respecting the
-    /// preferred region order defined in the configuration.
-    /// @param[in] areaCodes the area code bitmask to base the selection on
-    void AutodetectRegion(media::AreaCode areaCodes);
+    /// @brief Switches the SMPC area code to the region that best matches the area codes present in the currently
+    /// loaded disc, respecting the preferred region order defined in the configuration.
+    void AutodetectRegion();
 
     /// @brief Enables or disables debug tracing on hot paths.
     ///
@@ -436,10 +439,10 @@ public:
     vdp::VDP VDP;             ///< VDP1 and VDP2
     smpc::SMPC SMPC;          ///< SMPC and input devices
     scsp::SCSP SCSP;          ///< SCSP and its DSP, and MC68EC000 CPU
-    cdblock::CDBlock CDBlock; ///< CD block and media
+    cdblock::CDBlock CDBlock; ///< HLE CD block
 
     // LLE CD block components
-    // TODO: move them to cdblock::CDBlock
+    // TODO: move to cdblock::CDBlockLLE and rename cdblock::CDBlock to CDBlockHLE
     sh1::SH1 SH1;                              ///< CD block SH-1
     sys::SH1Bus SH1Bus;                        ///< CD block SH-1 bus
     cdblock::CDDrive CDDrive;                  ///< CD block drive
@@ -451,13 +454,16 @@ private:
     // Internal state
 
     // TODO: use an abstraction to support reading from real drives as well as disc images
-    media::Disc m_disc;         ///< Currently loaded game disc
+    media::CDInterface m_cdif;  ///< CD interface containing currently loaded disc
     media::fs::Filesystem m_fs; ///< Filesystem contained in the disc
 
     uint64 m_msh2SpilloverCycles; ///< Master SH-2 execution cycles spilled over between executions
     uint64 m_ssh2SpilloverCycles; ///< Slave SH-2 execution cycles spilled over between executions
     uint64 m_sh1SpilloverCycles;  ///< SH-1 execution cycles spilled over between executions
     uint64 m_sh1FracCycles;       ///< SH-1 fractional execution cycles spilled over by clock ratio calculation
+
+    /// @brief Invoked when the CD interface detects a change in media.
+    void OnMediaChanged();
 
     // -------------------------------------------------------------------------
     // System operations (SMPC) - smpc::ISMPCOperations implementation

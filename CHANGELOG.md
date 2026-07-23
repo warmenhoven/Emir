@@ -4,17 +4,20 @@
 
 In development.
 
-Uses save state file version 13.
+Introduces save state file version 14.
 
 ### New features and improvements
 
 - App: Added option to unpause emulator when loading discs. Enabled by default, which changes established behavior.
+- App: Clarified IPL ROM meaning in the Welcome window and IPL settings tab -- it refers to the BIOS.
 - App: Display volume indicator on the top-right corner of the window for a few seconds after adjustments.
     - `smpc-us_eu.bin`: USA, Europe -- SMPC area codes 4, 5, A, C, D
     - `smpc-jp.bin`: Japan -- SMPC area code 1
     - `smpc-asia.bin`: Korea, Taiwan -- SMPC area codes 2, 6
     - `smpc-other.bin`: Other (invalid) SMPC area codes
     - The old `smpc.bin` will be automatically migrated to these files as you use IPL ROMs for each region.
+- App: Shrink embedded M PLUS U font files by removing unused glyphs, reducing binary size. (#915; @4re)
+- Debugger: Added RBG0 and RBG1 line color single stack views to the VDP2 debug overlay.
 - Input: Added option to constrain mouse cursor to window in system cursor mode.
 - Input: Convert 3D Control Pad analog stick to D-Pad inputs when in digital mode.
 - Input: Graduate Virtua Gun to stable feature.
@@ -46,16 +49,18 @@ Uses save state file version 13.
 - Input: Make 3D Control Pad peripheral report in digital mode match the Standard Pad. Fixes broken inputs in digital mode in the following games:
     - Bug Too! (#622)
     - Black/Matrix (#861)
+- Media: Don't read the Path Table past the size specified in the Volume Descriptor. Fixes CD Block HLE not able to read disc images made with some lazy patches that don't properly clean up the Path Table. (#912)
 - Media (CUE): Don't accumulate pre/postgaps multiple times per track. Fixes some audio track offset issues for single-BIN dumps. (#146)
 - Media (CUE): Use CUE sheet timestamps to compute track lengths. Fixes some audio track offset issues for single-BIN dumps. (#146)
 - SMPC: Update peripheral PDR1/2 registers when reading and when updating EXLE. Fixes many cases of games not recognizing Virtua Gun inputs or missing shots. (#787)
 - VDP1: Don't sync VDP1 FBRAM on debug reads. Fixes deadlock when viewing the framebuffer area in a memory viewer window.
+- VDP1: Ignore 8-bit setting and force-align to 16-bit addresses when writing pixels with MSB enabled. Fixes deselected menu options being fully painted in black in Derby Analyst. (#587)
 - VDP1: Textured sprites with CMDSIZE.H=0 never fetch additional texels. Fixes glitched graphics in the scorecard of the shooting range in Policenauts.
+- VDP2: Avoid unintentional side effects on VDP2 EXTEN register when saving states. Fixes camera angles in Digital Dance Mix Vol. 1 - Namie Amuro.
 - VDP2: Fix coordinate latching on external latches. Fixes various Virtua Gun shot offset errors. (#787)
 - VDP2: Fix off-screen coordinate latching. Fixes some Virtua Gun reload detection issues. (#787)
 - VDP2: Restrict color calculations in certain video modes. Fixes Sound Test screen text blending in with the background in Dark Savior.
     - In high resolution modes with color RAM modes other than 0, color calculations can only be applied on top of RGB layers, but not palette layers.
-
 
 
 ## Version 0.3.3

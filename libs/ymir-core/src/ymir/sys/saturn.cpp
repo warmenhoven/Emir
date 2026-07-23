@@ -55,9 +55,9 @@ Saturn::Saturn()
     , VDP(m_scheduler, configuration)
     , SMPC(m_scheduler, smpcOps, configuration.rtc)
     , SCSP(m_scheduler, configuration.audio)
-    , CDBlock(m_scheduler, m_disc, m_fs, configuration.cdblock)
+    , CDBlock(m_scheduler, m_cdif, m_fs, configuration.cdblock)
     , SH1(SH1Bus)
-    , CDDrive(m_scheduler, m_disc, m_fs, configuration.cdblock) {
+    , CDDrive(m_scheduler, m_cdif, m_fs, configuration.cdblock) {
 
     mainBus.MapNormal(
         0x000'0000, 0x7FF'FFFF, nullptr,
@@ -123,6 +123,7 @@ Saturn::Saturn()
     YGR.MapCallbacks(SH1.CbAssertIRQ6, SH1.CbAssertIRQ7, SH1.CbSetDREQ0n, SH1.CbSetDREQ1n, SH1.CbStepDMAC1,
                      SCU.CbTriggerExtIntr0);
     CDBlock.MapCallbacks(SCU.CbTriggerExtIntr0, SCSP.CbCDDASector);
+    m_cdif.MapCallbacks(util::MakeClassMemberRequiredCallback<&Saturn::OnMediaChanged>(this));
 
     m_system.AddClockSpeedChangeCallback(SCSP.CbClockSpeedChange);
     m_system.AddClockSpeedChangeCallback(SMPC.CbClockSpeedChange);
@@ -232,50 +233,29 @@ XXH128Hash Saturn::GetIPLHash() const noexcept {
     return mem.GetIPLHash();
 }
 
-const media::Disc &Saturn::GetDisc() const noexcept {
-    return m_disc;
-}
-
 XXH128Hash Saturn::GetDiscHash() const noexcept {
     return m_fs.GetHash();
 }
 
 void Saturn::LoadDisc(media::Disc &&disc) {
+    // Load disc into CD interface
+    m_cdif.LoadDisc(std::move(disc));
+
     // Configure area code based on compatible area codes from the disc
-    AutodetectRegion(disc.header.compatAreaCode);
-    m_disc.Swap(std::move(disc));
+    AutodetectRegion();
+}
 
-    // Try building filesystem structure
-    if (m_fs.Read(m_disc)) {
-        devlog::info<grp::media>("Filesystem built successfully");
-    } else {
-        devlog::warn<grp::media>("Failed to build filesystem");
+bool Saturn::OpenHostCDDrive(std::string path) {
+    if (m_cdif.OpenHostDevice(path)) {
+        AutodetectRegion();
+        return true;
     }
-
-    // Notify CD drive of disc change
-    if (m_cdblockLLE) {
-        CDDrive.OnDiscLoaded();
-    } else {
-        CDBlock.OnDiscLoaded();
-    }
-
-    // Apply game-specific settings if needed
-    const db::GameInfo *info = db::GetGameInfo(m_disc.header.productNumber, m_fs.GetHash());
-    auto hasFlag = [&](db::GameInfo::Flags flag) { return info && BitmaskEnum(info->flags).AnyOf(flag); };
-    ConfigureAccessCycles(hasFlag(db::GameInfo::Flags::FastBusTimings));
-    ForceSH2CacheEmulation(hasFlag(db::GameInfo::Flags::ForceSH2Cache));
-    SCSP.SetCPUClockShift(hasFlag(db::GameInfo::Flags::FastMC68EC000) ? 1 : 0);
-    VDP.SetStallVDP1OnVRAMWrites(hasFlag(db::GameInfo::Flags::StallVDP1OnVRAMWrites));
-    VDP.SetSlowVDP1(hasFlag(db::GameInfo::Flags::SlowVDP1));
-    VDP.SetSkipEmptyVDP1CommandTable(hasFlag(db::GameInfo::Flags::SkipEmptyVDP1Table));
-    VDP.vdp2AccessPatternsConfig.relaxedBitmapCPAccessChecks =
-        hasFlag(db::GameInfo::Flags::RelaxedVDP2BitmapCPAccessChecks);
-    VDP.SetVirtuaGunJitter(hasFlag(db::GameInfo::Flags::VirtuaGunJitter));
+    return false;
 }
 
 void Saturn::EjectDisc() {
-    if (!m_disc.sessions.empty()) {
-        m_disc = {};
+    if (m_cdif.HasDisc()) {
+        m_cdif.Eject();
         m_fs.Clear();
         if (m_cdblockLLE) {
             CDDrive.OnDiscEjected();
@@ -325,10 +305,18 @@ void Saturn::UsePreferredRegion() {
     }
 }
 
-void Saturn::AutodetectRegion(media::AreaCode areaCodes) {
+void Saturn::AutodetectRegion() {
     if (!configuration.system.autodetectRegion) {
         return;
     }
+    if (!m_cdif.HasDisc()) {
+        return;
+    }
+    const media::SaturnHeader &header = m_cdif.GetDiscHeader();
+    if (!header.IsValid()) {
+        return;
+    }
+    const media::AreaCode areaCodes = header.compatAreaCode;
     if (areaCodes == media::AreaCode::None) {
         return;
     }
@@ -393,6 +381,7 @@ void Saturn::SaveState(savestate::SaveState &state) const {
         CDBlock.SaveState(state.cdblock);
     }
     state.discHash = GetDiscHash();
+    m_cdif.SaveState(state.cdif);
 }
 
 bool Saturn::LoadState(const savestate::SaveState &state, bool skipROMChecks) {
@@ -423,6 +412,9 @@ bool Saturn::LoadState(const savestate::SaveState &state, bool skipROMChecks) {
     if (!SCSP.ValidateState(state.scsp)) {
         return false;
     }
+    if (!m_cdif.ValidateState(state.cdif)) {
+        return false;
+    }
 
     if (state.cdblockLLE) {
         if (!SH1.ValidateState(state.sh1, skipROMChecks)) {
@@ -444,7 +436,7 @@ bool Saturn::LoadState(const savestate::SaveState &state, bool skipROMChecks) {
     }
 
     // Changing this option causes a hard reset, so do it before loading the state
-    SetCDBlockLLE(state.cdblockLLE);
+    configuration.cdblock.useLLE = state.cdblockLLE;
 
     m_scheduler.LoadState(state.scheduler);
     m_system.LoadState(state.system);
@@ -458,6 +450,7 @@ bool Saturn::LoadState(const savestate::SaveState &state, bool skipROMChecks) {
     SMPC.LoadState(state.smpc);
     VDP.LoadState(state.vdp);
     SCSP.LoadState(state.scsp);
+    m_cdif.LoadState(state.cdif);
     if (m_cdblockLLE) {
         SH1.LoadState(state.sh1);
         YGR.LoadState(state.ygr);
@@ -836,6 +829,35 @@ void Saturn::SetCDBlockLLE(bool enabled) {
         UpdateFunctionPointers();
         Reset(true);
     }
+}
+
+// -----------------------------------------------------------------------------
+// media::CDInterfaceCallbacks implementation
+
+void Saturn::OnMediaChanged() {
+    // Copy file system structure from disc
+    m_fs = m_cdif.GetFilesystem();
+
+    // Notify CD drive of disc change
+    if (m_cdblockLLE) {
+        CDDrive.OnDiscLoaded();
+    } else {
+        CDBlock.OnDiscLoaded();
+    }
+
+    // Apply game-specific settings if needed
+    const media::SaturnHeader &discHeader = m_cdif.GetDiscHeader();
+    const db::GameInfo *info = db::GetGameInfo(discHeader.productNumber, m_fs.GetHash());
+    auto hasFlag = [&](db::GameInfo::Flags flag) { return info && BitmaskEnum(info->flags).AnyOf(flag); };
+    ConfigureAccessCycles(hasFlag(db::GameInfo::Flags::FastBusTimings));
+    ForceSH2CacheEmulation(hasFlag(db::GameInfo::Flags::ForceSH2Cache));
+    SCSP.SetCPUClockShift(hasFlag(db::GameInfo::Flags::FastMC68EC000) ? 1 : 0);
+    VDP.SetStallVDP1OnVRAMWrites(hasFlag(db::GameInfo::Flags::StallVDP1OnVRAMWrites));
+    VDP.SetSlowVDP1(hasFlag(db::GameInfo::Flags::SlowVDP1));
+    VDP.SetSkipEmptyVDP1CommandTable(hasFlag(db::GameInfo::Flags::SkipEmptyVDP1Table));
+    VDP.vdp2AccessPatternsConfig.relaxedBitmapCPAccessChecks =
+        hasFlag(db::GameInfo::Flags::RelaxedVDP2BitmapCPAccessChecks);
+    VDP.SetVirtuaGunJitter(hasFlag(db::GameInfo::Flags::VirtuaGunJitter));
 }
 
 // -----------------------------------------------------------------------------

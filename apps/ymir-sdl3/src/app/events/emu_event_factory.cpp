@@ -13,6 +13,8 @@
 
 #include <util/file_loader.hpp>
 
+#include <fmt/format.h>
+
 #include <fstream>
 #include <memory>
 
@@ -235,7 +237,7 @@ EmuEvent DumpMemRegion(const ui::mem_view::MemoryViewerState &memView) {
         };
 
         // get game product num, setup path
-        const auto &productNumber = ctx.saturn.GetDisc().header.productNumber;
+        const auto &productNumber = ctx.saturn.GetDiscHeader().productNumber;
         const auto outPath = dumpPath / fmt::format("{}_{}_{:08X}_{}B.bin", productNumber, sanitize(region->name),
                                                     region->baseAddress, size);
 
@@ -723,6 +725,12 @@ EmuEvent LoadState(uint32 slotIndex) {
                 ctx.saturn.instance->LoadCDBlockROM(std::span<uint8, sh1::kROMSize>(*cdbROMData));
                 ctx.cdbRomPath = candidateCDBROMPath;
                 ctx.DisplayMessage(fmt::format("CD block ROM used by save state loaded from {}", ctx.cdbRomPath));
+            }
+            auto &settings = ctx.serviceLocator.GetRequired<Settings>();
+            if (settings.cdblock.useLLE != ctx.saturn.instance->configuration.cdblock.useLLE) {
+                settings.cdblock.useLLE = ctx.saturn.instance->configuration.cdblock.useLLE;
+                ctx.DisplayMessage(fmt::format("CD block emulation mode switched to {}",
+                                               (settings.cdblock.useLLE ? "low-level" : "high-level")));
             }
 
             // Update the undo load state

@@ -23,9 +23,9 @@ namespace settings::system {
         const db::GameInfo *gameInfo = nullptr;
         {
             std::unique_lock lock{ctx.locks.disc};
-            const auto &disc = ctx.saturn.GetDisc();
-            if (!disc.sessions.empty()) {
-                gameInfo = db::GetGameInfo(disc.header.productNumber, ctx.saturn.GetDiscHash());
+            const auto &discHeader = ctx.saturn.GetDiscHeader();
+            if (discHeader.IsValid()) {
+                gameInfo = db::GetGameInfo(discHeader.productNumber, ctx.saturn.GetDiscHash());
             }
         }
         const bool forced =
@@ -397,8 +397,6 @@ namespace settings::cdblock {
         auto &settings = ctx.serviceLocator.GetRequired<Settings>();
         auto &cdblockSettings = settings.cdblock;
 
-        bool useLLE = cdblockSettings.useLLE;
-
         bool hasROMs;
         {
             std::unique_lock lock{ctx.locks.romManager};
@@ -407,8 +405,8 @@ namespace settings::cdblock {
         if (!hasROMs) {
             ImGui::BeginDisabled();
         }
-        if (settings.MakeDirty(ImGui::Checkbox("Use low level CD Block emulation", &useLLE))) {
-            cdblockSettings.useLLE = useLLE;
+        if (settings.MakeDirty(ImGui::Checkbox("Use low level CD Block emulation", &cdblockSettings.useLLE))) {
+            ctx.EnqueueEvent(events::emu::SetCDBlockLLE(cdblockSettings.useLLE));
         }
         widgets::ExplanationTooltip("Choose between high or low level CD Block emulation.\n"
                                     "High level emulation is faster, but has lower compatibility.\n"

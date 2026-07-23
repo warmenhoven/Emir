@@ -1,5 +1,7 @@
 #include <ymir/media/filesystem.hpp>
 
+#include <ymir/media/cd_device/cd_device_base.hpp>
+
 #include <ymir/util/dev_assert.hpp>
 #include <ymir/util/scope_guard.hpp>
 
@@ -23,35 +25,29 @@ void Filesystem::Clear() {
     m_fadToFiles.clear();
 }
 
-bool Filesystem::Read(const Disc &disc) {
+bool Filesystem::Read(IFilesystemCDReader &cdReader) {
     Clear();
     util::ScopeGuard sgInvalidate = [&] { Clear(); };
 
     // TODO: test multisession discs
 
     // Bail out if there are no sessions in the disc
-    if (disc.sessions.empty()) {
+    if (!cdReader.HasDisc()) {
         return false;
     }
 
-    // The Saturn uses the volume descriptor from the final session on the disc
-    const Session &session = disc.sessions.back();
-
-    // Check that we have a valid Saturn header
-    if (!disc.header.IsValid()) {
-        return false;
-    }
+    const TOC &toc = cdReader.GetTOC();
 
     // The volume descriptor is at frame address 166 (00:02:16) from the start of the session
-    const uint32 absVolumeDescAddress = session.startFrameAddress + 166;
+    const uint32 absVolumeDescAddress = 166;
 
     // Find the track containing the frame address
-    const Track *pTrack = session.FindTrack(absVolumeDescAddress);
+    const TrackInfo *pTrack = toc.GetTrackInfoForFAD(absVolumeDescAddress);
     if (pTrack == nullptr) {
         // Could not find track with the specified frame address
         return false;
     }
-    const Track &track = *pTrack;
+    const TrackInfo &track = *pTrack;
     if (track.controlADR != 0x41) {
         // Not a data track
         return false;
@@ -67,7 +63,7 @@ bool Filesystem::Read(const Disc &disc) {
     XXH3_128bits_reset(xxh3State);
     for (uint32 sectorIndex = 150; sectorIndex < 166; sectorIndex++) {
         // Fail if we can't read the sector
-        if (!track.ReadSectorUserData(sectorIndex, buf)) {
+        if (!cdReader.ReadSectorUserData(sectorIndex, buf)) {
             YMIR_DEV_CHECK();
             return false;
         }
@@ -78,7 +74,7 @@ bool Filesystem::Read(const Disc &disc) {
     const uint32 volumeDescAddress = absVolumeDescAddress;
     for (uint32 sectorIndex = volumeDescAddress;; sectorIndex++) {
         // Fail if we can't read the sector
-        if (!track.ReadSectorUserData(sectorIndex, buf)) {
+        if (!cdReader.ReadSectorUserData(sectorIndex, buf)) {
             YMIR_DEV_CHECK();
             return false;
         }
@@ -116,7 +112,7 @@ bool Filesystem::Read(const Disc &disc) {
             }
 
             // Try reading the path table records from the disc; fail on error
-            if (!ReadPathTableRecords(track, volDesc)) {
+            if (!ReadPathTableRecords(cdReader, volDesc)) {
                 YMIR_DEV_CHECK();
                 return false;
             }
@@ -153,6 +149,7 @@ std::string Filesystem::GetPathAtFrameAddress(uint32 fad) const {
 }
 
 std::optional<Filesystem::FileIndex> Filesystem::LookupFileIndexAtFrameAddress(uint32 fad) const {
+    fad -= 150;
     auto it = m_fadToFiles.upper_bound(fad);
     if (it == m_fadToFiles.end()) {
         return std::nullopt;
@@ -201,7 +198,7 @@ std::string Filesystem::BuildPath(uint16 directoryIndex) const {
     return out;
 }
 
-bool Filesystem::ReadPathTableRecords(const Track &track, const VolumeDescriptor &volDesc) {
+bool Filesystem::ReadPathTableRecords(IFilesystemCDReader &cdReader, const VolumeDescriptor &volDesc) {
     // Fail if there is no LSB path table
     // TODO: support MSB path table
     if (volDesc.pathTableLPos == 0) {
@@ -219,12 +216,13 @@ bool Filesystem::ReadPathTableRecords(const Track &track, const VolumeDescriptor
     // Read all path table records
     const uint32 pathSectorCount = (volDesc.pathTableSize + 2047) / 2048;
     for (uint32 pathSectorIndex = 0; pathSectorIndex < pathSectorCount; pathSectorIndex++) {
-        if (!track.ReadSectorUserData(volDesc.pathTableLPos + pathSectorIndex + 150, pathTableBuf)) {
+        if (!cdReader.ReadSectorUserData(volDesc.pathTableLPos + pathSectorIndex + 150, pathTableBuf)) {
             return false;
         }
 
         PathTableRecord pathTableRecord{};
-        for (uint32 pathRecIndex = 0;; pathRecIndex += pathTableRecord.recordSize) {
+        for (uint32 pathRecIndex = 0; pathRecIndex < volDesc.pathTableSize;
+             pathRecIndex += pathTableRecord.recordSize) {
             // Try reading the path table record
             const std::span<uint8> pathRecBufData{pathTableBuf.begin() + pathRecIndex, pathTableBuf.end()};
 
@@ -262,7 +260,7 @@ bool Filesystem::ReadPathTableRecords(const Track &track, const VolumeDescriptor
 
             // Try reading the directory record
             DirectoryRecord dirRecord{};
-            if (!track.ReadSectorUserData(pathTableRecord.extentPos + 150, dirRecBuf)) {
+            if (!cdReader.ReadSectorUserData(pathTableRecord.extentPos + 150, dirRecBuf)) {
                 return false;
             }
             if (!dirRecord.Read(dirRecBuf)) {
@@ -286,7 +284,7 @@ bool Filesystem::ReadPathTableRecords(const Track &track, const VolumeDescriptor
             // Read directory contents
             const uint32 dirSectorCount = (dirRecord.dataSize + 2047) / 2048;
             for (uint32 dirSectorIndex = 0; dirSectorIndex < dirSectorCount; dirSectorIndex++) {
-                if (!track.ReadSectorUserData(dirRecord.extentPos + dirSectorIndex + 150, dirRecBuf)) {
+                if (!cdReader.ReadSectorUserData(dirRecord.extentPos + dirSectorIndex + 150, dirRecBuf)) {
                     return false;
                 }
 

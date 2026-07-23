@@ -83,6 +83,8 @@
 
 #include <ymir/sys/saturn.hpp>
 
+#include <ymir/media/host_cd.hpp>
+
 #include <ymir/util/lsn_denormals.hpp>
 #include <ymir/util/process.hpp>
 #include <ymir/util/scope_guard.hpp>
@@ -438,6 +440,10 @@ int App::Run(const CommandLineOptions &options) {
     m_context.EnqueueEvent(events::emu::LoadInternalBackupMemory());
     EnableRewindBuffer(settings.general.enableRewindBuffer);
     util::BoostCurrentProcessPriority(settings.general.boostProcessPriority);
+
+#if Ymir_FF_HOST_CD_DRIVES
+    ymir::media::host::EnumerateHostCDDrives();
+#endif
 
     // Load recent discs list.
     // Must be done before LoadDiscImage because it saves the recent list to the file.
@@ -1864,11 +1870,9 @@ void App::RunEmulator() {
             if (settings.gui.showGameNameOnTitleBar) {
                 fmt::format_to(bufWriter, " - ");
                 std::unique_lock lock{m_context.locks.disc};
-                const media::Disc &disc = m_context.saturn.GetDisc();
-                const media::SaturnHeader &header = disc.header;
-                if (disc.sessions.empty()) {
-                    fmt::format_to(bufWriter, "No disc inserted");
-                } else {
+                const media::CDInterface &cdif = m_context.saturn.GetCDInterface();
+                if (cdif.HasDisc()) {
+                    const media::SaturnHeader &header = cdif.GetDiscHeader();
                     if (!header.productNumber.empty()) {
                         fmt::format_to(bufWriter, "[{}] ", header.productNumber);
                     }
@@ -1878,6 +1882,8 @@ void App::RunEmulator() {
                     } else {
                         fmt::format_to(bufWriter, "{}", util::TranslateSaturnString(header.gameTitle));
                     }
+                } else {
+                    fmt::format_to(bufWriter, "No disc inserted");
                 }
             }
 
@@ -2045,6 +2051,31 @@ void App::RunEmulator() {
                         }
                         ImGui::EndMenu();
                     }
+#if Ymir_FF_HOST_CD_DRIVES
+                    if (ImGui::BeginMenu("Load from drive")) {
+                        for (const media::host::HostDriveInfo &info : media::host::GetEnumeratedHostCDDrives()) {
+                            const std::string drivePath = info.GetDisplayPath();
+                            const char *stateStr;
+                            switch (info.driveState) {
+                            default: [[fallthrough]];
+                            case media::DriveState::Unknown: stateStr = "Unknown"; break;
+                            case media::DriveState::TrayOpen: stateStr = "Tray open"; break;
+                            case media::DriveState::NoDisc: stateStr = "No disc"; break;
+                            case media::DriveState::MediaPresent: stateStr = "<disc info goes here>"; break;
+                            }
+                            if (ImGui::MenuItem(fmt::format("[{}] {}", drivePath, stateStr).c_str())) {
+                                m_context.EnqueueEvent(events::emu::OpenHostDevice(drivePath));
+                            }
+                        }
+                        ImGui::Separator();
+                        ImGui::PushItemFlag(ImGuiItemFlags_AutoClosePopups, false);
+                        if (ImGui::MenuItem("Reenumerate devices")) {
+                            media::host::EnumerateHostCDDrives();
+                        }
+                        ImGui::PopItemFlag();
+                        ImGui::EndMenu();
+                    }
+#endif
                     if (ImGui::MenuItem("Open/close tray",
                                         input::ToShortcut(inputContext, actions::cd_drive::OpenCloseTray).c_str())) {
                         m_context.EnqueueEvent(events::emu::OpenCloseTray());
@@ -2398,7 +2429,7 @@ void App::RunEmulator() {
                     if (ImGui::MenuItem("System")) {
                         m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::System);
                     }
-                    if (ImGui::MenuItem("IPL")) {
+                    if (ImGui::MenuItem("IPL (BIOS)")) {
                         m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::IPL);
                     }
                     if (ImGui::MenuItem("Input")) {
@@ -3307,7 +3338,7 @@ void App::EmulatorThread() {
                 break;
             case LoadDisc: //
             {
-                auto path = std::get<std::filesystem::path>(evt.value);
+                auto &path = std::get<std::filesystem::path>(evt.value);
                 // LoadDiscImage locks the disc mutex
                 if (m_discService.LoadDiscImage(path, true)) {
                     m_saveStateService.LoadSaveStates();
@@ -3320,11 +3351,30 @@ void App::EmulatorThread() {
                 }
                 break;
             }
+            case OpenHostDevice: //
+            {
+                auto &path = std::get<std::string>(evt.value);
+                // LoadDiscImage locks the disc mutex
+                if (m_context.saturn.instance->OpenHostCDDrive(path)) {
+                    m_saveStateService.LoadSaveStates();
+                    m_saveStateService.LoadDebuggerState();
+                    m_context.state.loadedDiscImagePath.clear();
+                    m_context.state.loadedDiscDrivePath = path;
+                    auto iplLoadResult = m_romService.LoadIPLROM();
+                    if (!iplLoadResult.succeeded) {
+                        m_windowManagerService.OpenSimpleErrorModal(
+                            fmt::format("Could not load IPL ROM: {}", iplLoadResult.errorMessage));
+                    }
+                    m_context.DisplayMessage(fmt::format("Drive {} opened", path));
+                }
+                break;
+            }
             case EjectDisc: //
             {
                 std::unique_lock lock{m_context.locks.disc};
                 m_context.saturn.instance->EjectDisc();
                 m_context.state.loadedDiscImagePath.clear();
+                m_context.state.loadedDiscDrivePath.clear();
                 if (settings.system.internalBackupRAMPerGame) {
                     m_context.EnqueueEvent(events::emu::LoadInternalBackupMemory());
                 }

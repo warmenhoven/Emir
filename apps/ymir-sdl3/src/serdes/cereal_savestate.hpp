@@ -7,6 +7,8 @@
 #include <cereal/types/array.hpp>
 #include <cereal/types/vector.hpp>
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <string>
 
@@ -29,7 +31,8 @@ namespace ymir::savestate {
 //  11 = 0.2.1
 //  12 = 0.3.0
 //  13 = 0.3.2
-inline constexpr uint32 kVersion = 13;
+//  14 = 0.4.0
+inline constexpr uint32 kVersion = 14;
 
 } // namespace ymir::savestate
 
@@ -1230,6 +1233,18 @@ void serialize(Archive &ar, SCSPTimerSaveState &s) {
 }
 
 template <class Archive>
+void serialize(Archive &ar, CDInterfaceSaveState &s, const uint32 version) {
+    // v14:
+    // - Struct added with fields:
+    //   - uint32 seekTarget
+    //   - uint32 seekFAD
+    //   - bool seekDone
+    ar(s.seekTarget);
+    ar(s.seekFAD);
+    ar(s.seekDone);
+}
+
+template <class Archive>
 void serialize(Archive &ar, CDBlockSaveState &s, SaveState &root, const uint32 version) {
     // v13:
     // - New fields
@@ -1700,17 +1715,20 @@ void serialize(Archive &ar, CDDriveSaveState::CDStatusSaveState &s, const uint32
         ar(s.indexNum);
         ar(s.min);
         ar(s.sec);
-        ar(s.frac);
+        ar(s.frame);
         ar(s.zero);
         ar(s.absMin);
         ar(s.absSec);
-        ar(s.absFrac);
+        ar(s.absFrame);
     }
     // No need to initialize on pre-v10 because CD Block LLE did not exist
 }
 
 template <class Archive>
 void serialize(Archive &ar, SaveState &s, const uint32 version) {
+    // v14:
+    // - New fields:
+    //   - cdif = default
     // v10:
     // - Every component now has a 4-byte magic field to check for data alignment
     // - New fields:
@@ -1764,6 +1782,9 @@ void serialize(Archive &ar, SaveState &s, const uint32 version) {
     magic("SMPC"), serialize(ar, s.smpc, version);
     magic("VDP#"), serialize(ar, s.vdp, version);
     magic("SCSP"), serialize(ar, s.scsp, version);
+    if (version >= 14) {
+        magic("CDIf"), serialize(ar, s.cdif, version);
+    }
     magic("CDBl");
     if (version >= 10) {
         magic("cLLE"), ar(s.cdblockLLE);
