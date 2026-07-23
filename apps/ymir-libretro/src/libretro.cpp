@@ -1304,8 +1304,8 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game) {
 
     // Configure cartridge using game database
     {
-        const auto &loaded_disc = core.saturn->GetDisc();
-        auto *game_info = ymir::db::GetGameInfo(loaded_disc.header.productNumber,
+        const auto &loaded_disc = core.saturn->GetCDInterface().GetDiscHeader();
+        auto *game_info = ymir::db::GetGameInfo(loaded_disc.productNumber,
                                                 core.saturn->GetDiscHash());
         configure_cartridge(game_info);
     }
