@@ -471,6 +471,13 @@ if (Ymir_AVX2)
     endif ()
 endif ()
 
+## The NEON paths in the software VDP renderer rely on implicit conversions
+## between vector types of the same size. Clang permits those by default, GCC
+## rejects them unless -flax-vector-conversions is given.
+if ("arm64" IN_LIST ARCHITECTURES AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(ymir-core PRIVATE "-flax-vector-conversions")
+endif ()
+
 ## Enable unity build
 #set_target_properties(ymir-core PROPERTIES UNITY_BUILD ON)
 #set_target_properties(ymir-core PROPERTIES UNITY_BUILD_BATCH_SIZE 0)

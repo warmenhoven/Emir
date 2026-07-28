@@ -88,6 +88,28 @@ libretro-build-linux-x64:
     CXX: /usr/bin/g++-12
     CORE_ARCH_ARGS: "-DYmir_AVX2=ON"
 
+# Linux aarch64
+libretro-build-linux-aarch64:
+  extends:
+    - .libretro-linux-cmake-aarch64
+    - .core-defs
+  variables:
+    CC: /usr/bin/gcc-12
+    CXX: /usr/bin/g++-12
+    CMAKE_BOOTSTRAP_VERSION: "3.31.6"
+  before_script:
+    # Same as the template's before_script, which this job replaces.
+    - export NUMPROC=$(($(nproc)/5))
+    - if builtin type -P ccache &> /dev/null; then ccache -V &> /dev/null; fi
+    # The aarch64 image ships CMake 3.25 (the newest Kitware publishes for
+    # bionic) but Ymir needs 3.28+. Upstream's own aarch64 build only requires
+    # glibc 2.17 and bundles its libstdc++, so it runs on this image as-is.
+    - CMAKE_DIR=cmake-$CMAKE_BOOTSTRAP_VERSION-linux-aarch64
+    - wget -q -O /tmp/cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v$CMAKE_BOOTSTRAP_VERSION/$CMAKE_DIR.tar.gz
+    - tar -xzf /tmp/cmake.tar.gz -C /tmp
+    - export PATH=/tmp/$CMAKE_DIR/bin:$PATH
+    - cmake --version
+
 # MacOS 64-bit
 libretro-build-osx-x64:
   tags:
