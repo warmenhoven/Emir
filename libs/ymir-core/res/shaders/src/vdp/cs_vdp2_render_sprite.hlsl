@@ -12,11 +12,10 @@ cbuffer CommonRenderParamsBuffer : register(b0) {
 }
 
 StructuredBuffer<LayerRenderParams> layerRenderParams : register(t1);
-StructuredBuffer<RotRegs> rotRegs : register(t2);
-ByteAddressBuffer vram : register(t3);
-Buffer<uint4> cramColor : register(t4);
-StructuredBuffer<RotParamBase> rotParamBases : register(t5);
-// TODO: ByteAddressBuffer spriteFB : register(t6);
+ByteAddressBuffer vram : register(t2);
+Buffer<uint4> cramColor : register(t3);
+StructuredBuffer<RotParamBase> rotParamBases : register(t4);
+// TODO: ByteAddressBuffer spriteFB : register(t5);
 
 RWTexture2DArray<uint4> layerOut : register(u0);
 RWTexture2D<uint> spriteAttrsOut : register(u1);
@@ -191,7 +190,6 @@ bool InsideWindows(uint2 pos) {
 
 uint2 CalcRotationSpriteCoordinates(uint2 pos) {
     const RotParamBase base = rotParamBases[pos.y + g_commonParams.startY];
-    const RotRegs regs = rotRegs[0];
 
     const int Xst = SignExtend(Read32(vram, base.tableAddress + 0x00) >> 6, 23);
     const int Yst = SignExtend(Read32(vram, base.tableAddress + 0x04) >> 6, 23);

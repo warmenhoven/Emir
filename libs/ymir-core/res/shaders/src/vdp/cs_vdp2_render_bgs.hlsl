@@ -12,16 +12,15 @@ cbuffer CommonRenderParamsBuffer : register(b0) {
 }
 
 StructuredBuffer<LayerRenderParams> layerRenderParams : register(t1);
-StructuredBuffer<RotRegs> rotRegs : register(t2);
-ByteAddressBuffer vram : register(t3);
-Buffer<uint4> cramColor : register(t4);
-ByteAddressBuffer cramRotCoeff : register(t5);
-StructuredBuffer<RotParamBase> rotParamBases : register(t6);
-Texture2DArray<uint> spriteAttrsIn : register(t7);
+ByteAddressBuffer vram : register(t2);
+Buffer<uint4> cramColor : register(t3);
+ByteAddressBuffer cramRotCoeff : register(t4);
+StructuredBuffer<RotParamBase> rotParamBases : register(t5);
+Texture2DArray<uint> spriteAttrsIn : register(t6);
 
 RWTexture2DArray<uint4> layerOut : register(u0);
 RWTexture2DArray<uint4> rbgLineColorOut : register(u1);
-RWTexture2D<uint4> colorCalcWindowOut : register(u2);
+RWTexture2D<uint> colorCalcWindowOut : register(u2);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Parameters
@@ -36,7 +35,9 @@ static const uint vreso = BitExtract(g_commonParams.displayParams, 13, palMode ?
 static const uint displayResH = kResolutionsH[hreso & 3u]; // 3rd bit intentionally ignored
 static const uint displayResV = exclusiveMonitor ? 480 : kResolutionsV[vreso];
 
-static const bool fbRotEnable = BitTest(g_commonParams.spriteParams, 11);
+static const bool coeffTableCRAM = BitTest(g_commonParams.rotParams, 0);
+static const uint coeffDataAccess = BitExtract(g_commonParams.rotParams, 1, 4);
+static const bool coeffDataPerDot = BitTest(g_commonParams.rotParams, 5);
 
 static const bool deinterlace = BitTest(g_commonParams.enhancements, 0);
 
@@ -326,38 +327,35 @@ RotTable ReadRotTable(const uint address) {
     return table;
 }
 
-bool CanFetchCoefficient(const RotRegs regs, uint coeffAddress) {
-    if (regs.coeffTableCRAM) {
+bool CanFetchCoefficient(const uint coeffDataSize, uint coeffAddress) {
+    if (coeffTableCRAM) {
         return true;
     }
 
-    if (!regs.coeffDataPerDot) {
+    if (!coeffDataPerDot) {
         return true;
     }
 
     const uint offset = coeffAddress >> 10u;
-    const uint address = (offset * 4) >> regs.coeffDataSize;
+    const uint address = (offset * 4) >> coeffDataSize;
     const uint bank = BitExtract(address, 17, 2);
-    return BitTest(regs.coeffDataAccess, bank);
+    return BitTest(coeffDataAccess, bank);
 }
 
-RotCoefficient ReadRotCoefficient(const RotRegs regs, uint coeffAddress) {
+RotCoefficient ReadRotCoefficient(const uint coeffDataSize, const uint coeffDataMode, uint coeffAddress) {
     const uint offset = coeffAddress >> 10;
-    const bool coeffTableCRAM = regs.coeffTableCRAM;
-    const bool coeffDataSize = regs.coeffDataSize;
-    const uint coeffDataMode = regs.coeffDataMode;
 
     RotCoefficient coeff;
 
     // Force coefficient to 0 if it cannot be read in per-dot mode
-    if (!CanFetchCoefficient(regs, coeffAddress)) {
+    if (!CanFetchCoefficient(coeffDataSize, coeffAddress)) {
         coeff.value = 0;
         coeff.lineColorData = 0;
         coeff.transparent = true;
         return coeff;
     }
 
-    if (coeffDataSize) {
+    if (coeffDataSize == 1) {
         // One-word coefficient data
         const uint address = offset * 2;
         const uint data = coeffTableCRAM ? Read16(cramRotCoeff, address) : Read16(vram, address);
@@ -391,7 +389,10 @@ RotCoefficient ReadRotCoefficient(const RotRegs regs, uint coeffAddress) {
 
 uint2 CalcRotationScreenCoords(uint2 pos, uint index) {
     const RotParamBase base = rotParamBases[index * kMaxNormalResV + pos.y + g_commonParams.startY];
-    const RotRegs regs = rotRegs[index];
+    const uint coeffParamsOffset = 6 + index * 5;
+    const bool coeffTableEnable = BitTest(g_commonParams.rotParams, coeffParamsOffset + 0);
+    const uint coeffDataSize = BitExtract(g_commonParams.rotParams, coeffParamsOffset + 1, 1);
+    const uint coeffDataMode = BitExtract(g_commonParams.rotParams, coeffParamsOffset + 2, 2);
 
     const RotTable t = ReadRotTable(base.tableAddress);
 
@@ -436,15 +437,15 @@ uint2 CalcRotationScreenCoords(uint2 pos, uint index) {
     int kx = t.kx;
     int ky = t.ky;
 
-    if (regs.coeffTableEnable) {
+    if (coeffTableEnable) {
         // Current coefficient address (16.10)
-        const uint KAxofs = regs.coeffDataPerDot ? pos.x * t.dKAx : 0;
+        const uint KAxofs = coeffDataPerDot ? pos.x * t.dKAx : 0;
         const uint KA = base.KA + KAxofs;
 
         // Read and apply rotation coefficient
-        const RotCoefficient coeff = ReadRotCoefficient(regs, KA);
+        const RotCoefficient coeff = ReadRotCoefficient(coeffDataSize, coeffDataMode, KA);
 
-        switch (regs.coeffDataMode) {
+        switch (coeffDataMode) {
             case kCoeffDataModeScaleCoeffXY:
                 kx = ky = coeff.value;
                 break;
@@ -479,17 +480,20 @@ uint2 CalcRotationScreenCoords(uint2 pos, uint index) {
 
 RotCoefficient CalcRotationCoefficient(uint2 pos, uint index) {
     const RotParamBase base = rotParamBases[index * kMaxNormalResV + pos.y + g_commonParams.startY];
-    const RotRegs regs = rotRegs[index];
+    const uint coeffParamsOffset = 6 + index * 5;
+    const bool coeffTableEnable = BitTest(g_commonParams.rotParams, coeffParamsOffset + 0);
 
     RotCoefficient coeff;
-    if (regs.coeffTableEnable) {
+    if (coeffTableEnable) {
         // Current coefficient address (16.10)
         const int dKAx = SignExtend(Read32(vram, base.tableAddress + 0x5C) >> 6, 20);
-        const uint KAxofs = regs.coeffDataPerDot ? pos.x * dKAx : 0;
+        const uint KAxofs = coeffDataPerDot ? pos.x * dKAx : 0;
         const uint KA = base.KA + KAxofs;
 
         // Read and apply rotation coefficient
-        coeff = ReadRotCoefficient(regs, KA);
+        const uint coeffDataSize = BitExtract(g_commonParams.rotParams, coeffParamsOffset + 1, 1);
+        const uint coeffDataMode = BitExtract(g_commonParams.rotParams, coeffParamsOffset + 2, 2);
+        coeff = ReadRotCoefficient(coeffDataSize, coeffDataMode, KA);
     } else {
         coeff.value = 0;
         coeff.lineColorData = 0;
@@ -925,7 +929,8 @@ uint SelectRotationParameter(const RBGParams params, uint2 pos) {
         case kRotParamModeB:
             return kRotParamB;
         case kRotParamModeCoeff:{
-                if (!rotRegs[0].coeffTableEnable) {
+                const bool coeffTableEnable = BitTest(g_commonParams.rotParams, 6);
+                if (!coeffTableEnable) {
                     return kRotParamA;
                 }
                 const bool transparent = CalcRotationCoefficient(pos, 0).transparent;
@@ -977,12 +982,12 @@ void StoreRotationLineColorData(uint2 pos, uint2 rotPos, uint index, uint rotSel
     uint cramAddress = Read16(vram, lineColorAddress);
 
     if (useCoeffLineColor) {
-        const RotRegs regs = rotRegs[coeffSel];
-        if (regs.coeffTableEnable && regs.coeffUseLineColorData) {
+        const uint coeffParamsOffset = 6 + coeffSel * 5;
+        const bool coeffTableEnable = BitTest(g_commonParams.rotParams, coeffParamsOffset + 0);
+        const bool coeffUseLineColorData = BitTest(g_commonParams.rotParams, coeffParamsOffset + 4);
+        if (coeffTableEnable && coeffUseLineColorData) {
             const uint baseLineColorData = BitExtract(cramAddress, 7, 4);
-
             const uint lineColorData = CalcRotationCoefficient(rotPos.xy, coeffSel).lineColorData;
-
             cramAddress = (baseLineColorData << 7) | lineColorData;
         }
     }
@@ -1080,7 +1085,8 @@ uint4 DrawRBG(uint2 pos, // pixel coordinates
     const RotCoefficient rotCoeff = CalcRotationCoefficient(pos, rotSel);
 
     // Handle transparent pixels in coefficient table
-    const bool coeffTableEnable = rotRegs[rotSel].coeffTableEnable;
+    const uint coeffParamsOffset = 6 + rotSel * 5;
+    const bool coeffTableEnable = BitTest(g_commonParams.rotParams, coeffParamsOffset + 0);
     if (coeffTableEnable && rotCoeff.transparent) {
         return kTransparentPixel;
     }
@@ -1118,6 +1124,6 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     } else if (id.z <= 5) {
         layerOut[outCoord] = DrawRBG(drawCoord, id.z - 4);
     } else if (id.z == 6) {
-        colorCalcWindowOut[outCoord.xy] = InsideColorCalcWindow(drawCoord);
+        colorCalcWindowOut[outCoord.xy] = InsideColorCalcWindow(drawCoord) ? 1u : 0u;
     }
 }

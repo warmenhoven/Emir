@@ -15,7 +15,7 @@ Texture2DArray<uint4> layerIn : register(t2);
 Buffer<uint> lnclBackIn : register(t3);
 Texture2DArray<uint4> rbgLineColorIn : register(t4);
 Texture2DArray<uint> spriteAttrsIn : register(t5);
-Texture2D<uint4> colorCalcWindowIn : register(t6);
+Texture2D<uint> colorCalcWindowIn : register(t6);
 
 RWTexture2D<float4> compositeOut : register(u0);
 
@@ -115,8 +115,7 @@ bool IsColorCalcEnabled(uint layer, uint2 pos) {
         // Color calculation is disabled for this layer
         return false;
     }
-    if (colorCalcWindowIn[uint2(pos.x, GetLoResInputY(pos.y))].r != 0) {
-        // Inside color calculation window
+    if (colorCalcWindowIn[pos] != 0) {
         return false;
     }
     if (layer == kLayerSprite) {

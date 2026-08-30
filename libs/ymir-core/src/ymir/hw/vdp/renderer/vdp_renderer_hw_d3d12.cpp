@@ -883,6 +883,43 @@ struct Direct3D12VDPRenderer::Impl {
                                               //          3 = select based on window flag
         } layerParams;
 
+        struct {                                 //  bits  use
+            HLSLuint coeffTableCRAM : 1;         //     0  Coefficient table location
+                                                 //          0 = VRAM
+                                                 //          1 = CRAM
+            HLSLuint coeffDataAccess : 4;        //   1-4  Coefficient data access for VRAM banks:
+                                                 //         bit  bank
+                                                 //           0  A0/A
+                                                 //           1  A1
+                                                 //           2  B0/B
+                                                 //           3  B1
+            HLSLuint coeffDataPerDot : 1;        //     5  Per-dot coefficients
+                                                 //          false = per line
+                                                 //          true  = per dot
+                                                 // ------------------------------------------------
+            HLSLuint coeffATableEnable : 1;      //     6  Coefficient table A enabled
+            HLSLuint coeffADataSize : 1;         //     7  Coefficient A data size
+                                                 //          0 = 2 words
+                                                 //          1 = 1 word
+            HLSLuint coeffADataMode : 2;         //   8-9  Coefficient A data mode
+                                                 //          0 = kx/ky
+                                                 //          1 = kx
+                                                 //          2 = ky
+                                                 //          3 = Px
+            HLSLuint coeffAUseLineColorData : 1; //    10  Use coefficient A line color data
+                                                 // ------------------------------------------------
+            HLSLuint coeffBTableEnable : 1;      //    11  Coefficient table B enabled
+            HLSLuint coeffBDataSize : 1;         //    12  Coefficient B data size
+                                                 //          0 = 2 words
+                                                 //          1 = 1 word
+            HLSLuint coeffBDataMode : 2;         // 13-14  Coefficient B data mode
+                                                 //          0 = kx/ky
+                                                 //          1 = kx
+                                                 //          2 = ky
+                                                 //          3 = Px
+            HLSLuint coeffBUseLineColorData : 1; //    15  Use coefficient B line color data
+        } rotParams;
+
         struct {                          //  bits  use
             HLSLuint rotate : 1;          //     0  Sprite layer rotation
                                           //          0 = normal
@@ -980,60 +1017,6 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Sprite window invert
         HLSLbool spriteWindowInvert;
-    };
-
-    /// @brief Rotation parameter registers.
-    struct VDP2RotRegs {
-        // Coefficient table enabled
-        HLSLbool coeffTableEnable;
-
-        // Coefficient table location
-        //   0 = VRAM
-        //   1 = CRAM
-        HLSLbool coeffTableCRAM;
-
-        // Coefficient data size
-        //   0 = 2 words
-        //   1 = 1 word
-        HLSLuint coeffDataSize;
-
-        // Coefficient data mode
-        //   0 = kx/ky
-        //   1 = kx
-        //   2 = ky
-        //   3 = Px
-        HLSLuint coeffDataMode;
-
-        // Coefficient data access for VRAM banks:
-        //  bit  bank
-        //    0  A0/A
-        //    1  A1
-        //    2  B0/B
-        //    3  B1
-        HLSLuint coeffDataAccess;
-
-        // Per-dot coefficients
-        //   false = per line
-        //   true  = per dot
-        HLSLbool coeffDataPerDot;
-
-        // Use coefficient line color data
-        HLSLbool coeffUseLineColorData;
-    };
-
-    /// @brief Per-pixel rotation parameter states.
-    struct VDP2RotParamState {
-        /// @brief Output screen coordinates.
-        HLSLint2 screenCoords;
-
-        /// @brief Output sprite coordinates.
-        HLSLuint2 spriteCoords;
-
-        /// @brief Coefficient data.
-        ///  bits  use
-        ///   0-6  raw line color data
-        ///     7  transparency
-        HLSLuint coeffData;
     };
 
     /// @brief Base VDP2 layer rendering parameters, common to NBGs and RBGs.
@@ -1456,13 +1439,6 @@ struct Direct3D12VDPRenderer::Impl {
         DescriptorRange lnclBackSRV;
         /// @brief CPU-side LNCL/BACK screen buffer (0=LNCL; 1=BACK).
         std::array<std::array<ColorR8G8B8A8, kMaxResV>, 2> cpuLnclBack{};
-
-        /// @brief VDP2 rotation registers buffer.
-        D3D12Resource rotRegsBuffer;
-        /// @brief VDP2 rotation registers buffer SRV (offline).
-        DescriptorRange rotRegsSRV;
-        /// @brief CPU-side VDP2 rotation registers.
-        std::array<VDP2RotRegs, 2> cpuRotRegs{};
 
         /// @brief VDP2 rotation parameter base values buffer.
         D3D12Resource rotParamBasesBuffer;
@@ -1991,37 +1967,6 @@ struct Direct3D12VDPRenderer::Impl {
                                               vdp2.compositeOutUAV.cpuHandle);
         }
 
-        // VDP2 rotation registers buffer
-        {
-            auto builder = vdp2.rotRegsBuffer.BufferBuilder(sizeof(vdp2.cpuRotRegs));
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create VDP2 rotation registers buffer, error code {:X}", (uint32)hr)};
-            }
-            vdp2.rotRegsBuffer->SetName(L"[Ymir-VDP2] Rotation registers buffer");
-
-            vdp2.barrierTracker.InitializeBuffer(
-                vdp2.rotRegsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.rotRegsSRV)) {
-                return util::ErrorMessage{"Could not allocate VDP2 rotation registers buffer SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = DXGI_FORMAT_UNKNOWN,
-                .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Buffer =
-                    {
-                        .FirstElement = 0,
-                        .NumElements = 2,
-                        .StructureByteStride = sizeof(VDP2RotRegs),
-                        .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.rotRegsBuffer.GetPointer(), &srvDesc, vdp2.rotRegsSRV.cpuHandle);
-        }
-
         // VDP2 rotation parameter base values buffer
         {
             static constexpr size_t kRotParamBasesCount = kMaxNormalResV * 2;
@@ -2194,7 +2139,7 @@ struct Direct3D12VDPRenderer::Impl {
             auto rootSigBuilder = vdp2.drawSpriteRootSig.Builder();
             rootSigBuilder.Add32BitConstants(0, sizeof(VDP2CommonRenderParams) / sizeof(uint32));
             rootSigBuilder.AddDescriptorTable()
-                .AddSRVs(5, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
+                .AddSRVs(4, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
                 .AddUAVs(2, 0);
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{fmt::format(
@@ -2214,7 +2159,6 @@ struct Direct3D12VDPRenderer::Impl {
 
             const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
                 vdp2.layerRenderParamsSRV.cpuHandle,
-                vdp2.rotRegsSRV.cpuHandle,
                 vdp2.vramSRV.cpuHandle,
                 vdp2.cramColorSRV.cpuHandle,
                 vdp2.rotParamBasesSRV.cpuHandle,
@@ -2251,7 +2195,7 @@ struct Direct3D12VDPRenderer::Impl {
             auto rootSigBuilder = vdp2.drawBGsRootSig.Builder();
             rootSigBuilder.Add32BitConstants(0, sizeof(VDP2CommonRenderParams) / sizeof(uint32));
             rootSigBuilder.AddDescriptorTable()
-                .AddSRVs(7, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
+                .AddSRVs(6, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
                 .AddUAVs(3, 0);
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{
@@ -2270,9 +2214,10 @@ struct Direct3D12VDPRenderer::Impl {
             vdp2.drawBGsPSO->SetName(L"[Ymir-VDP2] Layer rendering pipeline state object");
 
             const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
-                vdp2.layerRenderParamsSRV.cpuHandle, vdp2.rotRegsSRV.cpuHandle,      vdp2.vramSRV.cpuHandle,
-                vdp2.cramColorSRV.cpuHandle,         vdp2.cramRotCoeffSRV.cpuHandle, vdp2.rotParamBasesSRV.cpuHandle,
-                vdp2.spriteAttrsSRV.cpuHandle,       vdp2.layerOutUAV.cpuHandle,     vdp2.rbgLineColorOutUAV.cpuHandle,
+                vdp2.layerRenderParamsSRV.cpuHandle, vdp2.vramSRV.cpuHandle,
+                vdp2.cramColorSRV.cpuHandle,         vdp2.cramRotCoeffSRV.cpuHandle,
+                vdp2.rotParamBasesSRV.cpuHandle,     vdp2.spriteAttrsSRV.cpuHandle,
+                vdp2.layerOutUAV.cpuHandle,          vdp2.rbgLineColorOutUAV.cpuHandle,
                 vdp2.colorCalcWindowUAV.cpuHandle,
             };
             std::array<UINT, std::size(srcHandles)> srcSizes{};
@@ -2929,68 +2874,53 @@ struct Direct3D12VDPRenderer::Impl {
         return {};
     }
 
-    util::VoidResult<> VDP2UpdateRotRegs() {
+    void VDP2UpdateRotRegs() {
         if (!vdp2.rotRegsDirty) {
-            return {};
+            return;
         }
         vdp2.rotRegsDirty = false;
 
         VDP2Regs &regs2 = vdpState.regs2;
         if (!regs2.bgEnabled[4] && !regs2.bgEnabled[5]) {
             // Skip if no RBGs are enabled
-            return {};
+            return;
         }
 
-        for (uint32 i = 0; i < 2; ++i) {
-            VDP2RotRegs &dst = vdp2.cpuRotRegs[i];
-            RotationParams &src = regs2.rotParams[i];
-            const auto &vramCtl = regs2.vramControl;
+        RotationParams &srcA = regs2.rotParams[0];
+        RotationParams &srcB = regs2.rotParams[1];
+        const auto &vramCtl = regs2.vramControl;
 
-            auto isCoeff = [](RotDataBankSel sel) { return sel == RotDataBankSel::Coefficients; };
+        auto isCoeff = [](RotDataBankSel sel) { return sel == RotDataBankSel::Coefficients; };
 
-            dst.coeffTableEnable = src.coeffTableEnable;
-            dst.coeffUseLineColorData = src.coeffUseLineColorData;
-            dst.coeffTableCRAM = vramCtl.colorRAMCoeffTableEnable;
-            dst.coeffDataSize = src.coeffDataSize;
-            dst.coeffDataMode = static_cast<HLSLuint>(src.coeffDataMode);
-            dst.coeffDataAccess = 0;
-            if (isCoeff(vramCtl.rotDataBankSelA0)) {
-                dst.coeffDataAccess |= 1u << 0u;
-            }
-            if (isCoeff(vramCtl.partitionVRAMA ? vramCtl.rotDataBankSelA1 : vramCtl.rotDataBankSelA0)) {
-                dst.coeffDataAccess |= 1u << 1u;
-            }
-            if (isCoeff(vramCtl.rotDataBankSelB0)) {
-                dst.coeffDataAccess |= 1u << 2u;
-            }
-            if (isCoeff(vramCtl.partitionVRAMB ? vramCtl.rotDataBankSelB1 : vramCtl.rotDataBankSelB0)) {
-                dst.coeffDataAccess |= 1u << 3u;
-            }
-            dst.coeffDataPerDot = vramCtl.perDotRotationCoeffs;
+        auto &dst = vdp2.cpuCommonRenderParams.rotParams;
+        dst.coeffTableCRAM = vramCtl.colorRAMCoeffTableEnable;
+        dst.coeffDataAccess = 0;
+        if (isCoeff(vramCtl.rotDataBankSelA0)) {
+            dst.coeffDataAccess |= 1u << 0u;
         }
-
-        // Update buffer
-        {
-            ID3D12Resource *dstResource = vdp2.rotRegsBuffer.GetPointer();
-            ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
-            const size_t size = sizeof(vdp2.cpuRotRegs);
-
-            UploadAllocation alloc{};
-            if (auto result = VDP2AllocateUploadBuffer(size, 4, alloc); !result) {
-                return util::ErrorMessage{fmt::format(
-                    "Failed to allocate upload buffer for VDP2 rotation registers: {}", result.Error().message)};
-            }
-            memcpy(alloc.data, &vdp2.cpuRotRegs, size);
-
-            // Emit barrier transition
-            vdp2.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                                 D3D12_BARRIER_ACCESS_COPY_DEST);
-            vdp2.barrierTracker.Flush(vdp2.cmdList);
-
-            vdp2.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+        if (isCoeff(vramCtl.partitionVRAMA ? vramCtl.rotDataBankSelA1 : vramCtl.rotDataBankSelA0)) {
+            dst.coeffDataAccess |= 1u << 1u;
         }
+        if (isCoeff(vramCtl.rotDataBankSelB0)) {
+            dst.coeffDataAccess |= 1u << 2u;
+        }
+        if (isCoeff(vramCtl.partitionVRAMB ? vramCtl.rotDataBankSelB1 : vramCtl.rotDataBankSelB0)) {
+            dst.coeffDataAccess |= 1u << 3u;
+        }
+        dst.coeffDataPerDot = vramCtl.perDotRotationCoeffs;
 
-        return {};
+        dst.coeffATableEnable = srcA.coeffTableEnable;
+        dst.coeffAUseLineColorData = srcA.coeffUseLineColorData;
+        dst.coeffADataSize = srcA.coeffDataSize;
+        dst.coeffADataMode = static_cast<HLSLuint>(srcA.coeffDataMode);
+
+        dst.coeffBTableEnable = srcB.coeffTableEnable;
+        dst.coeffBUseLineColorData = srcB.coeffUseLineColorData;
+        dst.coeffBDataSize = srcB.coeffDataSize;
+        dst.coeffBDataMode = static_cast<HLSLuint>(srcB.coeffDataMode);
+
+        // NOTE: this is uploaded as 32-bit root constants, not through the upload buffer.
+        // No uploads or barriers are needed here.
     }
 
     util::VoidResult<> VDP2UpdateComposeParams() {
@@ -3282,9 +3212,6 @@ struct Direct3D12VDPRenderer::Impl {
         // Transition resources for drawing the sprite layer
         if (vdp2.cpuCommonRenderParams.spriteParams.rotate) {
             vdp2.barrierTracker.TransitionBuffer(
-                vdp2.rotRegsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-            vdp2.barrierTracker.TransitionBuffer(
                 vdp2.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                 D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         }
@@ -3311,9 +3238,6 @@ struct Direct3D12VDPRenderer::Impl {
         if (vdpState.regs2.bgEnabled[4] || vdpState.regs2.bgEnabled[5]) {
             vdp2.barrierTracker.TransitionBuffer(
                 vdp2.cramRotCoeffBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-            vdp2.barrierTracker.TransitionBuffer(
-                vdp2.rotRegsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                 D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
             vdp2.barrierTracker.TransitionBuffer(
                 vdp2.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
