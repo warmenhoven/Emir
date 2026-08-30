@@ -173,7 +173,7 @@ int GetColorCalcRatio(uint layer, uint2 pos) {
             return composeParams[0].bgColorCalcRatios[layer - kLayerRBG0];
         case kLayerBack:
         case kLayerLine:
-            if (IsColorCalcEnabled(layer, uint2(pos.x, GetLoResInputY(pos.y)))) {
+            if (IsColorCalcEnabled(layer, pos)) {
                 return composeParams[0].backLineColorCalcRatios[1];
             } else {
                 return composeParams[0].backLineColorCalcRatios[0];
