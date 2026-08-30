@@ -204,9 +204,9 @@ uint4 GetLayerOutput(uint layer, uint2 pos) {
         case kLayerNBG3:
             return layerIn[uint3(pos.xy, GetBGLayerIndex(layer))];
         case kLayerBack:
-            return lnclBackIn[GetLoResInputY(pos.y) + kMaxResH]; // the attribute byte doesn't matter
+            return uint4(Color888(lnclBackIn[GetLoResInputY(pos.y) + kMaxResV]), 0); // the attribute byte doesn't matter
         case kLayerLine:
-            return lnclBackIn[GetLoResInputY(pos.y)]; // the attribute byte doesn't matter
+            return uint4(Color888(lnclBackIn[GetLoResInputY(pos.y)]), 0); // the attribute byte doesn't matter
         default:
             return kTransparentPixel; // should never happpen
     }
@@ -236,7 +236,7 @@ uint3 Compose(uint2 basePos) {
         const bool borderColorMode = BitTest(g_commonParams.displayParams, 1);
         if (borderColorMode) {
             // Use back screen color
-            return Color888(lnclBackIn[kMaxResH + GetLoResInputY(pos.y)]);
+            return Color888(lnclBackIn[GetLoResInputY(pos.y) + kMaxResV]);
         }
         return uint3(0, 0, 0);
     }
