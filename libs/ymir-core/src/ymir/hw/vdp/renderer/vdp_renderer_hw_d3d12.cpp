@@ -167,7 +167,7 @@ static_assert(sizeof(VDP2RotParamBase) == sizeof(uint32) * 4);
 // TODO: these could be useful in multiple backends. Make them generic and reusable, and move to a shared header.
 
 /// @brief Maximum number of frames in flight.
-static constexpr size_t kNumFrames = 4;
+static constexpr size_t kNumFrames = 3;
 
 /// @brief Size of the upload buffers, in bytes.
 /// Should be large enough to fit multiple worst case single transfers, but not waste space needlessly.
@@ -1471,13 +1471,6 @@ struct Direct3D12VDPRenderer::Impl {
         /// @brief CPU-side VDP2 rotation parameter base values.
         std::array<VDP2RotParamBase, kMaxNormalResV * 2> cpuRotParamBases{};
 
-        /// @brief VDP2 rotation parameter states buffer.
-        D3D12Resource rotParamStatesBuffer;
-        /// @brief VDP2 rotation parameter states buffer SRV (offline).
-        DescriptorRange rotParamStatesSRV;
-        /// @brief VDP2 rotation parameter states buffer UAV (offline).
-        DescriptorRange rotParamStatesUAV;
-
         /// @brief VDP2 sprite attributes 2D texture array (sprite then mesh).
         D3D12Resource spriteAttrsTexture;
         /// @brief VDP2 sprite attributes SRV (offline).
@@ -1508,15 +1501,6 @@ struct Direct3D12VDPRenderer::Impl {
         DescriptorRange composeParamsSRV;
         /// @brief CPU-side layer composition parameters.
         VDP2ComposeParams cpuComposeParams{};
-
-        /// @brief Compute shader for calculating rotation parameters.
-        gpu::ComputeShader calcRotParamsShader;
-        /// @brief Root signature for calculating rotation parameters.
-        D3D12RootSignature calcRotParamsRootSig;
-        /// @brief Pipeline state object for calculating rotation parameters.
-        D3D12PipelineState calcRotParamsPSO;
-        /// @brief Descriptor range for calculating rotation parameters.
-        DescriptorRange calcRotParamsDescs;
 
         /// @brief Compute shader for drawing the sprite layer.
         gpu::ComputeShader drawSpriteShader;
@@ -2071,58 +2055,6 @@ struct Direct3D12VDPRenderer::Impl {
                                              vdp2.rotParamBasesSRV.cpuHandle);
         }
 
-        // VDP2 rotation parameter states buffer
-        {
-            static constexpr size_t kRotParamsCount = vdp::kMaxNormalResH * vdp::kMaxNormalResV * 2;
-            auto builder = vdp2.rotParamStatesBuffer.BufferBuilder(kRotParamsCount * sizeof(VDP2RotParamState));
-            builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create VDP2 rotation parameter states buffer, error code {:X}", (uint32)hr)};
-            }
-            vdp2.rotParamStatesBuffer->SetName(L"[Ymir-VDP2] Rotation parameter states buffer");
-
-            vdp2.barrierTracker.InitializeBuffer(
-                vdp2.rotParamStatesBuffer.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.rotParamStatesSRV)) {
-                return util::ErrorMessage{"Could not allocate VDP2 rotation parameter states buffer SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = DXGI_FORMAT_UNKNOWN,
-                .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Buffer =
-                    {
-                        .FirstElement = 0,
-                        .NumElements = kRotParamsCount,
-                        .StructureByteStride = sizeof(VDP2RotParamState),
-                        .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.rotParamStatesBuffer.GetPointer(), &srvDesc,
-                                             vdp2.rotParamStatesSRV.cpuHandle);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.rotParamStatesUAV)) {
-                return util::ErrorMessage{"Could not VDP2 rotation parameter states buffer UAV"};
-            }
-            const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
-                .Format = DXGI_FORMAT_UNKNOWN,
-                .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
-                .Buffer =
-                    {
-                        .FirstElement = 0,
-                        .NumElements = kRotParamsCount,
-                        .StructureByteStride = sizeof(VDP2RotParamState),
-                        .CounterOffsetInBytes = 0,
-                        .Flags = D3D12_BUFFER_UAV_FLAG_NONE,
-                    },
-            };
-            device->CreateUnorderedAccessView(vdp2.rotParamStatesBuffer.GetPointer(), nullptr, &uavDesc,
-                                              vdp2.rotParamStatesUAV.cpuHandle);
-        }
-
         // VDP2 sprite attributes 2D texture array
         {
             static constexpr UINT16 kNumLayers = 2;
@@ -2243,62 +2175,6 @@ struct Direct3D12VDPRenderer::Impl {
                                              vdp2.composeParamsSRV.cpuHandle);
         }
 
-        // Build shader, PSO and related resources for calculating rotparams
-        {
-            auto shaderBlobResult = LoadShader("src/vdp/cs_vdp2_calc_rotparams.cso");
-            if (!shaderBlobResult) {
-                return util::ErrorMessage{
-                    fmt::format("Could not load VDP2 rotation parameters calculation compute shader: {}",
-                                shaderBlobResult.Error().message)};
-            }
-            vdp2.calcRotParamsShader.format = gpu::ShaderBytecodeFormat::DXIL;
-            vdp2.calcRotParamsShader.bytecode = shaderBlobResult.Value();
-            vdp2.calcRotParamsShader.entrypoint = kCSEntrypoint;
-            auto result = gpu::ValidateShader(vdp2.calcRotParamsShader);
-            if (!result) {
-                return util::ErrorMessage{
-                    fmt::format("VDP2 rotation parameters calculation compute shader validation failed: {}",
-                                result.Error().message)};
-            }
-
-            auto rootSigBuilder = vdp2.calcRotParamsRootSig.Builder();
-            rootSigBuilder.Add32BitConstants(0, sizeof(VDP2CommonRenderParams) / sizeof(uint32));
-            rootSigBuilder.AddDescriptorTable()
-                .AddSRVs(4, 1)  // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
-                .AddUAVs(1, 1); // NOTE: starting from 1 because SPIRV-Cross assumes buffers in u0 are constant
-            if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not build VDP2 rotation parameters calculation root signature, error code {:X}",
-                                (uint32)hr)};
-            }
-            vdp2.calcRotParamsRootSig->SetName(L"[Ymir-VDP2] Rotation parameters calculation root signature");
-
-            const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
-                .pRootSignature = vdp2.calcRotParamsRootSig.GetPointer(),
-                .CS = ToShaderBytecode(vdp2.calcRotParamsShader),
-            };
-            if (HRESULT hr = vdp2.calcRotParamsPSO.CreateCompute(device, psoDesc); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format(
-                    "Could not build VDP2 rotation parameters calculation pipeline state object, error code {:X}",
-                    (uint32)hr)};
-            }
-            vdp2.calcRotParamsPSO->SetName(L"[Ymir-VDP2] Rotation parameters calculation pipeline state object");
-
-            const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
-                vdp2.rotRegsSRV.cpuHandle,      vdp2.rotParamBasesSRV.cpuHandle,  vdp2.vramSRV.cpuHandle,
-                vdp2.cramRotCoeffSRV.cpuHandle, vdp2.rotParamStatesUAV.cpuHandle,
-            };
-            std::array<UINT, std::size(srcHandles)> srcSizes{};
-            srcSizes.fill(1);
-
-            if (!resourceHeapAlloc.Allocate(vdp2.calcRotParamsDescs, std::size(srcHandles))) {
-                return util::ErrorMessage{"Could not allocate VDP2 rotation parameters calculation descriptors"};
-            }
-
-            device->CopyDescriptors(1, &vdp2.calcRotParamsDescs.cpuHandle, &vdp2.calcRotParamsDescs.count,
-                                    std::size(srcHandles), srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
-        }
-
         // Build shader, PSO and related resources for drawing the sprite layer
         {
             auto shaderBlobResult = LoadShader("src/vdp/cs_vdp2_render_sprite.cso");
@@ -2318,7 +2194,7 @@ struct Direct3D12VDPRenderer::Impl {
             auto rootSigBuilder = vdp2.drawSpriteRootSig.Builder();
             rootSigBuilder.Add32BitConstants(0, sizeof(VDP2CommonRenderParams) / sizeof(uint32));
             rootSigBuilder.AddDescriptorTable()
-                .AddSRVs(4, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
+                .AddSRVs(5, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
                 .AddUAVs(2, 0);
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{fmt::format(
@@ -2338,9 +2214,10 @@ struct Direct3D12VDPRenderer::Impl {
 
             const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
                 vdp2.layerRenderParamsSRV.cpuHandle,
+                vdp2.rotRegsSRV.cpuHandle,
                 vdp2.vramSRV.cpuHandle,
                 vdp2.cramColorSRV.cpuHandle,
-                vdp2.rotParamStatesSRV.cpuHandle,
+                vdp2.rotParamBasesSRV.cpuHandle,
                 /* TODO: vdp1.spriteFBSRV.cpuHandle,*/ vdp2.layerOutUAV.cpuHandle,
                 vdp2.spriteAttrsUAV.cpuHandle,
             };
@@ -2374,7 +2251,7 @@ struct Direct3D12VDPRenderer::Impl {
             auto rootSigBuilder = vdp2.drawBGsRootSig.Builder();
             rootSigBuilder.Add32BitConstants(0, sizeof(VDP2CommonRenderParams) / sizeof(uint32));
             rootSigBuilder.AddDescriptorTable()
-                .AddSRVs(6, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
+                .AddSRVs(7, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
                 .AddUAVs(3, 0);
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{
@@ -2393,14 +2270,9 @@ struct Direct3D12VDPRenderer::Impl {
             vdp2.drawBGsPSO->SetName(L"[Ymir-VDP2] Layer rendering pipeline state object");
 
             const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
-                vdp2.layerRenderParamsSRV.cpuHandle,
-                vdp2.rotRegsSRV.cpuHandle,
-                vdp2.vramSRV.cpuHandle,
-                vdp2.cramColorSRV.cpuHandle,
-                vdp2.rotParamStatesSRV.cpuHandle,
-                vdp2.spriteAttrsSRV.cpuHandle,
-                vdp2.layerOutUAV.cpuHandle,
-                vdp2.rbgLineColorOutUAV.cpuHandle,
+                vdp2.layerRenderParamsSRV.cpuHandle, vdp2.rotRegsSRV.cpuHandle,      vdp2.vramSRV.cpuHandle,
+                vdp2.cramColorSRV.cpuHandle,         vdp2.cramRotCoeffSRV.cpuHandle, vdp2.rotParamBasesSRV.cpuHandle,
+                vdp2.spriteAttrsSRV.cpuHandle,       vdp2.layerOutUAV.cpuHandle,     vdp2.rbgLineColorOutUAV.cpuHandle,
                 vdp2.colorCalcWindowUAV.cpuHandle,
             };
             std::array<UINT, std::size(srcHandles)> srcSizes{};
@@ -3385,13 +3257,12 @@ struct Direct3D12VDPRenderer::Impl {
         const uint32 numLines = baseNumLines << yShift;
         vdp2.nextLayerRenderLine = y + 1;
 
+        vdp2.cpuCommonRenderParams.startY = startY << yShift;
+
         // ---------------------------------------------------------------------
 
         // Transition resources for rendering layers
         vdp2.barrierTracker.TransitionBuffer(vdp2.layerRenderParamsBuffer.GetPointer(),
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-        vdp2.barrierTracker.TransitionBuffer(vdp2.rotRegsBuffer.GetPointer(),
                                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         vdp2.barrierTracker.TransitionBuffer(vdp2.vramBuffer.GetPointer(),
@@ -3403,37 +3274,23 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Compute rotation parameters if any RBGs are enabled
         if (vdpState.regs2.bgEnabled[4] || vdpState.regs2.bgEnabled[5]) {
-            vdp2.cpuCommonRenderParams.startY = startY;
-
             VDP2UploadRotationParameterBases();
-
-            vdp2.barrierTracker.TransitionBuffer(
-                vdp2.cramRotCoeffBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-            vdp2.barrierTracker.TransitionBuffer(
-                vdp2.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-            vdp2.barrierTracker.TransitionBuffer(
-                vdp2.rotParamStatesBuffer.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
-            vdp2.barrierTracker.Flush(cmdList);
-
-            const bool doubleResH = vdpState.regs2.TVMD.HRESOn & 0b010;
-            const uint32 hresShift = doubleResH ? 1 : 0;
-            const uint32 hres = HRes >> hresShift;
-            cmdList->SetPipelineState(vdp2.calcRotParamsPSO.GetPointer());
-            cmdList->SetComputeRootSignature(vdp2.calcRotParamsRootSig.GetPointer());
-            cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp2.cpuCommonRenderParams) / sizeof(uint32),
-                                                  &vdp2.cpuCommonRenderParams, 0);
-            cmdList->SetComputeRootDescriptorTable(1, vdp2.calcRotParamsDescs.gpuHandle);
-            cmdList->Dispatch(hres / 32, numLines, 1);
         }
-
-        vdp2.cpuCommonRenderParams.startY = startY << yShift;
 
         // ---------------------------------------------------------------------
 
         // Transition resources for drawing the sprite layer
+        if (vdp2.cpuCommonRenderParams.spriteParams.rotate) {
+            vdp2.barrierTracker.TransitionBuffer(
+                vdp2.rotRegsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+            vdp2.barrierTracker.TransitionBuffer(
+                vdp2.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        }
+        vdp2.barrierTracker.TransitionTexture(vdp2.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                                              D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
         vdp2.barrierTracker.TransitionTexture(vdp2.spriteAttrsTexture.GetPointer(),
                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
                                               D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
@@ -3453,7 +3310,13 @@ struct Direct3D12VDPRenderer::Impl {
         // Transition resources for drawing background layers
         if (vdpState.regs2.bgEnabled[4] || vdpState.regs2.bgEnabled[5]) {
             vdp2.barrierTracker.TransitionBuffer(
-                vdp2.rotParamStatesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                vdp2.cramRotCoeffBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+            vdp2.barrierTracker.TransitionBuffer(
+                vdp2.rotRegsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+            vdp2.barrierTracker.TransitionBuffer(
+                vdp2.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                 D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         }
         vdp2.barrierTracker.TransitionTexture(

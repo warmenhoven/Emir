@@ -12,10 +12,11 @@ cbuffer CommonRenderParamsBuffer : register(b0) {
 }
 
 StructuredBuffer<LayerRenderParams> layerRenderParams : register(t1);
-ByteAddressBuffer vram : register(t2);
-Buffer<uint4> cramColor : register(t3);
-StructuredBuffer<RotParamState> rotParamStates : register(t4);
-// TODO: ByteAddressBuffer spriteFB : register(t5);
+StructuredBuffer<RotRegs> rotRegs : register(t2);
+ByteAddressBuffer vram : register(t3);
+Buffer<uint4> cramColor : register(t4);
+StructuredBuffer<RotParamBase> rotParamBases : register(t5);
+// TODO: ByteAddressBuffer spriteFB : register(t6);
 
 RWTexture2DArray<uint4> layerOut : register(u0);
 RWTexture2D<uint> spriteAttrsOut : register(u1);
@@ -183,6 +184,31 @@ bool InsideWindows(uint2 pos) {
     }
 
     return inside;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Rotation parameter calculation
+
+uint2 CalcRotationSpriteCoordinates(uint2 pos) {
+    const RotParamBase base = rotParamBases[pos.y + g_commonParams.startY];
+    const RotRegs regs = rotRegs[0];
+
+    const int Xst = SignExtend(Read32(vram, base.tableAddress + 0x00) >> 6, 23);
+    const int Yst = SignExtend(Read32(vram, base.tableAddress + 0x04) >> 6, 23);
+
+    const int deltaXst = SignExtend(Read32(vram, base.tableAddress + 0x0C) >> 6, 13);
+    const int deltaYst = SignExtend(Read32(vram, base.tableAddress + 0x10) >> 6, 13);
+
+    const int deltaX = SignExtend(Read32(vram, base.tableAddress + 0x14) >> 6, 13);
+    const int deltaY = SignExtend(Read32(vram, base.tableAddress + 0x18) >> 6, 13);
+
+    // Current sprite coordinates (13.10)
+    // 10 + 0*10 + 0*10 = 10 + 10 + 10 = 10 frac bits
+    // 23 + 10*13 + 9*13 = 23 + 23 + 22 = 23 total bits
+    return uint2(
+        Xst + pos.y * deltaXst + pos.x * deltaX,
+        Yst + pos.y * deltaYst + pos.x * deltaY
+    );
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -386,7 +412,7 @@ SpriteOutput DrawSprite(uint2 pos, uint2 outPos, uint index) {
     uint2 spritePos;
     uint baseFBAddr = 0;
     if (rotate) {
-        spritePos = rotParamStates[0].spriteCoords;
+        spritePos = CalcRotationSpriteCoordinates(pos);
     } else {
         spritePos = pos;
         if (inHalfResH) {

@@ -21,10 +21,4 @@ struct RotParamBase {
     uint KA;
 };
 
-struct RotParamState {
-    int2 screenCoords;
-    uint2 spriteCoords;
-    uint coeffData;
-};
-
 #endif
