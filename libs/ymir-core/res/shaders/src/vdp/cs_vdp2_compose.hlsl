@@ -307,7 +307,7 @@ uint3 Compose(uint2 basePos) {
     uint3 output = { 0, 0, 0 };
 
     const bool layer0LineColorEnabled = IsLineColorEnabled(layerStack[0], pos);
-    const bool extendedColorCalc = composeParams[0].extendedColorCalc;
+    const bool extendedColorCalc = BitTest(g_commonParams.layerParams, 25);
 
     uint3 layer0Pixel = GetLayerOutput(layerStack[0], pos).rgb;
     uint3 layer1Pixel = GetLayerOutput(layerStack[1], pos).rgb;
@@ -344,11 +344,11 @@ uint3 Compose(uint2 basePos) {
     }
 
     if (IsColorCalcEnabled(layerStack[0], pos)) {
-        const bool useAdditiveBlend = composeParams[0].useAdditiveBlend;
+        const bool useAdditiveBlend = BitTest(g_commonParams.displayParams, 26);
         if (useAdditiveBlend) {
             output = min(layer0Pixel + layer1Pixel, 255);
         } else {
-            const bool useSecondScreenRatio = composeParams[0].useSecondScreenRatio;
+            const bool useSecondScreenRatio = BitTest(g_commonParams.displayParams, 27);
             const uint ratioLayer = useSecondScreenRatio ? layerStack[1] : layerStack[0];
             const int ratio = GetColorCalcRatio(ratioLayer, pos);
             output = int3(layer1Pixel) + (((int3(layer0Pixel) - int3(layer1Pixel)) * ratio) >> 5);

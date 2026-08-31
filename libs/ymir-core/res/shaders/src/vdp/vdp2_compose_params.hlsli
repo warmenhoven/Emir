@@ -5,9 +5,6 @@
 
 struct ComposeParams {
     uint colorCalcEnable;
-    bool extendedColorCalc;
-    bool useAdditiveBlend;
-    bool useSecondScreenRatio;
     uint colorOffsetEnable;
     uint colorOffsetSelect;
     uint lineColorEnable;
@@ -15,8 +12,6 @@ struct ComposeParams {
     int3 colorOffsetB;
     uint bgColorCalcRatios[5];
     uint backLineColorCalcRatios[2];
-    bool colorGradEnable;
-    uint colorGradScreen;
 };
 
 #endif

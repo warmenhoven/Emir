@@ -855,32 +855,49 @@ struct Direct3D12VDPRenderer::Impl {
             HLSLuint dblInterlaceDrawLine : 1; //    16  VDP1 double interlace draw line   (VDP1 FBCR.DIL)
         } displayParams;
 
-        struct {                              //  bits  use
-            HLSLuint layerEnabled : 6;        //   0-5  Layer enable state based on BGON and other factors:
-                                              //        bit  RBG0+RBG1   RBG0        RBG1        no RBGs
-                                              //          0  Sprite      Sprite      Sprite      Sprite
-                                              //          1  RBG0        RBG0        -           -
-                                              //          2  RBG1        NBG0        RBG1        NBG0
-                                              //          3  EXBG        NBG1/EXBG   NBG1/EXBG   NBG1/EXBG
-                                              //          4  -           NBG2        NBG2        NBG2
-                                              //          5  -           NBG3        NBG3        NBG3
-            HLSLuint bgEnabled : 6;           //  6-11  Individual layer enable flags
-                                              //        bit  layer
-                                              //          8  NBG0
-                                              //          9  NBG1
-                                              //         10  NBG2
-                                              //         11  NBG3
-                                              //         12  RBG0
-                                              //         13  RBG1
-            HLSLuint lineColorEnableRBG0 : 1; //    12  Line color screen enable for RBG0
-            HLSLuint lineColorEnableRBG1 : 1; //    13  Line color screen enable for RBG1
-            HLSLuint mosaicH : 4;             // 14-17  Horizontal mosaic size (minus one)
-            HLSLuint mosaicV : 4;             // 18-21  Vertical mosaic size (minus one)
-            HLSLuint rotParamMode : 2;        // 22-23  Rotation parameter mode
-                                              //          0 = always use A
-                                              //          1 = always use B
-                                              //          2 = select based on coefficient data
-                                              //          3 = select based on window flag
+        struct {                               //  bits  use
+            HLSLuint layerEnabled : 6;         //   0-5  Layer enable state based on BGON and other factors:
+                                               //        bit  RBG0+RBG1   RBG0        RBG1        no RBGs
+                                               //          0  Sprite      Sprite      Sprite      Sprite
+                                               //          1  RBG0        RBG0        -           -
+                                               //          2  RBG1        NBG0        RBG1        NBG0
+                                               //          3  EXBG        NBG1/EXBG   NBG1/EXBG   NBG1/EXBG
+                                               //          4  -           NBG2        NBG2        NBG2
+                                               //          5  -           NBG3        NBG3        NBG3
+            HLSLuint bgEnabled : 6;            //  6-11  Individual layer enable flags
+                                               //        bit  layer
+                                               //          8  NBG0
+                                               //          9  NBG1
+                                               //         10  NBG2
+                                               //         11  NBG3
+                                               //         12  RBG0
+                                               //         13  RBG1
+            HLSLuint lineColorEnableRBG0 : 1;  //    12  Line color screen enable for RBG0
+            HLSLuint lineColorEnableRBG1 : 1;  //    13  Line color screen enable for RBG1
+            HLSLuint mosaicH : 4;              // 14-17  Horizontal mosaic size (minus one)
+            HLSLuint mosaicV : 4;              // 18-21  Vertical mosaic size (minus one)
+            HLSLuint rotParamMode : 2;         // 22-23  Rotation parameter mode
+                                               //          0 = always use A
+                                               //          1 = always use B
+                                               //          2 = select based on coefficient data
+                                               //          3 = select based on window flag
+            HLSLuint restrictedColorCalc : 1;  //    24  Restricted color calculations
+            HLSLuint extendedColorCalc : 1;    //    25  Use extended color calculation
+                                               //        (always disabled in hi-res modes)
+            HLSLuint useAdditiveBlend : 1;     //    26  Blend mode
+                                               //          0 = alpha
+                                               //          1 = additive
+            HLSLuint useSecondScreenRatio : 1; //    27  Use second screen ratio
+            HLSLuint colorGradEnable : 1;      //    28  Color gradation enabled
+            HLSLuint colorGradScreen : 3;      // 29-31  Color gradation screen
+                                               //          0  Sprite
+                                               //          1  RBG0
+                                               //          2  NBG0/RBG1
+                                               //          3  (invalid)
+                                               //          4  NBG1/EXBG
+                                               //          5  NBG2
+                                               //          6  NBG3
+                                               //          7  (invalid)
         } layerParams;
 
         struct {                                 //  bits  use
@@ -1220,7 +1237,7 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Use colors per line
         //   false = per screen
-        //   true   = per line
+        //   true  = per line
         HLSLbool perLine;
     };
 
@@ -1256,17 +1273,6 @@ struct Direct3D12VDPRenderer::Impl {
         //     6  Back screen
         //     7  Line screen
         HLSLuint colorCalcEnable;
-
-        // Use extended color calculation (always disabled in hi-res modes)
-        HLSLbool extendedColorCalc;
-
-        // Blend mode
-        //   0 = alpha
-        //   1 = additive
-        HLSLbool useAdditiveBlend;
-
-        // Use second screen ratio
-        HLSLbool useSecondScreenRatio;
 
         // Color offset enable per layer (0=disable; 1=enable)
         //   bit  layer
@@ -1321,20 +1327,6 @@ struct Direct3D12VDPRenderer::Impl {
         //     0  Back screen
         //     1  Line screen
         std::array<HLSLuint, 2> backLineColorCalcRatios;
-
-        // Color gradation enabled
-        HLSLbool colorGradEnable;
-
-        // Color gradation screen
-        //   0  Sprite
-        //   1  RBG0
-        //   2  NBG0/RBG1
-        //   3  (invalid)
-        //   4  NBG1/EXBG
-        //   5  NBG2
-        //   6  NBG3
-        //   7  (invalid)
-        HLSLuint colorGradScreen;
     };
 
     /// @brief Number of entries in the VDP2 CRAM color cache.
@@ -2637,6 +2629,12 @@ struct Direct3D12VDPRenderer::Impl {
         params.layerParams.mosaicH = regs2.mosaicH - 1;
         params.layerParams.mosaicV = regs2.mosaicV - 1;
         params.layerParams.rotParamMode = static_cast<HLSLuint>(regs2.commonRotParams.rotParamMode);
+        params.layerParams.restrictedColorCalc = regs2.restrictedColorCalc;
+        params.layerParams.extendedColorCalc = regs2.colorCalcParams.extendedColorCalcEnable && regs2.TVMD.HRESOn < 2;
+        params.layerParams.useAdditiveBlend = regs2.colorCalcParams.useAdditiveBlend;
+        params.layerParams.useSecondScreenRatio = regs2.colorCalcParams.useSecondScreenRatio;
+        params.layerParams.colorGradEnable = regs2.colorCalcParams.colorGradEnable;
+        params.layerParams.colorGradScreen = static_cast<HLSLuint>(regs2.colorCalcParams.colorGradScreen);
 
         params.spriteParams.rotate = regs1.fbRotEnable;
         params.spriteParams.pixel8Bits = regs1.pixel8Bits;
@@ -2942,9 +2940,6 @@ struct Direct3D12VDPRenderer::Impl {
                                  | (regs2.backScreenParams.colorCalcEnable << 6) //
                                  | (regs2.lineScreenParams.colorCalcEnable << 7) //
             ;
-        params.extendedColorCalc = regs2.colorCalcParams.extendedColorCalcEnable && regs2.TVMD.HRESOn < 2;
-        params.useAdditiveBlend = regs2.colorCalcParams.useAdditiveBlend;
-        params.useSecondScreenRatio = regs2.colorCalcParams.useSecondScreenRatio;
         params.colorOffsetEnable = PackBools<HLSLuint>(regs2.colorOffsetEnable);
         params.colorOffsetSelect = PackBools<HLSLuint>(regs2.colorOffsetSelect);
         params.lineColorEnable = 0                                                 //
