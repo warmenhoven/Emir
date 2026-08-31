@@ -167,11 +167,11 @@ static_assert(sizeof(VDP2RotParamBase) == sizeof(uint32) * 4);
 // TODO: these could be useful in multiple backends. Make them generic and reusable, and move to a shared header.
 
 /// @brief Maximum number of frames in flight.
-static constexpr size_t kNumFrames = 3;
+static constexpr size_t kNumFrames = 4;
 
 /// @brief Size of the upload buffers, in bytes.
 /// Should be large enough to fit multiple worst case single transfers, but not waste space needlessly.
-static constexpr UINT64 kUploadBufferSize = 16 * 1024 * 1024;
+static constexpr UINT64 kUploadBufferSize = (4 + 4 * kNumFrames) * 1024 * 1024;
 
 /// @brief A single allocation in an upload buffer.
 struct UploadAllocation {
@@ -1343,6 +1343,93 @@ struct Direct3D12VDPRenderer::Impl {
     /// The second half of CRAM can be used for that purpose.
     static constexpr UINT kVDP2CRAMRotCoeffBufferSize = kVDP2CRAMSize / 2;
 
+    /// @brief Per-frame VDP2 resources.
+    struct VDP2FrameContext : public FrameContext {
+        /// @brief CRAM color buffer.
+        D3D12Resource cramColorBuffer;
+        /// @brief CRAM color buffer SRV (offline).
+        DescriptorRange cramColorSRV;
+
+        /// @brief Raw CRAM rotation coefficients buffer.
+        D3D12Resource cramRotCoeffBuffer;
+        /// @brief Raw CRAM rotation coefficients buffer SRV (offline).
+        DescriptorRange cramRotCoeffSRV;
+
+        /// @brief Current CRAM generation of this frame (dirty tracking).
+        uint32 cramGeneration = 0xFFFFFFFF;
+
+        /// @brief 2D texture array for the outputs of NBG0-3, RBG0-1, sprite and mesh layers (in that order).
+        /// Contains the intermediate per-layer outputs of the VDP2 rendering process.
+        D3D12Resource layerOutTexture;
+        /// @brief Layer outputs SRV (offline).
+        DescriptorRange layerOutSRV;
+        /// @brief Layer outputs UAV (offline).
+        DescriptorRange layerOutUAV;
+
+        /// @brief 2D texture array for RBG0-1 line color outputs (in that order).
+        D3D12Resource rbgLineColorOutTexture;
+        /// @brief RBG0-1 line color outputs SRV (offline).
+        DescriptorRange rbgLineColorOutSRV;
+        /// @brief RBG0-1 line color outputs UAV (offline).
+        DescriptorRange rbgLineColorOutUAV;
+
+        /// @brief Color calculation window 2D texture.
+        D3D12Resource colorCalcWindowTexture;
+        /// @brief Color calculation window SRV (offline).
+        DescriptorRange colorCalcWindowSRV;
+        /// @brief Color calculation window UAV (offline).
+        DescriptorRange colorCalcWindowUAV;
+
+        /// @brief LNCL/BACK screen buffer.
+        D3D12Resource lnclBackBuffer;
+        /// @brief LNCL/BACK screen buffer SRV (offline).
+        DescriptorRange lnclBackSRV;
+
+        /// @brief VDP2 rotation parameter base values buffer.
+        D3D12Resource rotParamBasesBuffer;
+        /// @brief VDP2 rotation parameter base values buffer SRV (offline).
+        DescriptorRange rotParamBasesSRV;
+
+        /// @brief VDP2 sprite attributes 2D texture array (sprite then mesh).
+        D3D12Resource spriteAttrsTexture;
+        /// @brief VDP2 sprite attributes SRV (offline).
+        DescriptorRange spriteAttrsSRV;
+        /// @brief VDP2 sprite attributes UAV (offline).
+        DescriptorRange spriteAttrsUAV;
+
+        /// @brief 2D texture for the composited VDP2 output.
+        D3D12Resource compositeOutTexture;
+        /// @brief Composited VDP2 output UAV (offline).
+        DescriptorRange compositeOutUAV;
+
+        // ---------------------------------------------------------------------
+
+        /// @brief Layer rendering parameters buffer.
+        D3D12Resource layerRenderParamsBuffer;
+        /// @brief Layer rendering parameters buffer SRV (offline).
+        DescriptorRange layerRenderParamsSRV;
+
+        /// @brief Layer composition parameters buffer.
+        D3D12Resource composeParamsBuffer;
+        /// @brief Layer composition parameters buffer SRV (offline).
+        DescriptorRange composeParamsSRV;
+
+        /// @brief Pipeline state object for drawing the sprite layer.
+        D3D12PipelineState drawSpritePSO;
+        /// @brief Descriptor range for drawing the sprite layer.
+        DescriptorRange drawSpriteDescs;
+
+        /// @brief Pipeline state object for drawing background layers.
+        D3D12PipelineState drawBGsPSO;
+        /// @brief Descriptor range for drawing background layers.
+        DescriptorRange drawBGsDescs;
+
+        /// @brief Pipeline state object for compositing layers.
+        D3D12PipelineState composePSO;
+        /// @brief Descriptor range for compositing layers.
+        DescriptorRange composeDescs;
+    };
+
     struct VDP2Resources {
         VDP2Resources(const config::VDP2AccessPatternsConfig &accessPatternsConfig,
                       const config::VDP2DebugRender &debugRenderOptions)
@@ -1350,7 +1437,7 @@ struct Direct3D12VDPRenderer::Impl {
             , debugRenderOptions(debugRenderOptions) {}
 
         /// @brief VDP2 per-frame resources.
-        FrameSet<kNumFrames> frames;
+        FrameSet<kNumFrames, VDP2FrameContext> frames;
 
         /// @brief VDP2 command list.
         D3D12GraphicsCommandList cmdList;
@@ -1388,85 +1475,26 @@ struct Direct3D12VDPRenderer::Impl {
         // - CRAM converted to R8G8B8A8 colors based on the current color RAM mode
         // - Top half of raw CRAM bytes, for rotation coefficients
 
-        /// @brief CRAM color buffer.
-        D3D12Resource cramColorBuffer;
-        /// @brief CRAM color buffer SRV (offline).
-        DescriptorRange cramColorSRV;
         /// @brief CPU-side CRAM color buffer.
         CRAMColorCache cpuCRAMColorCache{};
 
-        /// @brief Raw CRAM rotation coefficients buffer.
-        D3D12Resource cramRotCoeffBuffer;
-        /// @brief Raw CRAM rotation coefficients buffer SRV (offline).
-        DescriptorRange cramRotCoeffSRV;
+        /// @brief Current CRAM generation (dirty tracking).
+        uint32 cramGeneration = 0;
 
-        /// @brief VDP2 CRAM dirty flag.
-        bool cramDirty;
-
-        /// @brief 2D texture array for the outputs of NBG0-3, RBG0-1, sprite and mesh layers (in that order).
-        /// Contains the intermediate per-layer outputs of the VDP2 rendering process.
-        D3D12Resource layerOutTexture;
-        /// @brief Layer outputs SRV (offline).
-        DescriptorRange layerOutSRV;
-        /// @brief Layer outputs UAV (offline).
-        DescriptorRange layerOutUAV;
-
-        /// @brief 2D texture array for RBG0-1 line color outputs (in that order).
-        D3D12Resource rbgLineColorOutTexture;
-        /// @brief RBG0-1 line color outputs SRV (offline).
-        DescriptorRange rbgLineColorOutSRV;
-        /// @brief RBG0-1 line color outputs UAV (offline).
-        DescriptorRange rbgLineColorOutUAV;
-
-        /// @brief Color calculation window 2D texture.
-        D3D12Resource colorCalcWindowTexture;
-        /// @brief Color calculation window SRV (offline).
-        DescriptorRange colorCalcWindowSRV;
-        /// @brief Color calculation window UAV (offline).
-        DescriptorRange colorCalcWindowUAV;
-
-        /// @brief LNCL/BACK screen buffer.
-        D3D12Resource lnclBackBuffer;
-        /// @brief LNCL/BACK screen buffer SRV (offline).
-        DescriptorRange lnclBackSRV;
         /// @brief CPU-side LNCL/BACK screen buffer (0=LNCL; 1=BACK).
         std::array<std::array<ColorR8G8B8A8, kMaxResV>, 2> cpuLnclBack{};
 
-        /// @brief VDP2 rotation parameter base values buffer.
-        D3D12Resource rotParamBasesBuffer;
-        /// @brief VDP2 rotation parameter base values buffer SRV (offline).
-        DescriptorRange rotParamBasesSRV;
         /// @brief CPU-side VDP2 rotation parameter base values.
         std::array<VDP2RotParamBase, kMaxNormalResV * 2> cpuRotParamBases{};
-
-        /// @brief VDP2 sprite attributes 2D texture array (sprite then mesh).
-        D3D12Resource spriteAttrsTexture;
-        /// @brief VDP2 sprite attributes SRV (offline).
-        DescriptorRange spriteAttrsSRV;
-        /// @brief VDP2 sprite attributes UAV (offline).
-        DescriptorRange spriteAttrsUAV;
-
-        /// @brief 2D texture for the composited VDP2 output.
-        D3D12Resource compositeOutTexture;
-        /// @brief Composited VDP2 output UAV (offline).
-        DescriptorRange compositeOutUAV;
 
         // ---------------------------------------------------------------------
 
         /// @brief Common rendering parameters, uploaded as 32-bit root constants.
         VDP2CommonRenderParams cpuCommonRenderParams{};
 
-        /// @brief Layer rendering parameters buffer.
-        D3D12Resource layerRenderParamsBuffer;
-        /// @brief Layer rendering parameters buffer SRV (offline).
-        DescriptorRange layerRenderParamsSRV;
         /// @brief CPU-side layer rendering parameters.
         VDP2LayerRenderParams cpuLayerRenderParams{};
 
-        /// @brief Layer composition parameters buffer.
-        D3D12Resource composeParamsBuffer;
-        /// @brief Layer composition parameters buffer SRV (offline).
-        DescriptorRange composeParamsSRV;
         /// @brief CPU-side layer composition parameters.
         VDP2ComposeParams cpuComposeParams{};
 
@@ -1474,28 +1502,16 @@ struct Direct3D12VDPRenderer::Impl {
         gpu::ComputeShader drawSpriteShader;
         /// @brief Root signature for drawing the sprite layer.
         D3D12RootSignature drawSpriteRootSig;
-        /// @brief Pipeline state object for drawing the sprite layer.
-        D3D12PipelineState drawSpritePSO;
-        /// @brief Descriptor range for drawing the sprite layer.
-        DescriptorRange drawSpriteDescs;
 
         /// @brief Compute shader for drawing background layers.
         gpu::ComputeShader drawBGsShader;
         /// @brief Root signature for drawing background layers.
         D3D12RootSignature drawBGsRootSig;
-        /// @brief Pipeline state object for drawing background layers.
-        D3D12PipelineState drawBGsPSO;
-        /// @brief Descriptor range for drawing background layers.
-        DescriptorRange drawBGsDescs;
 
         /// @brief Compute shader for compositing layers.
         gpu::ComputeShader composeShader;
         /// @brief Root signature for compositing layers.
         D3D12RootSignature composeRootSig;
-        /// @brief Pipeline state object for compositing layers.
-        D3D12PipelineState composePSO;
-        /// @brief Descriptor range for compositing layers.
-        DescriptorRange composeDescs;
 
         // ---------------------------------------------------------------------
         // Rendering state
@@ -1544,7 +1560,7 @@ struct Direct3D12VDPRenderer::Impl {
         {
             D3D12_DESCRIPTOR_HEAP_DESC desc{
                 .Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                .NumDescriptors = 64,
+                .NumDescriptors = 64 * kNumFrames,
                 .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
             };
             if (HRESULT hr = resourceHeap.Create(device, desc); FAILED(hr)) {
@@ -1555,6 +1571,7 @@ struct Direct3D12VDPRenderer::Impl {
             resourceHeapAlloc.Bind(resourceHeap);
 
             desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+            desc.NumDescriptors = 128 * kNumFrames;
             if (HRESULT hr = offlineHeap.Create(device, desc); FAILED(hr)) {
                 return util::ErrorMessage{
                     fmt::format("Could not create VDP renderer offline CBV/SRV/UAV heap, error code {:X}", (uint32)hr)};
@@ -1563,7 +1580,8 @@ struct Direct3D12VDPRenderer::Impl {
             offlineHeapAlloc.Bind(offlineHeap);
         }
 
-        // -------------------------------------------------------------------------------------------------------------
+        // =============================================================================================================
+        // VDP1
 
         // VDP1 command allocators and list
         for (int i = 0; i < vdp1.frames.Count(); ++i) {
@@ -1592,7 +1610,11 @@ struct Direct3D12VDPRenderer::Impl {
             vdp1.uploadBuffer.GetBufferResource()->SetName(L"[Ymir-VDP1] Upload buffer");
         }
 
+        // =============================================================================================================
+        // VDP2
+
         // -------------------------------------------------------------------------------------------------------------
+        // Common resources
 
         // VDP2 command allocators and list
         for (int i = 0; i < vdp2.frames.Count(); ++i) {
@@ -1652,470 +1674,14 @@ struct Direct3D12VDPRenderer::Impl {
             device->CreateShaderResourceView(vdp2.vramBuffer.GetPointer(), &srvDesc, vdp2.vramSRV.cpuHandle);
         }
 
-        // VDP2 CRAM color buffer
-        {
-            auto builder = vdp2.cramColorBuffer.BufferBuilder(kVDP2CRAMColorBufferSize);
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create VDP2 CRAM color buffer, error code {:X}", (uint32)hr)};
-            }
-            vdp2.cramColorBuffer->SetName(L"[Ymir-VDP2] CRAM color buffer");
+        // -------------------------------------------------------------------------------------------------------------
+        // Shaders and root signatures
 
-            vdp2.barrierTracker.InitializeBuffer(
-                vdp2.cramColorBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.cramColorSRV)) {
-                return util::ErrorMessage{"Could not allocate VDP2 CRAM color buffer SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = DXGI_FORMAT_R8G8B8A8_UINT,
-                .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Buffer =
-                    {
-                        .FirstElement = 0,
-                        .NumElements = kVDP2CRAMColorBufferSize / sizeof(uint32),
-                        .StructureByteStride = 0,
-                        .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.cramColorBuffer.GetPointer(), &srvDesc, vdp2.cramColorSRV.cpuHandle);
-        }
-
-        // VDP2 CRAM rotation coefficients buffer
-        {
-
-            auto builder = vdp2.cramRotCoeffBuffer.BufferBuilder(kVDP2CRAMRotCoeffBufferSize);
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format(
-                    "Could not create VDP2 CRAM rotation coefficients buffer, error code {:X}", (uint32)hr)};
-            }
-            vdp2.cramRotCoeffBuffer->SetName(L"[Ymir-VDP2] CRAM rotation coefficients buffer");
-
-            vdp2.barrierTracker.InitializeBuffer(
-                vdp2.cramRotCoeffBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.cramRotCoeffSRV)) {
-                return util::ErrorMessage{"Could not allocate VDP2 CRAM rotation coefficients buffer SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = DXGI_FORMAT_R32_TYPELESS,
-                .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Buffer =
-                    {
-                        .FirstElement = 0,
-                        .NumElements = kVDP2CRAMRotCoeffBufferSize / sizeof(uint32),
-                        .StructureByteStride = 0,
-                        .Flags = D3D12_BUFFER_SRV_FLAG_RAW,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.cramRotCoeffBuffer.GetPointer(), &srvDesc,
-                                             vdp2.cramRotCoeffSRV.cpuHandle);
-        }
-
-        // Layer outputs 2D texture array
-        {
-            // The array contains:
-            //   [0..3] NBG0-3
-            //   [4..5] RBG0-1
-            //      [6] Sprite
-            //      [7] Transparent meshes
-            // The alpha channel is used for pixel attributes:
-            //   [0..2] Priority
-            //      [3] (Sprite only) Color MSB
-            //      [4] (Sprite only) Shadow/window flag - sprite data SD = 1
-            //      [5] (Sprite only) Normal shadow flag - sprite data DC = ...111110
-            //      [6] Special color calculation flag
-            //      [7] Transparent flag (0=opaque, 1=transparent)
-            static constexpr UINT16 kNumLayers = 4 + 2 + 1 + 1;
-            static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UINT;
-
-            auto builder = vdp2.layerOutTexture.Texture2DBuilder(kMaxResH, kMaxResV, kNumLayers);
-            builder.Format(kFormat);
-            builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create layer outputs texture array, error code {:X}", (uint32)hr)};
-            }
-            vdp2.layerOutTexture->SetName(L"[Ymir-VDP2] Layer outputs texture array");
-
-            vdp2.barrierTracker.InitializeTexture(
-                vdp2.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.layerOutSRV)) {
-                return util::ErrorMessage{"Could not allocate layer outputs texture array SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = kFormat,
-                .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Texture2DArray =
-                    {
-                        .MostDetailedMip = 0,
-                        .MipLevels = 1,
-                        .FirstArraySlice = 0,
-                        .ArraySize = kNumLayers,
-                        .PlaneSlice = 0,
-                        .ResourceMinLODClamp = 0.0f,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.layerOutTexture.GetPointer(), &srvDesc, vdp2.layerOutSRV.cpuHandle);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.layerOutUAV)) {
-                return util::ErrorMessage{"Could not allocate layer outputs texture array UAV"};
-            }
-            const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
-                .Format = kFormat,
-                .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
-                .Texture2DArray =
-                    {
-                        .MipSlice = 0,
-                        .FirstArraySlice = 0,
-                        .ArraySize = kNumLayers,
-                        .PlaneSlice = 0,
-                    },
-            };
-            device->CreateUnorderedAccessView(vdp2.layerOutTexture.GetPointer(), nullptr, &uavDesc,
-                                              vdp2.layerOutUAV.cpuHandle);
-        }
-
-        // RBG0-1 line color outputs 2D texture array
-        {
-            static constexpr UINT16 kNumLayers = 2;
-            static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UINT;
-
-            auto builder = vdp2.rbgLineColorOutTexture.Texture2DBuilder(kMaxNormalResH, kMaxNormalResV, kNumLayers);
-            builder.Format(kFormat);
-            builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create RBG line color outputs texture array, error code {:X}", (uint32)hr)};
-            }
-            vdp2.rbgLineColorOutTexture->SetName(L"[Ymir-VDP2] RBG line color outputs texture array");
-
-            vdp2.barrierTracker.InitializeTexture(
-                vdp2.rbgLineColorOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.rbgLineColorOutSRV)) {
-                return util::ErrorMessage{"Could not allocate RBG line color outputs texture array SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = kFormat,
-                .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Texture2DArray =
-                    {
-                        .MostDetailedMip = 0,
-                        .MipLevels = 1,
-                        .FirstArraySlice = 0,
-                        .ArraySize = kNumLayers,
-                        .PlaneSlice = 0,
-                        .ResourceMinLODClamp = 0.0f,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.rbgLineColorOutTexture.GetPointer(), &srvDesc,
-                                             vdp2.rbgLineColorOutSRV.cpuHandle);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.rbgLineColorOutUAV)) {
-                return util::ErrorMessage{"Could not allocate RBG line color outputs texture array UAV"};
-            }
-            const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
-                .Format = kFormat,
-                .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
-                .Texture2DArray =
-                    {
-                        .MipSlice = 0,
-                        .FirstArraySlice = 0,
-                        .ArraySize = kNumLayers,
-                        .PlaneSlice = 0,
-                    },
-            };
-            device->CreateUnorderedAccessView(vdp2.rbgLineColorOutTexture.GetPointer(), nullptr, &uavDesc,
-                                              vdp2.rbgLineColorOutUAV.cpuHandle);
-        }
-
-        // Color calculation window texture
-        {
-            static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8_UINT;
-
-            auto builder = vdp2.colorCalcWindowTexture.Texture2DBuilder(kMaxResH, kMaxResV);
-            builder.Format(kFormat);
-            builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create color calculation window texture, error code {:X}", (uint32)hr)};
-            }
-            vdp2.colorCalcWindowTexture->SetName(L"[Ymir-VDP2] Color calculation window texture");
-
-            vdp2.barrierTracker.InitializeTexture(
-                vdp2.colorCalcWindowTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.colorCalcWindowSRV)) {
-                return util::ErrorMessage{"Could not allocate color calculation window texture SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = kFormat,
-                .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Texture2D =
-                    {
-                        .MostDetailedMip = 0,
-                        .MipLevels = 1,
-                        .PlaneSlice = 0,
-                        .ResourceMinLODClamp = 0.0f,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.colorCalcWindowTexture.GetPointer(), &srvDesc,
-                                             vdp2.colorCalcWindowSRV.cpuHandle);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.colorCalcWindowUAV)) {
-                return util::ErrorMessage{"Could not allocate color calculation window texture UAV"};
-            }
-            const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
-                .Format = kFormat,
-                .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
-                .Texture2D =
-                    {
-                        .MipSlice = 0,
-                        .PlaneSlice = 0,
-                    },
-            };
-            device->CreateUnorderedAccessView(vdp2.colorCalcWindowTexture.GetPointer(), nullptr, &uavDesc,
-                                              vdp2.colorCalcWindowUAV.cpuHandle);
-        }
-
-        // LNCL/BACK screen buffer
-        {
-            static constexpr size_t kNumEntries = 2 * kMaxResV;
-            static constexpr size_t kEntrySize = sizeof(ColorR8G8B8A8);
-            auto builder = vdp2.lnclBackBuffer.BufferBuilder(sizeof(vdp2.cpuLnclBack));
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create LNCL/BACK screen buffer, error code {:X}", (uint32)hr)};
-            }
-            vdp2.lnclBackBuffer->SetName(L"[Ymir-VDP2] LNCL/BACK screen buffer");
-
-            vdp2.barrierTracker.InitializeBuffer(
-                vdp2.lnclBackBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.lnclBackSRV)) {
-                return util::ErrorMessage{"Could not allocate LNCL/BACK screen buffer SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = DXGI_FORMAT_UNKNOWN,
-                .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Buffer =
-                    {
-                        .FirstElement = 0,
-                        .NumElements = kNumEntries,
-                        .StructureByteStride = kEntrySize,
-                        .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.lnclBackBuffer.GetPointer(), &srvDesc, vdp2.lnclBackSRV.cpuHandle);
-        }
-
-        // Composited VDP2 output texture
-        {
-            static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-
-            auto builder = vdp2.compositeOutTexture.Texture2DBuilder(kMaxResH, kMaxResV);
-            builder.Format(kFormat);
-            builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create composited output texture, error code {:X}", (uint32)hr)};
-            }
-            vdp2.compositeOutTexture->SetName(L"[Ymir-VDP2] Composited output texture");
-
-            // TODO: initialize barrier tracking for this resource if needed
-            // vdp2.barrierTracker.InitializeTexture(
-            //     vdp2.compositeOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            //     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
-            //     D3D12_BARRIER_LAYOUT_COMMON);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.compositeOutUAV)) {
-                return util::ErrorMessage{"Could not create composited output texture UAV"};
-            }
-            const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
-                .Format = kFormat,
-                .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
-                .Texture2D =
-                    {
-                        .MipSlice = 0,
-                        .PlaneSlice = 0,
-                    },
-            };
-            device->CreateUnorderedAccessView(vdp2.compositeOutTexture.GetPointer(), nullptr, &uavDesc,
-                                              vdp2.compositeOutUAV.cpuHandle);
-        }
-
-        // VDP2 rotation parameter base values buffer
-        {
-            static constexpr size_t kRotParamBasesCount = kMaxNormalResV * 2;
-            auto builder = vdp2.rotParamBasesBuffer.BufferBuilder(sizeof(vdp2.cpuRotParamBases));
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format(
-                    "Could not create VDP2 rotation parameter base values buffer, error code {:X}", (uint32)hr)};
-            }
-            vdp2.rotParamBasesBuffer->SetName(L"[Ymir-VDP2] Rotation parameter base values buffer");
-
-            vdp2.barrierTracker.InitializeBuffer(
-                vdp2.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.rotParamBasesSRV)) {
-                return util::ErrorMessage{"Could not allocate VDP2 rotation parameter base values buffer SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = DXGI_FORMAT_UNKNOWN,
-                .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Buffer =
-                    {
-                        .FirstElement = 0,
-                        .NumElements = kRotParamBasesCount,
-                        .StructureByteStride = sizeof(VDP2RotParamBase),
-                        .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.rotParamBasesBuffer.GetPointer(), &srvDesc,
-                                             vdp2.rotParamBasesSRV.cpuHandle);
-        }
-
-        // VDP2 sprite attributes 2D texture array
-        {
-            static constexpr UINT16 kNumLayers = 2;
-            static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8_UINT;
-
-            auto builder = vdp2.spriteAttrsTexture.Texture2DBuilder(kMaxResH, kMaxResV, kNumLayers);
-            builder.Format(kFormat);
-            builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create sprite attributes texture array, error code {:X}", (uint32)hr)};
-            }
-            vdp2.spriteAttrsTexture->SetName(L"[Ymir-VDP2] Sprite attributes texture array");
-
-            vdp2.barrierTracker.InitializeTexture(
-                vdp2.spriteAttrsTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.spriteAttrsSRV)) {
-                return util::ErrorMessage{"Could not allocate sprite attributes texture array SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = kFormat,
-                .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Texture2DArray =
-                    {
-                        .MostDetailedMip = 0,
-                        .MipLevels = 1,
-                        .FirstArraySlice = 0,
-                        .ArraySize = kNumLayers,
-                        .PlaneSlice = 0,
-                        .ResourceMinLODClamp = 0.0f,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.spriteAttrsTexture.GetPointer(), &srvDesc,
-                                             vdp2.spriteAttrsSRV.cpuHandle);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.spriteAttrsUAV)) {
-                return util::ErrorMessage{"Could not allocate sprite attributes texture array UAV"};
-            }
-            const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
-                .Format = kFormat,
-                .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
-                .Texture2DArray =
-                    {
-                        .MipSlice = 0,
-                        .FirstArraySlice = 0,
-                        .ArraySize = kNumLayers,
-                        .PlaneSlice = 0,
-                    },
-            };
-            device->CreateUnorderedAccessView(vdp2.spriteAttrsTexture.GetPointer(), nullptr, &uavDesc,
-                                              vdp2.spriteAttrsUAV.cpuHandle);
-        }
-
-        // VDP2 layer rendering parameters buffer
-        {
-            auto builder = vdp2.layerRenderParamsBuffer.BufferBuilder(sizeof(vdp2.cpuLayerRenderParams));
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format(
-                    "Could not create VDP2 layer rendering parameters buffer, error code {:X}", (uint32)hr)};
-            }
-            vdp2.layerRenderParamsBuffer->SetName(L"[Ymir-VDP2] Layer rendering parameters buffer");
-
-            vdp2.barrierTracker.InitializeBuffer(
-                vdp2.layerRenderParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.layerRenderParamsSRV)) {
-                return util::ErrorMessage{"Could not allocate VDP2 layer rendering parameters buffer SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = DXGI_FORMAT_UNKNOWN,
-                .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Buffer =
-                    {
-                        .FirstElement = 0,
-                        .NumElements = 1,
-                        .StructureByteStride = sizeof(vdp2.cpuLayerRenderParams),
-                        .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.layerRenderParamsBuffer.GetPointer(), &srvDesc,
-                                             vdp2.layerRenderParamsSRV.cpuHandle);
-        }
-
-        // VDP2 layer compositing parameters buffer
-        {
-            auto builder = vdp2.composeParamsBuffer.BufferBuilder(sizeof(vdp2.cpuComposeParams));
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format(
-                    "Could not create VDP2 layer compositing parameters buffer, error code {:X}", (uint32)hr)};
-            }
-            vdp2.composeParamsBuffer->SetName(L"[Ymir-VDP2] Layer compositing parameters buffer");
-
-            vdp2.barrierTracker.InitializeBuffer(
-                vdp2.composeParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-
-            if (!offlineHeapAlloc.Allocate(vdp2.composeParamsSRV)) {
-                return util::ErrorMessage{"Could not allocate VDP2 layer compositing parameters buffer SRV"};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = DXGI_FORMAT_UNKNOWN,
-                .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Buffer =
-                    {
-                        .FirstElement = 0,
-                        .NumElements = 1,
-                        .StructureByteStride = sizeof(vdp2.cpuComposeParams),
-                        .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
-                    },
-            };
-            device->CreateShaderResourceView(vdp2.composeParamsBuffer.GetPointer(), &srvDesc,
-                                             vdp2.composeParamsSRV.cpuHandle);
-        }
-
-        // Build shader, PSO and related resources for drawing the sprite layer
+        // Sprite layer rendering
         {
             auto shaderBlobResult = LoadShader("src/vdp/cs_vdp2_render_sprite.cso");
             if (!shaderBlobResult) {
-                return util::ErrorMessage{fmt::format("Could not load VDP2 sprite layer drawing compute shader: {}",
+                return util::ErrorMessage{fmt::format("Could not load VDP2 sprite layer rendering compute shader: {}",
                                                       shaderBlobResult.Error().message)};
             }
             vdp2.drawSpriteShader.format = gpu::ShaderBytecodeFormat::DXIL;
@@ -2123,8 +1689,8 @@ struct Direct3D12VDPRenderer::Impl {
             vdp2.drawSpriteShader.entrypoint = kCSEntrypoint;
             auto result = gpu::ValidateShader(vdp2.drawSpriteShader);
             if (!result) {
-                return util::ErrorMessage{fmt::format("VDP2 sprite layer drawing compute shader validation failed: {}",
-                                                      result.Error().message)};
+                return util::ErrorMessage{fmt::format(
+                    "VDP2 sprite layer rendering compute shader validation failed: {}", result.Error().message)};
             }
 
             auto rootSigBuilder = vdp2.drawSpriteRootSig.Builder();
@@ -2134,40 +1700,12 @@ struct Direct3D12VDPRenderer::Impl {
                 .AddUAVs(2, 0);
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{fmt::format(
-                    "Could not build VDP2 sprite layer drawing root signature, error code {:X}", (uint32)hr)};
+                    "Could not build VDP2 sprite layer rendering root signature, error code {:X}", (uint32)hr)};
             }
-            vdp2.drawSpriteRootSig->SetName(L"[Ymir-VDP2] Sprite layer drawing root signature");
-
-            const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
-                .pRootSignature = vdp2.drawSpriteRootSig.GetPointer(),
-                .CS = ToShaderBytecode(vdp2.drawSpriteShader),
-            };
-            if (HRESULT hr = vdp2.drawSpritePSO.CreateCompute(device, psoDesc); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format(
-                    "Could not build VDP2 sprite layer drawing pipeline state object, error code {:X}", (uint32)hr)};
-            }
-            vdp2.drawSpritePSO->SetName(L"[Ymir-VDP2] Sprite layer drawing pipeline state object");
-
-            const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
-                vdp2.layerRenderParamsSRV.cpuHandle,
-                vdp2.vramSRV.cpuHandle,
-                vdp2.cramColorSRV.cpuHandle,
-                vdp2.rotParamBasesSRV.cpuHandle,
-                /* TODO: vdp1.spriteFBSRV.cpuHandle,*/ vdp2.layerOutUAV.cpuHandle,
-                vdp2.spriteAttrsUAV.cpuHandle,
-            };
-            std::array<UINT, std::size(srcHandles)> srcSizes{};
-            srcSizes.fill(1);
-
-            if (!resourceHeapAlloc.Allocate(vdp2.drawSpriteDescs, std::size(srcHandles))) {
-                return util::ErrorMessage{"Could not allocate VDP2 sprite layer drawing descriptors"};
-            }
-
-            device->CopyDescriptors(1, &vdp2.drawSpriteDescs.cpuHandle, &vdp2.drawSpriteDescs.count,
-                                    std::size(srcHandles), srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
+            vdp2.drawSpriteRootSig->SetName(L"[Ymir-VDP2] Sprite layer rendering root signature");
         }
 
-        // Build shader, PSO and related resources for drawing layers
+        // Layer rendering
         {
             auto shaderBlobResult = LoadShader("src/vdp/cs_vdp2_render_bgs.cso");
             if (!shaderBlobResult) {
@@ -2193,36 +1731,9 @@ struct Direct3D12VDPRenderer::Impl {
                     fmt::format("Could not build VDP2 layer rendering root signature, error code {:X}", (uint32)hr)};
             }
             vdp2.drawBGsRootSig->SetName(L"[Ymir-VDP2] Layer rendering root signature");
-
-            const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
-                .pRootSignature = vdp2.drawBGsRootSig.GetPointer(),
-                .CS = ToShaderBytecode(vdp2.drawBGsShader),
-            };
-            if (HRESULT hr = vdp2.drawBGsPSO.CreateCompute(device, psoDesc); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format(
-                    "Could not build VDP2 layer rendering pipeline state object, error code {:X}", (uint32)hr)};
-            }
-            vdp2.drawBGsPSO->SetName(L"[Ymir-VDP2] Layer rendering pipeline state object");
-
-            const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
-                vdp2.layerRenderParamsSRV.cpuHandle, vdp2.vramSRV.cpuHandle,
-                vdp2.cramColorSRV.cpuHandle,         vdp2.cramRotCoeffSRV.cpuHandle,
-                vdp2.rotParamBasesSRV.cpuHandle,     vdp2.spriteAttrsSRV.cpuHandle,
-                vdp2.layerOutUAV.cpuHandle,          vdp2.rbgLineColorOutUAV.cpuHandle,
-                vdp2.colorCalcWindowUAV.cpuHandle,
-            };
-            std::array<UINT, std::size(srcHandles)> srcSizes{};
-            srcSizes.fill(1);
-
-            if (!resourceHeapAlloc.Allocate(vdp2.drawBGsDescs, std::size(srcHandles))) {
-                return util::ErrorMessage{"Could not allocate VDP2 layer rendering descriptors"};
-            }
-
-            device->CopyDescriptors(1, &vdp2.drawBGsDescs.cpuHandle, &vdp2.drawBGsDescs.count, std::size(srcHandles),
-                                    srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
         }
 
-        // Build shader, PSO and related resources for compositing layers
+        // Layer compositing
         {
             auto shaderBlobResult = LoadShader("src/vdp/cs_vdp2_compose.cso");
             if (!shaderBlobResult) {
@@ -2248,31 +1759,595 @@ struct Direct3D12VDPRenderer::Impl {
                     fmt::format("Could not build VDP2 layer compositing root signature, error code {:X}", (uint32)hr)};
             }
             vdp2.composeRootSig->SetName(L"[Ymir-VDP2] Layer compositing root signature");
+        }
 
-            const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
-                .pRootSignature = vdp2.composeRootSig.GetPointer(),
-                .CS = ToShaderBytecode(vdp2.composeShader),
-            };
-            if (HRESULT hr = vdp2.composePSO.CreateCompute(device, psoDesc); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format(
-                    "Could not build VDP2 layer compositing pipeline state object, error code {:X}", (uint32)hr)};
+        // -------------------------------------------------------------------------------------------------------------
+        // Per-frame VDP2 resources
+
+        for (int i = 0; i < vdp2.frames.Count(); ++i) {
+            VDP2FrameContext &frameCtx = vdp2.frames[i];
+            // VDP2 CRAM color buffer
+            {
+                auto builder = frameCtx.cramColorBuffer.BufferBuilder(kVDP2CRAMColorBufferSize);
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not create VDP2 CRAM color buffer #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.cramColorBuffer->SetName(fmt::format(L"[Ymir-VDP2] CRAM color buffer #{}", i).c_str());
+
+                vdp2.barrierTracker.InitializeBuffer(
+                    frameCtx.cramColorBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.cramColorSRV)) {
+                    return util::ErrorMessage{fmt::format("Could not allocate VDP2 CRAM color buffer SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = DXGI_FORMAT_R8G8B8A8_UINT,
+                    .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = kVDP2CRAMColorBufferSize / sizeof(uint32),
+                            .StructureByteStride = 0,
+                            .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.cramColorBuffer.GetPointer(), &srvDesc,
+                                                 frameCtx.cramColorSRV.cpuHandle);
             }
-            vdp2.composePSO->SetName(L"[Ymir-VDP2] Layer compositing pipeline state object");
 
-            const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
-                vdp2.composeParamsSRV.cpuHandle,   vdp2.layerOutSRV.cpuHandle,    vdp2.lnclBackSRV.cpuHandle,
-                vdp2.rbgLineColorOutSRV.cpuHandle, vdp2.spriteAttrsSRV.cpuHandle, vdp2.colorCalcWindowSRV.cpuHandle,
-                vdp2.compositeOutUAV.cpuHandle,
-            };
-            std::array<UINT, std::size(srcHandles)> srcSizes{};
-            srcSizes.fill(1);
+            // VDP2 CRAM rotation coefficients buffer
+            {
 
-            if (!resourceHeapAlloc.Allocate(vdp2.composeDescs, std::size(srcHandles))) {
-                return util::ErrorMessage{"Could not allocate VDP2 layer compositing descriptors"};
+                auto builder = frameCtx.cramRotCoeffBuffer.BufferBuilder(kVDP2CRAMRotCoeffBufferSize);
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not create VDP2 CRAM rotation coefficients buffer #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.cramRotCoeffBuffer->SetName(
+                    fmt::format(L"[Ymir-VDP2] CRAM rotation coefficients buffer #{}", i).c_str());
+
+                vdp2.barrierTracker.InitializeBuffer(
+                    frameCtx.cramRotCoeffBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.cramRotCoeffSRV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP2 CRAM rotation coefficients buffer SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = DXGI_FORMAT_R32_TYPELESS,
+                    .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = kVDP2CRAMRotCoeffBufferSize / sizeof(uint32),
+                            .StructureByteStride = 0,
+                            .Flags = D3D12_BUFFER_SRV_FLAG_RAW,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.cramRotCoeffBuffer.GetPointer(), &srvDesc,
+                                                 frameCtx.cramRotCoeffSRV.cpuHandle);
             }
 
-            device->CopyDescriptors(1, &vdp2.composeDescs.cpuHandle, &vdp2.composeDescs.count, std::size(srcHandles),
-                                    srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
+            // Layer outputs 2D texture array
+            {
+                // The array contains:
+                //   [0..3] NBG0-3
+                //   [4..5] RBG0-1
+                //      [6] Sprite
+                //      [7] Transparent meshes
+                // The alpha channel is used for pixel attributes:
+                //   [0..2] Priority
+                //      [6] Color format (0=RGB, 1=Palette)
+                //      [7] Special color calculation flag
+                static constexpr UINT16 kNumLayers = 4 + 2 + 1 + 1;
+                static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UINT;
+
+                auto builder = frameCtx.layerOutTexture.Texture2DBuilder(kMaxResH, kMaxResV, kNumLayers);
+                builder.Format(kFormat);
+                builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not create layer outputs texture array #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.layerOutTexture->SetName(
+                    fmt::format(L"[Ymir-VDP2] Layer outputs texture array #{}", i).c_str());
+
+                vdp2.barrierTracker.InitializeTexture(
+                    frameCtx.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+                    D3D12_BARRIER_LAYOUT_COMMON);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.layerOutSRV)) {
+                    return util::ErrorMessage{fmt::format("Could not allocate layer outputs texture array SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = kFormat,
+                    .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Texture2DArray =
+                        {
+                            .MostDetailedMip = 0,
+                            .MipLevels = 1,
+                            .FirstArraySlice = 0,
+                            .ArraySize = kNumLayers,
+                            .PlaneSlice = 0,
+                            .ResourceMinLODClamp = 0.0f,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.layerOutTexture.GetPointer(), &srvDesc,
+                                                 frameCtx.layerOutSRV.cpuHandle);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.layerOutUAV)) {
+                    return util::ErrorMessage{fmt::format("Could not allocate layer outputs texture array UAV #{}", i)};
+                }
+                const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+                    .Format = kFormat,
+                    .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
+                    .Texture2DArray =
+                        {
+                            .MipSlice = 0,
+                            .FirstArraySlice = 0,
+                            .ArraySize = kNumLayers,
+                            .PlaneSlice = 0,
+                        },
+                };
+                device->CreateUnorderedAccessView(frameCtx.layerOutTexture.GetPointer(), nullptr, &uavDesc,
+                                                  frameCtx.layerOutUAV.cpuHandle);
+            }
+
+            // RBG0-1 line color outputs 2D texture array
+            {
+                static constexpr UINT16 kNumLayers = 2;
+                static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UINT;
+
+                auto builder =
+                    frameCtx.rbgLineColorOutTexture.Texture2DBuilder(kMaxNormalResH, kMaxNormalResV, kNumLayers);
+                builder.Format(kFormat);
+                builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not create RBG line color outputs texture array #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.rbgLineColorOutTexture->SetName(
+                    fmt::format(L"[Ymir-VDP2] RBG line color outputs texture array #{}", i).c_str());
+
+                vdp2.barrierTracker.InitializeTexture(
+                    frameCtx.rbgLineColorOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+                    D3D12_BARRIER_LAYOUT_COMMON);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.rbgLineColorOutSRV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate RBG line color outputs texture array SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = kFormat,
+                    .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Texture2DArray =
+                        {
+                            .MostDetailedMip = 0,
+                            .MipLevels = 1,
+                            .FirstArraySlice = 0,
+                            .ArraySize = kNumLayers,
+                            .PlaneSlice = 0,
+                            .ResourceMinLODClamp = 0.0f,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.rbgLineColorOutTexture.GetPointer(), &srvDesc,
+                                                 frameCtx.rbgLineColorOutSRV.cpuHandle);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.rbgLineColorOutUAV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate RBG line color outputs texture array UAV #{}", i)};
+                }
+                const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+                    .Format = kFormat,
+                    .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
+                    .Texture2DArray =
+                        {
+                            .MipSlice = 0,
+                            .FirstArraySlice = 0,
+                            .ArraySize = kNumLayers,
+                            .PlaneSlice = 0,
+                        },
+                };
+                device->CreateUnorderedAccessView(frameCtx.rbgLineColorOutTexture.GetPointer(), nullptr, &uavDesc,
+                                                  frameCtx.rbgLineColorOutUAV.cpuHandle);
+            }
+
+            // Color calculation window texture
+            {
+                static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8_UINT;
+
+                auto builder = frameCtx.colorCalcWindowTexture.Texture2DBuilder(kMaxResH, kMaxResV);
+                builder.Format(kFormat);
+                builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not create color calculation window texture #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.colorCalcWindowTexture->SetName(
+                    fmt::format(L"[Ymir-VDP2] Color calculation window texture #{}", i).c_str());
+
+                vdp2.barrierTracker.InitializeTexture(
+                    frameCtx.colorCalcWindowTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+                    D3D12_BARRIER_LAYOUT_COMMON);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.colorCalcWindowSRV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate color calculation window texture SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = kFormat,
+                    .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Texture2D =
+                        {
+                            .MostDetailedMip = 0,
+                            .MipLevels = 1,
+                            .PlaneSlice = 0,
+                            .ResourceMinLODClamp = 0.0f,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.colorCalcWindowTexture.GetPointer(), &srvDesc,
+                                                 frameCtx.colorCalcWindowSRV.cpuHandle);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.colorCalcWindowUAV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate color calculation window texture UAV #{}", i)};
+                }
+                const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+                    .Format = kFormat,
+                    .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
+                    .Texture2D =
+                        {
+                            .MipSlice = 0,
+                            .PlaneSlice = 0,
+                        },
+                };
+                device->CreateUnorderedAccessView(frameCtx.colorCalcWindowTexture.GetPointer(), nullptr, &uavDesc,
+                                                  frameCtx.colorCalcWindowUAV.cpuHandle);
+            }
+
+            // LNCL/BACK screen buffer
+            {
+                static constexpr size_t kNumEntries = 2 * kMaxResV;
+                static constexpr size_t kEntrySize = sizeof(ColorR8G8B8A8);
+                auto builder = frameCtx.lnclBackBuffer.BufferBuilder(sizeof(vdp2.cpuLnclBack));
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not create LNCL/BACK screen buffer #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.lnclBackBuffer->SetName(fmt::format(L"[Ymir-VDP2] LNCL/BACK screen buffer #{}", i).c_str());
+
+                vdp2.barrierTracker.InitializeBuffer(
+                    frameCtx.lnclBackBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.lnclBackSRV)) {
+                    return util::ErrorMessage{fmt::format("Could not allocate LNCL/BACK screen buffer SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = DXGI_FORMAT_UNKNOWN,
+                    .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = kNumEntries,
+                            .StructureByteStride = kEntrySize,
+                            .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.lnclBackBuffer.GetPointer(), &srvDesc,
+                                                 frameCtx.lnclBackSRV.cpuHandle);
+            }
+
+            // Composited VDP2 output texture
+            {
+                static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+                auto builder = frameCtx.compositeOutTexture.Texture2DBuilder(kMaxResH, kMaxResV);
+                builder.Format(kFormat);
+                builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not create composited output texture #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.compositeOutTexture->SetName(
+                    fmt::format(L"[Ymir-VDP2] Composited output texture #{}", i).c_str());
+
+                // TODO: initialize barrier tracking for this resource if needed
+                // vdp2.barrierTracker.InitializeTexture(
+                //     frameCtx.compositeOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                //     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+                //     D3D12_BARRIER_LAYOUT_COMMON);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.compositeOutUAV)) {
+                    return util::ErrorMessage{fmt::format("Could not create composited output texture UAV #{}", i)};
+                }
+                const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+                    .Format = kFormat,
+                    .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
+                    .Texture2D =
+                        {
+                            .MipSlice = 0,
+                            .PlaneSlice = 0,
+                        },
+                };
+                device->CreateUnorderedAccessView(frameCtx.compositeOutTexture.GetPointer(), nullptr, &uavDesc,
+                                                  frameCtx.compositeOutUAV.cpuHandle);
+            }
+
+            // VDP2 rotation parameter base values buffer
+            {
+                static constexpr size_t kRotParamBasesCount = kMaxNormalResV * 2;
+                auto builder = frameCtx.rotParamBasesBuffer.BufferBuilder(sizeof(vdp2.cpuRotParamBases));
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not create VDP2 rotation parameter base values buffer #{}, error code {:X}",
+                                    i, (uint32)hr)};
+                }
+                frameCtx.rotParamBasesBuffer->SetName(
+                    fmt::format(L"[Ymir-VDP2] Rotation parameter base values buffer #{}", i).c_str());
+
+                vdp2.barrierTracker.InitializeBuffer(
+                    frameCtx.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.rotParamBasesSRV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP2 rotation parameter base values buffer SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = DXGI_FORMAT_UNKNOWN,
+                    .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = kRotParamBasesCount,
+                            .StructureByteStride = sizeof(VDP2RotParamBase),
+                            .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.rotParamBasesBuffer.GetPointer(), &srvDesc,
+                                                 frameCtx.rotParamBasesSRV.cpuHandle);
+            }
+
+            // VDP2 sprite attributes 2D texture array
+            {
+                static constexpr UINT16 kNumLayers = 2;
+                static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8_UINT;
+
+                auto builder = frameCtx.spriteAttrsTexture.Texture2DBuilder(kMaxResH, kMaxResV, kNumLayers);
+                builder.Format(kFormat);
+                builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not create sprite attributes texture array #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.spriteAttrsTexture->SetName(
+                    fmt::format(L"[Ymir-VDP2] Sprite attributes texture array #{}", i).c_str());
+
+                vdp2.barrierTracker.InitializeTexture(
+                    frameCtx.spriteAttrsTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+                    D3D12_BARRIER_LAYOUT_COMMON);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.spriteAttrsSRV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate sprite attributes texture array SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = kFormat,
+                    .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Texture2DArray =
+                        {
+                            .MostDetailedMip = 0,
+                            .MipLevels = 1,
+                            .FirstArraySlice = 0,
+                            .ArraySize = kNumLayers,
+                            .PlaneSlice = 0,
+                            .ResourceMinLODClamp = 0.0f,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.spriteAttrsTexture.GetPointer(), &srvDesc,
+                                                 frameCtx.spriteAttrsSRV.cpuHandle);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.spriteAttrsUAV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate sprite attributes texture array UAV #{}", i)};
+                }
+                const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+                    .Format = kFormat,
+                    .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY,
+                    .Texture2DArray =
+                        {
+                            .MipSlice = 0,
+                            .FirstArraySlice = 0,
+                            .ArraySize = kNumLayers,
+                            .PlaneSlice = 0,
+                        },
+                };
+                device->CreateUnorderedAccessView(frameCtx.spriteAttrsTexture.GetPointer(), nullptr, &uavDesc,
+                                                  frameCtx.spriteAttrsUAV.cpuHandle);
+            }
+
+            // VDP2 layer rendering parameters buffer
+            {
+                auto builder = frameCtx.layerRenderParamsBuffer.BufferBuilder(sizeof(vdp2.cpuLayerRenderParams));
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not create VDP2 layer rendering parameters buffer #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.layerRenderParamsBuffer->SetName(
+                    fmt::format(L"[Ymir-VDP2] Layer rendering parameters buffer #{}", i).c_str());
+
+                vdp2.barrierTracker.InitializeBuffer(
+                    frameCtx.layerRenderParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.layerRenderParamsSRV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP2 layer rendering parameters buffer SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = DXGI_FORMAT_UNKNOWN,
+                    .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = 1,
+                            .StructureByteStride = sizeof(vdp2.cpuLayerRenderParams),
+                            .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.layerRenderParamsBuffer.GetPointer(), &srvDesc,
+                                                 frameCtx.layerRenderParamsSRV.cpuHandle);
+            }
+
+            // VDP2 layer compositing parameters buffer
+            {
+                auto builder = frameCtx.composeParamsBuffer.BufferBuilder(sizeof(vdp2.cpuComposeParams));
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not create VDP2 layer compositing parameters buffer #{}, error code {:X}", i,
+                                    (uint32)hr)};
+                }
+                frameCtx.composeParamsBuffer->SetName(
+                    fmt::format(L"[Ymir-VDP2] Layer compositing parameters buffer #{}", i).c_str());
+
+                vdp2.barrierTracker.InitializeBuffer(
+                    frameCtx.composeParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.composeParamsSRV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP2 layer compositing parameters buffer SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = DXGI_FORMAT_UNKNOWN,
+                    .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = 1,
+                            .StructureByteStride = sizeof(vdp2.cpuComposeParams),
+                            .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.composeParamsBuffer.GetPointer(), &srvDesc,
+                                                 frameCtx.composeParamsSRV.cpuHandle);
+            }
+
+            // Sprite layer rendering
+            {
+                const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
+                    .pRootSignature = vdp2.drawSpriteRootSig.GetPointer(),
+                    .CS = ToShaderBytecode(vdp2.drawSpriteShader),
+                };
+                if (HRESULT hr = frameCtx.drawSpritePSO.CreateCompute(device, psoDesc); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not build VDP2 sprite layer rendering pipeline state object #{}, error code {:X}", i,
+                        (uint32)hr)};
+                }
+                frameCtx.drawSpritePSO->SetName(
+                    fmt::format(L"[Ymir-VDP2] Sprite layer rendering pipeline state object #{}", i).c_str());
+
+                const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
+                    frameCtx.layerRenderParamsSRV.cpuHandle,
+                    vdp2.vramSRV.cpuHandle,
+                    frameCtx.cramColorSRV.cpuHandle,
+                    frameCtx.rotParamBasesSRV.cpuHandle,
+                    /* TODO: vdp1.spriteFBSRV.cpuHandle,*/ frameCtx.layerOutUAV.cpuHandle,
+                    frameCtx.spriteAttrsUAV.cpuHandle,
+                };
+                std::array<UINT, std::size(srcHandles)> srcSizes{};
+                srcSizes.fill(1);
+
+                if (!resourceHeapAlloc.Allocate(frameCtx.drawSpriteDescs, std::size(srcHandles))) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP2 sprite layer rendering descriptors #{}", i)};
+                }
+
+                device->CopyDescriptors(1, &frameCtx.drawSpriteDescs.cpuHandle, &frameCtx.drawSpriteDescs.count,
+                                        std::size(srcHandles), srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
+            }
+
+            // Layer rendering
+            {
+                const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
+                    .pRootSignature = vdp2.drawBGsRootSig.GetPointer(),
+                    .CS = ToShaderBytecode(vdp2.drawBGsShader),
+                };
+                if (HRESULT hr = frameCtx.drawBGsPSO.CreateCompute(device, psoDesc); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not build VDP2 layer rendering pipeline state object #{}, error code {:X}",
+                                    i, (uint32)hr)};
+                }
+                frameCtx.drawBGsPSO->SetName(
+                    fmt::format(L"[Ymir-VDP2] Layer rendering pipeline state object #{}", i).c_str());
+
+                const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
+                    frameCtx.layerRenderParamsSRV.cpuHandle, vdp2.vramSRV.cpuHandle,
+                    frameCtx.cramColorSRV.cpuHandle,         frameCtx.cramRotCoeffSRV.cpuHandle,
+                    frameCtx.rotParamBasesSRV.cpuHandle,     frameCtx.spriteAttrsSRV.cpuHandle,
+                    frameCtx.layerOutUAV.cpuHandle,          frameCtx.rbgLineColorOutUAV.cpuHandle,
+                    frameCtx.colorCalcWindowUAV.cpuHandle,
+                };
+                std::array<UINT, std::size(srcHandles)> srcSizes{};
+                srcSizes.fill(1);
+
+                if (!resourceHeapAlloc.Allocate(frameCtx.drawBGsDescs, std::size(srcHandles))) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP2 layer rendering descriptors #{}", i)};
+                }
+
+                device->CopyDescriptors(1, &frameCtx.drawBGsDescs.cpuHandle, &frameCtx.drawBGsDescs.count,
+                                        std::size(srcHandles), srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
+            }
+
+            // Layer compositing
+            {
+                const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
+                    .pRootSignature = vdp2.composeRootSig.GetPointer(),
+                    .CS = ToShaderBytecode(vdp2.composeShader),
+                };
+                if (HRESULT hr = frameCtx.composePSO.CreateCompute(device, psoDesc); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not build VDP2 layer compositing pipeline state object #{}, error code {:X}",
+                                    i, (uint32)hr)};
+                }
+                frameCtx.composePSO->SetName(L"[Ymir-VDP2] Layer compositing pipeline state object");
+
+                const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
+                    frameCtx.composeParamsSRV.cpuHandle, frameCtx.layerOutSRV.cpuHandle,
+                    frameCtx.lnclBackSRV.cpuHandle,      frameCtx.rbgLineColorOutSRV.cpuHandle,
+                    frameCtx.spriteAttrsSRV.cpuHandle,   frameCtx.colorCalcWindowSRV.cpuHandle,
+                    frameCtx.compositeOutUAV.cpuHandle,
+                };
+                std::array<UINT, std::size(srcHandles)> srcSizes{};
+                srcSizes.fill(1);
+
+                if (!resourceHeapAlloc.Allocate(frameCtx.composeDescs, std::size(srcHandles))) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP2 layer compositing descriptors #{}", i)};
+                }
+
+                device->CopyDescriptors(1, &frameCtx.composeDescs.cpuHandle, &frameCtx.composeDescs.count,
+                                        std::size(srcHandles), srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
+            }
         }
 
         Reset();
@@ -2304,7 +2379,7 @@ struct Direct3D12VDPRenderer::Impl {
 
     void Reset() {
         vdp2.vramDirty.SetAll();
-        vdp2.cramDirty = true;
+        ++vdp2.cramGeneration;
         vdp2.nextLayerRenderLine = 0;
         vdp2.nextComposeLine = 0;
         vdp2.layerRenderParamsDirty = true;
@@ -2404,7 +2479,7 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void VDP2WriteCRAM(uint32 address) {
-        vdp2.cramDirty = true;
+        ++vdp2.cramGeneration;
         VDP2CacheCRAMColor(address);
     }
 
@@ -2477,7 +2552,7 @@ struct Direct3D12VDPRenderer::Impl {
             }
 
             if (dirtyFlags.cram) {
-                vdp2.cramDirty = true;
+                ++vdp2.cramGeneration;
                 VDP2CacheAllCRAMColors();
             }
         }
@@ -2542,10 +2617,11 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     [[nodiscard]] util::VoidResult<> VDP2FlushCRAM() {
-        if (!vdp2.cramDirty) {
+        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+        if (frameCtx.cramGeneration == vdp2.cramGeneration) {
             return {};
         }
-        vdp2.cramDirty = false;
+        frameCtx.cramGeneration = vdp2.cramGeneration;
 
         ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
 
@@ -2560,7 +2636,7 @@ struct Direct3D12VDPRenderer::Impl {
             }
             memcpy(alloc.data, vdp2.cpuCRAMColorCache.data(), size);
 
-            ID3D12Resource *dstResource = vdp2.cramColorBuffer.GetPointer();
+            ID3D12Resource *dstResource = frameCtx.cramColorBuffer.GetPointer();
 
             // Emit barrier transition
             vdp2.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
@@ -2581,7 +2657,7 @@ struct Direct3D12VDPRenderer::Impl {
             }
             memcpy(alloc.data, &vdpState.mem2.CRAM[kVDP2CRAMSize / 2], size);
 
-            ID3D12Resource *dstResource = vdp2.cramRotCoeffBuffer.GetPointer();
+            ID3D12Resource *dstResource = frameCtx.cramRotCoeffBuffer.GetPointer();
 
             // Emit barrier transition
             vdp2.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
@@ -2873,7 +2949,9 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Update buffer
         {
-            ID3D12Resource *dstResource = vdp2.layerRenderParamsBuffer.GetPointer();
+            VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+
+            ID3D12Resource *dstResource = frameCtx.layerRenderParamsBuffer.GetPointer();
             ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
             const size_t size = sizeof(vdp2.cpuLayerRenderParams);
             UploadAllocation alloc{};
@@ -2941,7 +3019,9 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Update buffer
         {
-            ID3D12Resource *dstResource = vdp2.composeParamsBuffer.GetPointer();
+            VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+
+            ID3D12Resource *dstResource = frameCtx.composeParamsBuffer.GetPointer();
             ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
             const size_t size = sizeof(vdp2.cpuComposeParams);
 
@@ -3023,7 +3103,9 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     util::VoidResult<> VDP2UploadLineColorBackScreens() {
-        ID3D12Resource *dstResource = vdp2.lnclBackBuffer.GetPointer();
+        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+
+        ID3D12Resource *dstResource = frameCtx.lnclBackBuffer.GetPointer();
         ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
         const size_t size = sizeof(vdp2.cpuLnclBack);
 
@@ -3092,7 +3174,9 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     util::VoidResult<> VDP2UploadRotationParameterBases() {
-        ID3D12Resource *dstResource = vdp2.rotParamBasesBuffer.GetPointer();
+        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+
+        ID3D12Resource *dstResource = frameCtx.rotParamBasesBuffer.GetPointer();
         ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
         const size_t size = sizeof(vdp2.cpuRotParamBases);
 
@@ -3143,6 +3227,8 @@ struct Direct3D12VDPRenderer::Impl {
             return;
         }
 
+        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+
         auto &cmdList = vdp2.cmdList;
 
         const bool deinterlace = enhancements.deinterlace && vdpState.regs2.TVMD.IsInterlaced();
@@ -3160,13 +3246,13 @@ struct Direct3D12VDPRenderer::Impl {
         // ---------------------------------------------------------------------
 
         // Transition resources for rendering layers
-        vdp2.barrierTracker.TransitionBuffer(vdp2.layerRenderParamsBuffer.GetPointer(),
+        vdp2.barrierTracker.TransitionBuffer(frameCtx.layerRenderParamsBuffer.GetPointer(),
                                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         vdp2.barrierTracker.TransitionBuffer(vdp2.vramBuffer.GetPointer(),
                                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-        vdp2.barrierTracker.TransitionBuffer(vdp2.cramColorBuffer.GetPointer(),
+        vdp2.barrierTracker.TransitionBuffer(frameCtx.cramColorBuffer.GetPointer(),
                                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
@@ -3180,24 +3266,25 @@ struct Direct3D12VDPRenderer::Impl {
         // Transition resources for drawing the sprite layer
         if (vdp2.cpuCommonRenderParams.spriteParams.rotate) {
             vdp2.barrierTracker.TransitionBuffer(
-                vdp2.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                frameCtx.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                 D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         }
-        vdp2.barrierTracker.TransitionTexture(vdp2.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+        vdp2.barrierTracker.TransitionTexture(frameCtx.layerOutTexture.GetPointer(),
+                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                              D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
                                               D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
-        vdp2.barrierTracker.TransitionTexture(vdp2.spriteAttrsTexture.GetPointer(),
+        vdp2.barrierTracker.TransitionTexture(frameCtx.spriteAttrsTexture.GetPointer(),
                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
                                               D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
                                               D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
         vdp2.barrierTracker.Flush(cmdList);
 
         // Draw sprite layer
-        cmdList->SetPipelineState(vdp2.drawSpritePSO.GetPointer());
+        cmdList->SetPipelineState(frameCtx.drawSpritePSO.GetPointer());
         cmdList->SetComputeRootSignature(vdp2.drawSpriteRootSig.GetPointer());
         cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp2.cpuCommonRenderParams) / sizeof(uint32),
                                               &vdp2.cpuCommonRenderParams, 0);
-        cmdList->SetComputeRootDescriptorTable(1, vdp2.drawSpriteDescs.gpuHandle);
+        cmdList->SetComputeRootDescriptorTable(1, frameCtx.drawSpriteDescs.gpuHandle);
         cmdList->Dispatch((HRes + 31) / 32, numLines, enhancements.transparentMeshes ? 2 : 1);
 
         // ---------------------------------------------------------------------
@@ -3205,34 +3292,35 @@ struct Direct3D12VDPRenderer::Impl {
         // Transition resources for drawing background layers
         if (vdpState.regs2.bgEnabled[4] || vdpState.regs2.bgEnabled[5]) {
             vdp2.barrierTracker.TransitionBuffer(
-                vdp2.cramRotCoeffBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                frameCtx.cramRotCoeffBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                 D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
             vdp2.barrierTracker.TransitionBuffer(
-                vdp2.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                frameCtx.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                 D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         }
         vdp2.barrierTracker.TransitionTexture(
-            vdp2.spriteAttrsTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            frameCtx.spriteAttrsTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
-        vdp2.barrierTracker.TransitionTexture(vdp2.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
-                                              D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
-        vdp2.barrierTracker.TransitionTexture(vdp2.rbgLineColorOutTexture.GetPointer(),
+        vdp2.barrierTracker.TransitionTexture(frameCtx.layerOutTexture.GetPointer(),
                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
                                               D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
                                               D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
-        vdp2.barrierTracker.TransitionTexture(vdp2.colorCalcWindowTexture.GetPointer(),
+        vdp2.barrierTracker.TransitionTexture(frameCtx.rbgLineColorOutTexture.GetPointer(),
+                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                              D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                                              D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
+        vdp2.barrierTracker.TransitionTexture(frameCtx.colorCalcWindowTexture.GetPointer(),
                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
                                               D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
                                               D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
         vdp2.barrierTracker.Flush(cmdList);
 
         // Draw NBGs and RBGs
-        cmdList->SetPipelineState(vdp2.drawBGsPSO.GetPointer());
+        cmdList->SetPipelineState(frameCtx.drawBGsPSO.GetPointer());
         cmdList->SetComputeRootSignature(vdp2.drawBGsRootSig.GetPointer());
         cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp2.cpuCommonRenderParams) / sizeof(uint32),
                                               &vdp2.cpuCommonRenderParams, 0);
-        cmdList->SetComputeRootDescriptorTable(1, vdp2.drawBGsDescs.gpuHandle);
+        cmdList->SetComputeRootDescriptorTable(1, frameCtx.drawBGsDescs.gpuHandle);
         cmdList->Dispatch(HRes / 32, numLines, 1);
     }
 
@@ -3241,6 +3329,8 @@ struct Direct3D12VDPRenderer::Impl {
         if (y < vdp2.nextComposeLine) {
             return;
         }
+
+        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
 
         auto &cmdList = vdp2.cmdList;
 
@@ -3254,29 +3344,29 @@ struct Direct3D12VDPRenderer::Impl {
         // ---------------------------------------------------------------------
 
         // Transition resources for compositing layers
-        vdp2.barrierTracker.TransitionBuffer(vdp2.composeParamsBuffer.GetPointer(),
+        vdp2.barrierTracker.TransitionBuffer(frameCtx.composeParamsBuffer.GetPointer(),
                                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         vdp2.barrierTracker.TransitionTexture(
-            vdp2.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            frameCtx.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
         vdp2.barrierTracker.TransitionTexture(
-            vdp2.rbgLineColorOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            frameCtx.rbgLineColorOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
         vdp2.barrierTracker.TransitionTexture(
-            vdp2.colorCalcWindowTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            frameCtx.colorCalcWindowTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
-        vdp2.barrierTracker.TransitionBuffer(vdp2.lnclBackBuffer.GetPointer(),
+        vdp2.barrierTracker.TransitionBuffer(frameCtx.lnclBackBuffer.GetPointer(),
                                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         vdp2.barrierTracker.Flush(cmdList);
 
         // Compose final image
-        cmdList->SetPipelineState(vdp2.composePSO.GetPointer());
+        cmdList->SetPipelineState(frameCtx.composePSO.GetPointer());
         cmdList->SetComputeRootSignature(vdp2.composeRootSig.GetPointer());
         cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp2.cpuCommonRenderParams) / sizeof(uint32),
                                               &vdp2.cpuCommonRenderParams, 0);
-        cmdList->SetComputeRootDescriptorTable(1, vdp2.composeDescs.gpuHandle);
+        cmdList->SetComputeRootDescriptorTable(1, frameCtx.composeDescs.gpuHandle);
         cmdList->Dispatch((HRes + 31) / 32, numLines, 1);
     }
 
@@ -3291,8 +3381,10 @@ struct Direct3D12VDPRenderer::Impl {
         // render lines up to Y-1 then sync the state, unless Y=0, in which case we just sync the state.
 
         if (y > 0) {
+            const VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+            const bool cramDirty = vdp2.cramGeneration != frameCtx.cramGeneration;
             const bool renderLayers =
-                vdp2.vramDirty || vdp2.cramDirty || vdp2.layerRenderParamsDirty || vdp2.composeParamsDirty;
+                vdp2.vramDirty || cramDirty || vdp2.layerRenderParamsDirty || vdp2.composeParamsDirty;
             const bool compose = vdp2.composeParamsDirty;
             if (renderLayers) {
                 VDP2RenderLayerLines(y - 1);
@@ -3381,7 +3473,7 @@ void Direct3D12VDPRenderer::PostLoadStateSync() {
 
     m_impl->VDP2UpdateEnabledLayers();
     m_impl->vdp2.vramDirty.SetAll();
-    m_impl->vdp2.cramDirty = true;
+    ++m_impl->vdp2.cramGeneration;
     m_impl->vdp2.layerRenderParamsDirty = true;
     m_impl->vdp2.composeParamsDirty = true;
 }
