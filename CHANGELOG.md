@@ -44,6 +44,7 @@ Introduces save state file version 14.
 - App: Don't persist window geometry in full screen mode.
 - App: Reset window geometry if it matches the bounds of a display.
 - Backup RAM: Fix crash when attempting to load a backup RAM cartridge with the default path.
+- Backup RAM: Remove strict language check when importing files. Fixes importing save files from Kronos's backup RAM cartridges. (#942)
 - CD Block (HLE): Report current CD status and raise CMOK HIRQ signal when processing unimplemented commands.
 - CD Block (HLE): Read reset position flag correctly from parameters.
 - CD Block (LLE): Fix audio track playback failing for tracks 16 and higher. Fixes Virtual On - Cyber Troopers credits and the songs in certain arenas.

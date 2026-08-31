@@ -1065,7 +1065,7 @@ BackupMemoryView::ImportFileResult BackupMemoryView::ImportFile(std::filesystem:
         // comment
         in.read(buf.data(), 10);
         CHECK_INPUT_ERROR;
-        out.header.comment.assign(buf.begin(), buf.end());
+        out.header.comment.assign(buf.begin(), buf.end() - 1);
 
         // date/time
         in.read((char *)&out.header.date, sizeof(out.header.date));
@@ -1116,7 +1116,7 @@ BackupMemoryView::ImportFileResult BackupMemoryView::ImportFile(std::filesystem:
         in.seekg(0x1C, std::ios::beg); // skip extra byte
         in.read(buf.data(), 10);
         CHECK_INPUT_ERROR;
-        out.header.comment.assign(buf.begin(), buf.end());
+        out.header.comment.assign(buf.begin(), buf.end() - 1);
 
         // language
         in.seekg(0x27, std::ios::beg); // skip extra byte

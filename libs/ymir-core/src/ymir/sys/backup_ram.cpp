@@ -629,7 +629,8 @@ bool BackupMemory::ReadHeader(uint16 blockIndex, BackupFileHeader &header) const
     DataReadString(offset + 0x10, header.comment.data(), 10);
     header.language = static_cast<Language>(DataReadByte(offset + 0x0F));
     header.date = DataReadLong(offset + 0x1A);
-    return static_cast<uint32>(header.language) <= static_cast<uint32>(Language::Italian);
+    // return static_cast<uint32>(header.language) <= static_cast<uint32>(Language::Italian);
+    return true; // Kronos can somehow produce invalid language codes
 }
 
 std::vector<uint16> BackupMemory::ReadBlockList(uint16 blockIndex) const {
