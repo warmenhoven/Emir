@@ -671,8 +671,11 @@ uint4 FetchPixel(const BaseBGParams params, uint baseAddress, uint2 dotPos, uint
         }
     }
 
+    const uint outPaletteFormat = colorFormat <= kColorFormatPalette2048 ? 1u : 0u;
+
     return uint4(
         outColor.rgb,
+        (outPaletteFormat << kPixelAttrBitPaletteFormat) |
         (outSpecColorCalc << kPixelAttrBitSpecColorCalc) |
         outPriority
     );

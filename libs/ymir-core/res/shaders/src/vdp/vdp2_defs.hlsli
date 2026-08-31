@@ -55,6 +55,7 @@ static const uint kScreenOverProcessRepeatChar = 1;
 static const uint kScreenOverProcessTransparent = 2;
 static const uint kScreenOverProcessFixed512 = 3;
 
+static const uint kPixelAttrBitPaletteFormat = 6;
 static const uint kPixelAttrBitSpecColorCalc = 7;
 
 static const uint kSpriteAttrBitColorCalcRatio = 0; // bits 0 to 4

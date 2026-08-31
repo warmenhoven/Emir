@@ -118,8 +118,13 @@ bool IsColorCalcEnabled(uint layer, uint2 pos) {
     if (colorCalcWindowIn[pos] != 0) {
         return false;
     }
+    const bool restrictedColorCalc = BitTest(g_commonParams.layerParams, 24);
     if (layer == kLayerSprite) {
         // Sprites use condition modes based on priority or color MSB
+        const uint layerAttrs = layerIn[uint3(pos, kLayerIndexSprite)].a;
+        if (restrictedColorCalc && BitTest(layerAttrs, kPixelAttrBitSpecColorCalc)) {
+            return false;
+        }
         const uint attrs = spriteAttrsIn[uint3(pos, 0)];
         const uint priority = BitExtract(attrs, 0, 3);
         const uint value = BitExtract(g_commonParams.spriteParams, 11, 3);
@@ -139,6 +144,9 @@ bool IsColorCalcEnabled(uint layer, uint2 pos) {
     // BG layers use the per-pixel special color calculation flag
     const uint bgLayer = GetBGLayerIndex(layer);
     const uint attrs = layerIn[uint3(pos.xy, bgLayer)].a;
+    if (restrictedColorCalc && BitTest(attrs, kPixelAttrBitPaletteFormat)) {
+        return false;
+    }
     return BitTest(attrs, kPixelAttrBitSpecColorCalc);
 }
 
@@ -344,11 +352,11 @@ uint3 Compose(uint2 basePos) {
     }
 
     if (IsColorCalcEnabled(layerStack[0], pos)) {
-        const bool useAdditiveBlend = BitTest(g_commonParams.displayParams, 26);
+        const bool useAdditiveBlend = BitTest(g_commonParams.layerParams, 26);
         if (useAdditiveBlend) {
             output = min(layer0Pixel + layer1Pixel, 255);
         } else {
-            const bool useSecondScreenRatio = BitTest(g_commonParams.displayParams, 27);
+            const bool useSecondScreenRatio = BitTest(g_commonParams.layerParams, 27);
             const uint ratioLayer = useSecondScreenRatio ? layerStack[1] : layerStack[0];
             const int ratio = GetColorCalcRatio(ratioLayer, pos);
             output = int3(layer1Pixel) + (((int3(layer0Pixel) - int3(layer1Pixel)) * ratio) >> 5);
