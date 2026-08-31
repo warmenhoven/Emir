@@ -1505,7 +1505,6 @@ struct Direct3D12VDPRenderer::Impl {
 
         BarrierTracker barrierTracker;
 
-        bool rotRegsDirty = false;
         bool layerRenderParamsDirty = false;
         bool composeParamsDirty = false;
 
@@ -2308,7 +2307,6 @@ struct Direct3D12VDPRenderer::Impl {
         vdp2.cramDirty = true;
         vdp2.nextLayerRenderLine = 0;
         vdp2.nextComposeLine = 0;
-        vdp2.rotRegsDirty = true;
         vdp2.layerRenderParamsDirty = true;
         vdp2.composeParamsDirty = true;
         VDP2UpdateEnabledLayers();
@@ -2414,7 +2412,6 @@ struct Direct3D12VDPRenderer::Impl {
         struct DirtyFlags {
             bool render = false;
             bool compose = false;
-            bool rotRegs = false;
             bool enabledLayers = false;
             bool cram = false;
         };
@@ -2439,7 +2436,8 @@ struct Direct3D12VDPRenderer::Impl {
                      0x094 /*SCXN3*/,  0x096 /*SCYN3*/,  0x098 /*ZMCTL*/,  0x09A /*SCRCTL*/, 0x09C /*VCSTAU*/,
                      0x09E /*VCSTAL*/, 0x0A0 /*LSTA0U*/, 0x0A2 /*LSTA0L*/, 0x0A4 /*LSTA1U*/, 0x0A6 /*LSTA1L*/,
                      0x0A8 /*LCTAU*/,  0x0AA /*LCTAL*/,  0x0AC /*BKTAU*/,  0x0AE /*BKTAL*/,  0x0B0 /*RPMD*/,
-                     0x0B8 /*OVPNRA*/, 0x0BA /*OVPNRB*/, 0x0C0 /*WPSX0*/,  0x0C2 /*WPSY0*/,  0x0C4 /*WPEX0*/,
+                     0x0B2 /*RPRCTL*/, 0x0B4 /*KTCTL*/,  0x0B6 /*KTAOF*/,  0x0B8 /*OVPNRA*/, 0x0BA /*OVPNRB*/,
+                     0x0BC /*RPTAU*/,  0x0BE /*RPTAL*/,  0x0C0 /*WPSX0*/,  0x0C2 /*WPSY0*/,  0x0C4 /*WPEX0*/,
                      0x0C6 /*WPEY0*/,  0x0C8 /*WPSX1*/,  0x0CA /*WPSY1*/,  0x0CC /*WPEX1*/,  0x0CE /*WPEY1*/,
                      0x0D0 /*WCTLA*/,  0x0D2 /*WCTLB*/,  0x0D4 /*WCTLC*/,  0x0D6 /*WCTLD*/,  0x0D8 /*LWTA0U*/,
                      0x0DA /*LWTA0L*/, 0x0DC /*LWTA1U*/, 0x0DE /*LWTA1L*/, 0x0E0 /*SPCTL*/,  0x0E2 /*SDCTL*/,
@@ -2460,11 +2458,6 @@ struct Direct3D12VDPRenderer::Impl {
                 arr[addr / sizeof(uint16)].compose = true;
             }
 
-            for (uint32 addr : {0x00E /*RAMCTL*/, 0x020 /*BGON*/, 0x0B2 /*RPRCTL*/, 0x0B4 /*KTCTL*/, 0x0B6 /*KTAOF*/,
-                                0x0BC /*RPTAU*/, 0x0BE /*RPTAL*/}) {
-                arr[addr / sizeof(uint16)].rotRegs = true;
-            }
-
             for (uint32 addr : {0x020 /*BGON*/, 0x028 /*CHCTLA*/, 0x02A /*CHCTLB*/}) {
                 arr[addr / sizeof(uint16)].enabledLayers = true;
             }
@@ -2476,7 +2469,6 @@ struct Direct3D12VDPRenderer::Impl {
 
         if (address <= 0x11E) {
             const auto &dirtyFlags = kDirtyFlags[address / sizeof(uint16)];
-            vdp2.rotRegsDirty |= dirtyFlags.rotRegs;
             vdp2.layerRenderParamsDirty |= dirtyFlags.render;
             vdp2.composeParamsDirty |= dirtyFlags.compose;
 
@@ -2635,6 +2627,37 @@ struct Direct3D12VDPRenderer::Impl {
         params.layerParams.useSecondScreenRatio = regs2.colorCalcParams.useSecondScreenRatio;
         params.layerParams.colorGradEnable = regs2.colorCalcParams.colorGradEnable;
         params.layerParams.colorGradScreen = static_cast<HLSLuint>(regs2.colorCalcParams.colorGradScreen);
+
+        auto isCoeff = [](RotDataBankSel sel) { return sel == RotDataBankSel::Coefficients; };
+
+        const VRAMControl &vramCtl = regs2.vramControl;
+        params.rotParams.coeffTableCRAM = vramCtl.colorRAMCoeffTableEnable;
+        params.rotParams.coeffDataAccess = 0;
+        if (isCoeff(vramCtl.rotDataBankSelA0)) {
+            params.rotParams.coeffDataAccess |= 1u << 0u;
+        }
+        if (isCoeff(vramCtl.partitionVRAMA ? vramCtl.rotDataBankSelA1 : vramCtl.rotDataBankSelA0)) {
+            params.rotParams.coeffDataAccess |= 1u << 1u;
+        }
+        if (isCoeff(vramCtl.rotDataBankSelB0)) {
+            params.rotParams.coeffDataAccess |= 1u << 2u;
+        }
+        if (isCoeff(vramCtl.partitionVRAMB ? vramCtl.rotDataBankSelB1 : vramCtl.rotDataBankSelB0)) {
+            params.rotParams.coeffDataAccess |= 1u << 3u;
+        }
+        params.rotParams.coeffDataPerDot = vramCtl.perDotRotationCoeffs;
+
+        const RotationParams &rotParamsA = regs2.rotParams[0];
+        params.rotParams.coeffATableEnable = rotParamsA.coeffTableEnable;
+        params.rotParams.coeffAUseLineColorData = rotParamsA.coeffUseLineColorData;
+        params.rotParams.coeffADataSize = rotParamsA.coeffDataSize;
+        params.rotParams.coeffADataMode = static_cast<HLSLuint>(rotParamsA.coeffDataMode);
+
+        const RotationParams &rotParamsB = regs2.rotParams[1];
+        params.rotParams.coeffBTableEnable = rotParamsB.coeffTableEnable;
+        params.rotParams.coeffBUseLineColorData = rotParamsB.coeffUseLineColorData;
+        params.rotParams.coeffBDataSize = rotParamsB.coeffDataSize;
+        params.rotParams.coeffBDataMode = static_cast<HLSLuint>(rotParamsB.coeffDataMode);
 
         params.spriteParams.rotate = regs1.fbRotEnable;
         params.spriteParams.pixel8Bits = regs1.pixel8Bits;
@@ -2872,55 +2895,6 @@ struct Direct3D12VDPRenderer::Impl {
         return {};
     }
 
-    void VDP2UpdateRotRegs() {
-        if (!vdp2.rotRegsDirty) {
-            return;
-        }
-        vdp2.rotRegsDirty = false;
-
-        VDP2Regs &regs2 = vdpState.regs2;
-        if (!regs2.bgEnabled[4] && !regs2.bgEnabled[5]) {
-            // Skip if no RBGs are enabled
-            return;
-        }
-
-        RotationParams &srcA = regs2.rotParams[0];
-        RotationParams &srcB = regs2.rotParams[1];
-        const auto &vramCtl = regs2.vramControl;
-
-        auto isCoeff = [](RotDataBankSel sel) { return sel == RotDataBankSel::Coefficients; };
-
-        auto &dst = vdp2.cpuCommonRenderParams.rotParams;
-        dst.coeffTableCRAM = vramCtl.colorRAMCoeffTableEnable;
-        dst.coeffDataAccess = 0;
-        if (isCoeff(vramCtl.rotDataBankSelA0)) {
-            dst.coeffDataAccess |= 1u << 0u;
-        }
-        if (isCoeff(vramCtl.partitionVRAMA ? vramCtl.rotDataBankSelA1 : vramCtl.rotDataBankSelA0)) {
-            dst.coeffDataAccess |= 1u << 1u;
-        }
-        if (isCoeff(vramCtl.rotDataBankSelB0)) {
-            dst.coeffDataAccess |= 1u << 2u;
-        }
-        if (isCoeff(vramCtl.partitionVRAMB ? vramCtl.rotDataBankSelB1 : vramCtl.rotDataBankSelB0)) {
-            dst.coeffDataAccess |= 1u << 3u;
-        }
-        dst.coeffDataPerDot = vramCtl.perDotRotationCoeffs;
-
-        dst.coeffATableEnable = srcA.coeffTableEnable;
-        dst.coeffAUseLineColorData = srcA.coeffUseLineColorData;
-        dst.coeffADataSize = srcA.coeffDataSize;
-        dst.coeffADataMode = static_cast<HLSLuint>(srcA.coeffDataMode);
-
-        dst.coeffBTableEnable = srcB.coeffTableEnable;
-        dst.coeffBUseLineColorData = srcB.coeffUseLineColorData;
-        dst.coeffBDataSize = srcB.coeffDataSize;
-        dst.coeffBDataMode = static_cast<HLSLuint>(srcB.coeffDataMode);
-
-        // NOTE: this is uploaded as 32-bit root constants, not through the upload buffer.
-        // No uploads or barriers are needed here.
-    }
-
     util::VoidResult<> VDP2UpdateComposeParams() {
         if (!vdp2.composeParamsDirty) {
             return {};
@@ -3148,7 +3122,6 @@ struct Direct3D12VDPRenderer::Impl {
         }
         VDP2UpdateCommonRenderParams();
         VDP2UpdateLayerRenderParams();
-        VDP2UpdateRotRegs();
         VDP2UpdateComposeParams();
     }
 
@@ -3318,8 +3291,8 @@ struct Direct3D12VDPRenderer::Impl {
         // render lines up to Y-1 then sync the state, unless Y=0, in which case we just sync the state.
 
         if (y > 0) {
-            const bool renderLayers = vdp2.vramDirty || vdp2.cramDirty || vdp2.rotRegsDirty ||
-                                      vdp2.layerRenderParamsDirty || vdp2.composeParamsDirty;
+            const bool renderLayers =
+                vdp2.vramDirty || vdp2.cramDirty || vdp2.layerRenderParamsDirty || vdp2.composeParamsDirty;
             const bool compose = vdp2.composeParamsDirty;
             if (renderLayers) {
                 VDP2RenderLayerLines(y - 1);
@@ -3409,7 +3382,6 @@ void Direct3D12VDPRenderer::PostLoadStateSync() {
     m_impl->VDP2UpdateEnabledLayers();
     m_impl->vdp2.vramDirty.SetAll();
     m_impl->vdp2.cramDirty = true;
-    m_impl->vdp2.rotRegsDirty = true;
     m_impl->vdp2.layerRenderParamsDirty = true;
     m_impl->vdp2.composeParamsDirty = true;
 }
