@@ -4015,7 +4015,7 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
 
     const bool normalTVMode = regs2.TVMD.HRESOn < 2;
     const uint8 cramMode = regs2.vramControl.colorRAMMode;
-    const bool colorGradEnabled = normalTVMode && cramMode == 0 && colorCalcParams.colorGradEnable;
+    const bool useColorGrad = normalTVMode && cramMode == 0 && colorCalcParams.colorGradEnable;
     static constexpr LayerIndex kColorGradLayers[] = {
         LYR_Sprite, LYR_RBG0, LYR_NBG0_RBG1, LYR_Invalid, LYR_NBG1_EXBG, LYR_NBG2, LYR_NBG3, LYR_Invalid,
     };
@@ -4045,7 +4045,7 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
             }
 
             // Line color
-            if (colorGradEnabled) {
+            if (useColorGrad) {
                 // Color gradation prevents line color screen insertion
                 layer0LineColorEnabled[x] = false;
             } else {
@@ -4072,7 +4072,7 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         }
 
         // Color gradation
-        if (colorGradEnabled) {
+        if (useColorGrad) {
             const auto colorGradIndex = static_cast<size_t>(colorCalcParams.colorGradScreen);
             const LayerIndex colorGradLayer = kColorGradLayers[colorGradIndex];
 
@@ -4244,13 +4244,13 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
 
         // Apply color offset if enabled
         if (regs2.colorOffsetEnable[LYR_Sprite]) {
-            for (uint32 x = 0; Color888 &mesheColor : meshOut) {
+            for (uint32 x = 0; Color888 &meshColor : meshOut) {
                 const auto &colorOffset = regs2.colorOffset[regs2.colorOffsetSelect[LYR_Sprite]];
                 if (colorOffset.nonZero) {
-                    mesheColor = {
-                        .r = kColorOffsetLUT[colorOffset.r][mesheColor.r],
-                        .g = kColorOffsetLUT[colorOffset.g][mesheColor.g],
-                        .b = kColorOffsetLUT[colorOffset.b][mesheColor.b],
+                    meshColor = {
+                        .r = kColorOffsetLUT[colorOffset.r][meshColor.r],
+                        .g = kColorOffsetLUT[colorOffset.g][meshColor.g],
+                        .b = kColorOffsetLUT[colorOffset.b][meshColor.b],
                         .pad = 0,
                         .msb = 0,
                     };
@@ -4303,7 +4303,7 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
                     }
                     case 10 /*transparent meshes*/: overlayColor = m_meshLayerOutput[altField].pixels.color[x]; break;
                     case 11 /*gradation screen*/:
-                        if (colorGradEnabled) {
+                        if (useColorGrad) {
                             overlayColor = composeLineBuffers.colorGradLayerColors[x];
                         }
                         break;

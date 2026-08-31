@@ -2756,7 +2756,7 @@ struct Direct3D12VDPRenderer::Impl {
             renderParams.base.windowParams.spriteWindowInvert = bgParams.windowSet.inverted[2];
 
             renderParams.scrollAmount = {bgParams.scrollAmountH, bgParams.scrollAmountV};
-            renderParams.scrollInc = {bgState.scrollIncH, bgParams.scrollIncV};
+            renderParams.scrollInc = {bgParams.scrollIncH, bgParams.scrollIncV};
             renderParams.pageBaseAddresses = bgParams.pageBaseAddresses;
             renderParams.vcellScrollEnable = bgParams.vcellScrollEnable;
             renderParams.lineScrollXEnable = bgParams.lineScrollXEnable;

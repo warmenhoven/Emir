@@ -53,6 +53,10 @@ static const uint kSpriteCCCondColorMSB = 3;
 static const uint interlaceMode = BitExtract(g_commonParams.displayParams, 2, 2);
 static const uint oddField = BitExtract(g_commonParams.displayParams, 4, 1);
 static const bool exclusiveMonitor = BitTest(g_commonParams.displayParams, 5);
+static const uint cramMode = BitExtract(g_commonParams.displayParams, 6, 2);
+static const bool normalTVMode = BitExtract(g_commonParams.displayParams, 10, 3) < 2;
+
+static const bool colorGradEnable = BitTest(g_commonParams.layerParams, 28);
 
 static const bool deinterlace = BitTest(g_commonParams.enhancements, 0);
 static const bool transparentMeshes = BitTest(g_commonParams.enhancements, 1);
@@ -102,6 +106,25 @@ uint GetBGLayerIndex(uint layer) {
             return kBGLayerNBG3;
         default:
             return kBGLayerInvalid; // go out of bounds intentionally to read blanks
+    }
+}
+
+uint GetColorGradScreenLayerIndex(uint colorGradScreen) {
+    switch (colorGradScreen) {
+        case kColorGradScreenNBG0_RBG0:
+            return kLayerNBG0_RBG1;
+        case kColorGradScreenNBG1_EXBG:
+            return kLayerNBG1_EXBG;
+        case kColorGradScreenNBG2:
+            return kLayerNBG2;
+        case kColorGradScreenNBG3:
+            return kLayerNBG3;
+        case kColorGradScreenRBG0:
+            return kLayerRBG0;
+        case kColorGradScreenSprite:
+            return kLayerSprite;
+        default:
+            return kLayerBack;
     }
 }
 
@@ -248,6 +271,7 @@ uint3 Compose(uint2 basePos) {
         return uint3(0, 0, 0);
     }
 
+    // Determine layer order
     uint layerStack[3] = { kLayerBack, kLayerBack, kLayerBack };
     uint layerPrios[3] = { 0, 0, 0 };
 
@@ -314,44 +338,64 @@ uint3 Compose(uint2 basePos) {
 
     uint3 output = { 0, 0, 0 };
 
-    const bool layer0LineColorEnabled = IsLineColorEnabled(layerStack[0], pos);
+    const bool useColorGrad = normalTVMode && cramMode == 0 && colorGradEnable;
+    const bool layer0LineColorEnabled = !useColorGrad && IsLineColorEnabled(layerStack[0], pos);
     const bool extendedColorCalc = BitTest(g_commonParams.layerParams, 25);
 
     uint3 layer0Pixel = GetLayerOutput(layerStack[0], pos).rgb;
-    uint3 layer1Pixel = GetLayerOutput(layerStack[1], pos).rgb;
-
-    if (extendedColorCalc) {
-        if (IsColorCalcEnabled(layerStack[1], pos)) {
-            uint3 layer2Pixel = GetLayerOutput(layerStack[2], pos).rgb;
-
-            // Blend layer 2 with sprite mesh layer colors
-            // TODO: apply color calculation effects
-            if (transparentMeshes && meshLayer == 2) {
-                layer2Pixel = (layer2Pixel + meshPixel) >> 1;
-            }
-
-            layer1Pixel = (layer1Pixel + layer2Pixel) >> 1;
-        }
-
-        if (layer0LineColorEnabled) {
-            const uint3 lineColor = GetLineColor(layerStack[0], basePos);
-            if (IsColorCalcEnabled(kLayerLine, pos)) {
-                layer1Pixel = (layer1Pixel + lineColor) >> 1;
-            } else {
-                layer1Pixel = lineColor;
-            }
-        }
-    } else if (layer0LineColorEnabled) {
-        layer1Pixel = GetLineColor(layerStack[0], basePos);
-    }
-
-    // Blend layer 1 with sprite mesh layer colors
-    // TODO: apply color calculation effects
-    if (transparentMeshes && meshLayer == 1) {
-        layer1Pixel = (layer1Pixel + meshPixel) >> 1;
-    }
 
     if (IsColorCalcEnabled(layerStack[0], pos)) {
+        uint3 layer1Pixel = GetLayerOutput(layerStack[1], pos).rgb;
+
+        // Color gradation
+        if (useColorGrad) {
+            const uint colorGradScreen = BitExtract(g_commonParams.layerParams, 29, 3);
+            const uint colorGradLayer = GetColorGradScreenLayerIndex(colorGradScreen);
+
+            // Set layer 1 output to the color gradation screen where the designated screen is the topmost two layers
+            if (layerStack[0] == colorGradLayer || layerStack[1] == colorGradLayer) {
+                // Compute color gradation
+                const uint3 input2 = GetLayerOutput(colorGradLayer, uint2(max(pos.x - 2, 0), pos.y)).rgb;
+                const uint3 input1 = GetLayerOutput(colorGradLayer, uint2(max(pos.x - 1, 0), pos.y)).rgb;
+                const uint3 input0 = GetLayerOutput(colorGradLayer, pos).rgb;
+                layer1Pixel = (((input2 + input1) >> 1u) + input0) >> 1u;
+            }
+        } else if (normalTVMode && extendedColorCalc) {
+            // Apply color gradation or extended color calculations to layer 1
+            if (IsColorCalcEnabled(layerStack[1], pos)) {
+                uint3 layer2Pixel = GetLayerOutput(layerStack[2], pos).rgb;
+
+                // Blend layer 2 with sprite mesh layer colors
+                // TODO: apply color calculation effects
+                if (transparentMeshes && meshLayer == 2) {
+                    layer2Pixel = (layer2Pixel + meshPixel) >> 1;
+                }
+
+                layer1Pixel = (layer1Pixel + layer2Pixel) >> 1;
+            }
+
+            if (layer0LineColorEnabled) {
+                const uint3 lineColor = GetLineColor(layerStack[0], basePos);
+                if (IsColorCalcEnabled(kLayerLine, pos)) {
+                    // Blend line color if top layer uses it
+                    layer1Pixel = (layer1Pixel + lineColor) >> 1;
+                } else {
+                    // Replace with line color if top layer uses it
+                    layer1Pixel = lineColor;
+                }
+            }
+        } else if (layer0LineColorEnabled) {
+            // Replace layer 1 pixels with line color screen
+            layer1Pixel = GetLineColor(layerStack[0], basePos);
+        }
+
+        // Blend layer 1 with sprite mesh layer colors
+        // TODO: apply color calculation effects
+        if (transparentMeshes && meshLayer == 1) {
+            layer1Pixel = (layer1Pixel + meshPixel) >> 1;
+        }
+
+        // Blend layer 0 and layer 1
         const bool useAdditiveBlend = BitTest(g_commonParams.layerParams, 26);
         if (useAdditiveBlend) {
             output = min(layer0Pixel + layer1Pixel, 255);
@@ -363,12 +407,6 @@ uint3 Compose(uint2 basePos) {
         }
     } else {
         output = layer0Pixel;
-    }
-
-    // Blend layer 0 with sprite mesh layer colors
-    // TODO: apply color calculation effects
-    if (transparentMeshes && meshLayer == 0) {
-        output = (output + meshPixel) >> 1;
     }
 
     // Apply sprite shadow if sprite layer has a shadow pixel and is on top of the topmost layer
@@ -384,9 +422,34 @@ uint3 Compose(uint2 basePos) {
         }
     }
 
+    // Apply color offset if enabled
     if (IsColorOffsetEnabled(layerStack[0])) {
         const int3 offset = GetColorOffset(layerStack[0]);
         output = clamp(int3(output) + offset, 0, 255);
+    }
+
+    // Blend layer 0 with sprite mesh layer colors
+    if (transparentMeshes && meshLayer == 0) {
+        if (IsColorCalcEnabled(kLayerMesh, pos)) {
+            const bool useAdditiveBlend = BitTest(g_commonParams.layerParams, 26);
+            if (useAdditiveBlend) {
+                meshPixel = min(meshPixel + output, 255);
+            } else {
+                const bool useSecondScreenRatio = BitTest(g_commonParams.layerParams, 27);
+                const uint ratioLayer = useSecondScreenRatio ? layerStack[1] : layerStack[0];
+                const int ratio = GetColorCalcRatio(ratioLayer, pos);
+                meshPixel = int3(output) + (((int3(meshPixel) - int3(output)) * ratio) >> 5);
+            }
+        }
+
+        // Apply color offset if enabled
+        if (IsColorOffsetEnabled(layerStack[0])) {
+            const int3 offset = GetColorOffset(layerStack[0]);
+            meshPixel = clamp(int3(meshPixel) + offset, 0, 255);
+        }
+
+        // Blend with output
+        output = (output + meshPixel) >> 1;
     }
 
     return output;
