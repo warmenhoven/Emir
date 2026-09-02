@@ -1397,11 +1397,6 @@ struct Direct3D12VDPRenderer::Impl {
         /// @brief VDP2 sprite attributes UAV (offline).
         DescriptorRange spriteAttrsUAV;
 
-        /// @brief 2D texture for the composited VDP2 output.
-        D3D12Resource compositeOutTexture;
-        /// @brief Composited VDP2 output UAV (offline).
-        DescriptorRange compositeOutUAV;
-
         // ---------------------------------------------------------------------
 
         /// @brief Layer rendering parameters buffer.
@@ -1486,6 +1481,12 @@ struct Direct3D12VDPRenderer::Impl {
 
         /// @brief CPU-side VDP2 rotation parameter base values.
         std::array<VDP2RotParamBase, kMaxNormalResV * 2> cpuRotParamBases{};
+
+        /// @brief 2D texture for the composited VDP2 output.
+        /// This cannot be instantiated per frame because interlaced graphics are weaved into the same output frame.
+        D3D12Resource compositeOutTexture;
+        /// @brief Composited VDP2 output UAV (offline).
+        DescriptorRange compositeOutUAV;
 
         // ---------------------------------------------------------------------
 
@@ -1672,6 +1673,40 @@ struct Direct3D12VDPRenderer::Impl {
                     },
             };
             device->CreateShaderResourceView(vdp2.vramBuffer.GetPointer(), &srvDesc, vdp2.vramSRV.cpuHandle);
+        }
+
+        // Composited VDP2 output texture
+        {
+            static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+            auto builder = vdp2.compositeOutTexture.Texture2DBuilder(kMaxResH, kMaxResV);
+            builder.Format(kFormat);
+            builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                return util::ErrorMessage{
+                    fmt::format("Could not create composited output texture, error code {:X}", (uint32)hr)};
+            }
+            vdp2.compositeOutTexture->SetName(L"[Ymir-VDP2] Composited output texture");
+
+            vdp2.barrierTracker.InitializeTexture(
+                vdp2.compositeOutTexture.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
+
+            if (!offlineHeapAlloc.Allocate(vdp2.compositeOutUAV)) {
+                return util::ErrorMessage{"Could not create composited output texture UAV"};
+            }
+            const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+                .Format = kFormat,
+                .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
+                .Texture2D =
+                    {
+                        .MipSlice = 0,
+                        .PlaneSlice = 0,
+                    },
+            };
+            device->CreateUnorderedAccessView(vdp2.compositeOutTexture.GetPointer(), nullptr, &uavDesc,
+                                              vdp2.compositeOutUAV.cpuHandle);
         }
 
         // -------------------------------------------------------------------------------------------------------------
@@ -2050,42 +2085,6 @@ struct Direct3D12VDPRenderer::Impl {
                                                  frameCtx.lnclBackSRV.cpuHandle);
             }
 
-            // Composited VDP2 output texture
-            {
-                static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-
-                auto builder = frameCtx.compositeOutTexture.Texture2DBuilder(kMaxResH, kMaxResV);
-                builder.Format(kFormat);
-                builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                    return util::ErrorMessage{
-                        fmt::format("Could not create composited output texture #{}, error code {:X}", i, (uint32)hr)};
-                }
-                frameCtx.compositeOutTexture->SetName(
-                    fmt::format(L"[Ymir-VDP2] Composited output texture #{}", i).c_str());
-
-                // TODO: initialize barrier tracking for this resource if needed
-                // vdp2.barrierTracker.InitializeTexture(
-                //     frameCtx.compositeOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                //     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
-                //     D3D12_BARRIER_LAYOUT_COMMON);
-
-                if (!offlineHeapAlloc.Allocate(frameCtx.compositeOutUAV)) {
-                    return util::ErrorMessage{fmt::format("Could not create composited output texture UAV #{}", i)};
-                }
-                const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
-                    .Format = kFormat,
-                    .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
-                    .Texture2D =
-                        {
-                            .MipSlice = 0,
-                            .PlaneSlice = 0,
-                        },
-                };
-                device->CreateUnorderedAccessView(frameCtx.compositeOutTexture.GetPointer(), nullptr, &uavDesc,
-                                                  frameCtx.compositeOutUAV.cpuHandle);
-            }
-
             // VDP2 rotation parameter base values buffer
             {
                 static constexpr size_t kRotParamBasesCount = kMaxNormalResV * 2;
@@ -2335,7 +2334,7 @@ struct Direct3D12VDPRenderer::Impl {
                     frameCtx.composeParamsSRV.cpuHandle, frameCtx.layerOutSRV.cpuHandle,
                     frameCtx.lnclBackSRV.cpuHandle,      frameCtx.rbgLineColorOutSRV.cpuHandle,
                     frameCtx.spriteAttrsSRV.cpuHandle,   frameCtx.colorCalcWindowSRV.cpuHandle,
-                    frameCtx.compositeOutUAV.cpuHandle,
+                    vdp2.compositeOutUAV.cpuHandle,
                 };
                 std::array<UINT, std::size(srcHandles)> srcSizes{};
                 srcSizes.fill(1);
