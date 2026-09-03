@@ -167,7 +167,7 @@ static_assert(sizeof(VDP2RotParamBase) == sizeof(uint32) * 4);
 // TODO: these could be useful in multiple backends. Make them generic and reusable, and move to a shared header.
 
 /// @brief Maximum number of frames in flight.
-static constexpr size_t kNumFrames = 4;
+static constexpr size_t kNumFrames = 3;
 
 /// @brief Size of the upload buffers, in bytes.
 /// Should be large enough to fit multiple worst case single transfers, but not waste space needlessly.
@@ -690,7 +690,7 @@ struct Direct3D12VDPRenderer::Impl {
     } features;
 
     D3D12CommandQueue cmdQueue;
-    D3D12Fence fence;
+    D3D12Fence computeFence;
 
     D3D12DescriptorHeap offlineHeap;
     DescriptorHeapAllocator offlineHeapAlloc;
@@ -1551,11 +1551,12 @@ struct Direct3D12VDPRenderer::Impl {
         }
         cmdQueue->SetName(L"[Ymir-VDP] Command queue");
 
-        // Main fence
-        if (HRESULT hr = fence.Create(device, 0, D3D12_FENCE_FLAG_NONE); FAILED(hr)) {
-            return util::ErrorMessage{fmt::format("Could not create VDP renderer fence, error code {:X}", (uint32)hr)};
+        // Main compute fence
+        if (HRESULT hr = computeFence.Create(device, 0, D3D12_FENCE_FLAG_NONE); FAILED(hr)) {
+            return util::ErrorMessage{
+                fmt::format("Could not create VDP renderer compute fence, error code {:X}", (uint32)hr)};
         }
-        fence->SetName(L"[Ymir-VDP] Fence");
+        computeFence->SetName(L"[Ymir-VDP] Compute fence");
 
         // Resource heaps
         {
@@ -1688,10 +1689,9 @@ struct Direct3D12VDPRenderer::Impl {
             }
             vdp2.compositeOutTexture->SetName(L"[Ymir-VDP2] Composited output texture");
 
-            vdp2.barrierTracker.InitializeTexture(
-                vdp2.compositeOutTexture.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
-                D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
+            vdp2.barrierTracker.InitializeTexture(vdp2.compositeOutTexture.GetPointer(), D3D12_RESOURCE_STATE_COMMON,
+                                                  D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                                  D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
 
             if (!offlineHeapAlloc.Allocate(vdp2.compositeOutUAV)) {
                 return util::ErrorMessage{"Could not create composited output texture UAV"};
@@ -2362,7 +2362,7 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void Shutdown() {
-        vdp2.frames.WaitForGPU(fence, cmdQueue);
+        vdp2.frames.WaitForGPU(computeFence, cmdQueue);
     }
 
     util::ValueResult<std::vector<char>> LoadShader(const char *path) {
@@ -2561,13 +2561,13 @@ struct Direct3D12VDPRenderer::Impl {
         // Sanity check: the upload buffer can hold transfers of this size
         YMIR_DEV_ASSERT(size < vdp2.uploadBuffer.GetSize());
 
-        if (!vdp2.uploadBuffer.Allocate(size, alignment, fence.GetCompletedValue(), outAlloc)) {
+        if (!vdp2.uploadBuffer.Allocate(size, alignment, computeFence.GetCompletedValue(), outAlloc)) {
             // Block until next fence completes and retry
             const UINT64 waitValue = vdp2.uploadBuffer.FindFenceValueForAllocation(size, alignment);
-            fence.Wait(INFINITE, waitValue);
+            computeFence.Wait(INFINITE, waitValue);
 
             // At this point, we really should be able to allocate the buffer
-            if (!vdp2.uploadBuffer.Allocate(size, alignment, fence->GetCompletedValue(), outAlloc)) {
+            if (!vdp2.uploadBuffer.Allocate(size, alignment, computeFence->GetCompletedValue(), outAlloc)) {
                 // TODO: consider increasing the upload buffer size or allocating overflow buffers.
                 // For now we'll just log the error and fail
                 YMIR_DEV_CHECK();
@@ -3409,9 +3409,8 @@ struct Direct3D12VDPRenderer::Impl {
         cmdQueue->ExecuteCommandLists(1, cmdList.GetAddressOfBase());
 
         // Advance frame
-        FrameContext &currFrame = vdp2.frames.GetCurrentFrame();
         vdp2.uploadBuffer.EndFrame(vdp2.frames.currFenceValue + 1);
-        vdp2.frames.MoveToNextFrame(fence, cmdQueue);
+        vdp2.frames.MoveToNextFrame(computeFence, cmdQueue);
 
         // Setup command list
         FrameContext &nextFrame = vdp2.frames.GetCurrentFrame();
