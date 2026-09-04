@@ -4,6 +4,8 @@ First and most important: make sure you're using the [latest version](https://gi
 
 Also check for [open issues](https://github.com/ymir-emu/Ymir/issues) on the GitHub repository. Use the search bar! Remove the `state:open` to also list closed issues -- those may include tips and hints that could help fix your problem.
 
+Take a look at the [official compatibility list](https://docs.google.com/spreadsheets/d/1SLZzL9LelSlpEmTKy8cjaQnE7mew2uW1rfCgcekO58Q/edit?usp=sharing) to see if there are any notes about the game. Some games require specific settings to work or may have worked in older versions of the emulator.
+
 If you're on Windows, install the latest [Microsoft Visual C++ Redistributable package](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) ([x86_64 installer](https://aka.ms/vc14/vc_redist.x64.exe), [AArch64/ARM64 installer](https://aka.ms/vc14/vc_redist.arm64.exe)).
 This is mandatory to make Ymir work.
 
