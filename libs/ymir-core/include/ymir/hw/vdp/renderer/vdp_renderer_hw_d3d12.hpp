@@ -9,7 +9,8 @@ Requires Shader Model 6.0.
 
 #include <ymir/hw/vdp/renderer/vdp_renderer_hw_base.hpp>
 
-#include <ymir/util/callback.hpp>
+#include "vdp_renderer_hw_d3d12_callbacks.hpp"
+
 #include <ymir/util/result.hpp>
 
 #include <memory>
@@ -18,24 +19,10 @@ Requires Shader Model 6.0.
 // Forward declarations
 
 struct ID3D12Device;
-struct ID3D12Resource;
-struct ID3D12Fence;
 
 // -----------------------------------------------------------------------------
 
 namespace ymir::vdp {
-
-/// @brief Type of callback invoked when the Direct3D 12 VDP renderer requests a frame to copy the finished output frame
-/// into. The returned resource (if any) must be a `ymir::vdp::kMaxResH` by `ymir::vdp::kMaxResV` `R8G8B8A8_UNORM` 2D
-/// texture in the `COPY_DEST` state and not referenced by any in-flight frames when returned. The frontend may choose
-/// to perform a CPU wait for the texture to be free if necessary.
-///
-/// @param[in] computeFence the compute fence to wait on
-/// @param[in] fenceValue the fence value to wait for
-/// @return a pointer to a 2D texture with `ymir::vdp::kMaxResH` by `ymir::vdp::kMaxResV` pixels and using
-/// R8G8B8A8_UNORM pixel format. Return `nullptr` to omit the copy for this frame.
-using Direct3D12GetFrameCopyTargetCallback =
-    util::OptionalCallback<ID3D12Resource *(ID3D12Fence *computeFence, uint64 fenceValue)>;
 
 /// @brief VDP renderer implementation using Direct3D 12.
 /// Requires a valid `ID3D12Device *` instance, which has its reference count increments to ensure all managed objects
@@ -56,9 +43,7 @@ public:
     // -------------------------------------------------------------------------
     // Configuration
 
-    /// @brief Sets the frame copy callback.
-    /// @param[in] cbFrameCopy the frame copy callback
-    void SetFrameCopyCallback(Direct3D12GetFrameCopyTargetCallback cbFrameCopy);
+    Direct3D12RendererCallbacks HwCallbacks;
 
     // -------------------------------------------------------------------------
     // Basics

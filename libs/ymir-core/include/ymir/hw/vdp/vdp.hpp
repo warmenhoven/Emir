@@ -9,6 +9,9 @@
 #include "vdp_state.hpp"
 
 #include "vdp_internal_callbacks.hpp"
+#if YMIR_PLATFORM_HAS_DIRECT3D
+    #include "renderer/vdp_renderer_hw_d3d12_callbacks.hpp"
+#endif
 
 #include "vdp_devlog.hpp"
 
@@ -151,6 +154,20 @@ public:
     util::PointerResult<Direct3D12VDPRenderer> UseDirect3D12Renderer(ID3D12Device *device) {
         return UseRenderer<Direct3D12VDPRenderer>(m_state, vdp2DebugRenderOptions, vdp2AccessPatternsConfig, device);
     }
+
+    /// @brief Configures the Direct3D 12 renderer frame request callback to use whenever the Direct3D 12 renderer is in
+    /// use.
+    ///
+    /// @param[in] callback the callback to register
+    void SetDirect3D12FrameCopyRequestCallback(CBDirect3D12FrameCopyRequestCallback callback) {
+        if (auto *hwRenderer = m_renderer->As<VDPRendererType::Direct3D12>()) {
+            // Apply directly to renderer
+            hwRenderer->HwCallbacks.FrameCopyRequest = callback;
+        } else {
+            // Remember for next instantiation.
+            m_d3d12RendererCallbacks.FrameCopyRequest = callback;
+        }
+    }
 #endif
 
     /// @brief Retrieves the enhancements configured for this VDP instance.
@@ -288,10 +305,19 @@ private:
         if (SoftwareVDPRenderer *swRenderer = m_renderer->As<VDPRendererType::Software>()) {
             m_swRendererCallbacks = swRenderer->SwCallbacks;
         }
+#if YMIR_PLATFORM_HAS_DIRECT3D
+        if (Direct3D12VDPRenderer *hwRenderer = m_renderer->As<VDPRendererType::Direct3D12>()) {
+            m_d3d12RendererCallbacks = hwRenderer->HwCallbacks;
+        }
+#endif
 
         renderer->Callbacks = callbacks;
         if constexpr (std::is_same_v<T, SoftwareVDPRenderer>) {
             renderer->SwCallbacks = m_swRendererCallbacks;
+#if YMIR_PLATFORM_HAS_DIRECT3D
+        } else if constexpr (std::is_same_v<T, Direct3D12VDPRenderer>) {
+            renderer->HwCallbacks = m_d3d12RendererCallbacks;
+#endif
         }
         renderer->ConfigureEnhancements(m_enhancements);
         renderer->VDP2SetResolution(m_HRes, m_VRes, m_exclusiveMonitor);
@@ -328,6 +354,10 @@ private:
 
     /// @brief The current software renderer callbacks configuration.
     SoftwareRendererCallbacks m_swRendererCallbacks;
+
+#if YMIR_PLATFORM_HAS_DIRECT3D
+    Direct3D12RendererCallbacks m_d3d12RendererCallbacks;
+#endif
 
     // -------------------------------------------------------------------------
     // VDP1 memory/register access

@@ -683,16 +683,18 @@ private:
 // ---------------------------------------------------------------------------------------------------------------------
 
 struct Direct3D12VDPRenderer::Impl {
-    Impl(VDPState &state, const config::VDP2AccessPatternsConfig &vdp2AccessPatternsConfig,
+    Impl(const Direct3D12RendererCallbacks &hwCallbacks, VDPState &state,
+         const config::VDP2AccessPatternsConfig &vdp2AccessPatternsConfig,
          const config::VDP2DebugRender &vdp2DebugRenderOptions, const config::Enhancements &enhancements)
         : vdpState(state)
         , enhancements(enhancements)
+        , hwCallbacks(hwCallbacks)
         , vdp2(vdp2AccessPatternsConfig, vdp2DebugRenderOptions) {}
 
     VDPState &vdpState;
     const config::Enhancements &enhancements;
 
-    Direct3D12GetFrameCopyTargetCallback cbGetFrameCopyTarget;
+    const Direct3D12RendererCallbacks &hwCallbacks;
 
     D3D12Device device;
 
@@ -3425,7 +3427,8 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Request a frame from the frontend
         // TODO: consider adding support for GPU waits
-        ID3D12Resource *copyTarget = cbGetFrameCopyTarget(computeFence.GetPointer(), vdp2.frames.GetNextFenceValue());
+        ID3D12Resource *copyTarget =
+            hwCallbacks.FrameCopyRequest(computeFence.GetPointer(), vdp2.frames.GetNextFenceValue());
         if (copyTarget != nullptr) {
             // Transition composited output texture to copy source
             vdp2.barrierTracker.TransitionTexture(vdp2.compositeOutTexture.GetPointer(),
@@ -3482,7 +3485,8 @@ struct Direct3D12VDPRenderer::Impl {
 Direct3D12VDPRenderer::Direct3D12VDPRenderer(VDPState &state, const config::VDP2DebugRender &vdp2DebugRenderOptions,
                                              const config::VDP2AccessPatternsConfig &vdp2AccessPatternsConfig)
     : HardwareVDPRendererBase(VDPRendererType::Direct3D12)
-    , m_impl(std::make_unique<Impl>(state, vdp2AccessPatternsConfig, vdp2DebugRenderOptions, m_enhancements)) {}
+    , m_impl(std::make_unique<Impl>(HwCallbacks, state, vdp2AccessPatternsConfig, vdp2DebugRenderOptions,
+                                    m_enhancements)) {}
 
 Direct3D12VDPRenderer::~Direct3D12VDPRenderer() {
     m_impl->Shutdown();
@@ -3505,13 +3509,6 @@ Direct3D12VDPRenderer::Create(VDPState &state, const config::VDP2DebugRender &vd
         return result.Error();
     }
     return renderer;
-}
-
-// -----------------------------------------------------------------------------
-// Configuration
-
-void Direct3D12VDPRenderer::SetFrameCopyCallback(Direct3D12GetFrameCopyTargetCallback cbGetFrameCopyTarget) {
-    m_impl->cbGetFrameCopyTarget = cbGetFrameCopyTarget;
 }
 
 // -----------------------------------------------------------------------------
