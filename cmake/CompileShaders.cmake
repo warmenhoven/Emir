@@ -753,6 +753,10 @@ function(compile_shader)
             "after modifying include relationships."
         )
 
+        # Make sure the dir for the dep file exists
+        get_filename_component(_dep_dir "${_dep_file}" DIRECTORY)
+        file(MAKE_DIRECTORY "${_dep_dir}")
+
         # Generate dependency file
         execute_process(
             ${_depfile_command}
@@ -767,8 +771,9 @@ function(compile_shader)
 
         # Parse dependency file
         file(READ "${_dep_file}" _depfile_contents)
-        string(REGEX REPLACE "^[^:]*:" "" _deps_raw "${_depfile_contents}")
-        string(REGEX REPLACE "[ \\\n]+" ";" _deps_raw "${_deps_raw}")
+        string(REGEX REPLACE "^.*:[ \t]+" "" _deps_raw "${_depfile_contents}")
+        string(REGEX REPLACE "\\\\[\r\n]+" "" _deps_raw "${_deps_raw}")
+        string(REGEX REPLACE "[ \t\r\n]+" ";" _deps_raw "${_deps_raw}")
         list(FILTER _deps_raw EXCLUDE REGEX "^$")
 
         # Normalize paths
