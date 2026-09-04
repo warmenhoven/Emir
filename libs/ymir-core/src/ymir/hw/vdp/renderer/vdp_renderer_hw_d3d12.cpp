@@ -33,6 +33,15 @@ using namespace ymir::gpu::d3d12;
 
 namespace ymir::vdp {
 
+namespace static_config {
+
+    /// @brief Selects the method for copying the composite output texture to the frontend.
+    /// `false` copies only the display region (HRes by VRes).
+    /// `true` copies the entire resource.
+    static constexpr bool copyFullCompositeResource = false;
+
+} // namespace static_config
+
 namespace grp {
 
     // -------------------------------------------------------------------------
@@ -683,6 +692,8 @@ struct Direct3D12VDPRenderer::Impl {
     VDPState &vdpState;
     const config::Enhancements &enhancements;
 
+    Direct3D12GetFrameCopyTargetCallback cbGetFrameCopyTarget;
+
     D3D12Device device;
 
     struct Features {
@@ -723,6 +734,10 @@ struct Direct3D12VDPRenderer::Impl {
         }
         const TFrameContext &GetCurrentFrame() const {
             return frames[frameIndex];
+        }
+
+        UINT64 GetNextFenceValue() const {
+            return currFenceValue + 1;
         }
 
         util::VoidResult<> MoveToNextFrame(D3D12Fence &fence, D3D12CommandQueue &cmdQueue) {
@@ -3358,6 +3373,10 @@ struct Direct3D12VDPRenderer::Impl {
         vdp2.barrierTracker.TransitionBuffer(frameCtx.lnclBackBuffer.GetPointer(),
                                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        vdp2.barrierTracker.TransitionTexture(vdp2.compositeOutTexture.GetPointer(),
+                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                              D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                                              D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
         vdp2.barrierTracker.Flush(cmdList);
 
         // Compose final image
@@ -3404,12 +3423,50 @@ struct Direct3D12VDPRenderer::Impl {
 
         auto &cmdList = vdp2.cmdList;
 
+        // Request a frame from the frontend
+        // TODO: consider adding support for GPU waits
+        ID3D12Resource *copyTarget = cbGetFrameCopyTarget(computeFence.GetPointer(), vdp2.frames.GetNextFenceValue());
+        if (copyTarget != nullptr) {
+            // Transition composited output texture to copy source
+            vdp2.barrierTracker.TransitionTexture(vdp2.compositeOutTexture.GetPointer(),
+                                                  D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_BARRIER_SYNC_COPY,
+                                                  D3D12_BARRIER_ACCESS_COPY_SOURCE, D3D12_BARRIER_LAYOUT_COPY_SOURCE);
+            vdp2.barrierTracker.Flush(cmdList);
+
+            // Copy composited output texture to provided texture
+            if constexpr (static_config::copyFullCompositeResource) {
+                // Full resource copy
+                cmdList->CopyResource(copyTarget, vdp2.compositeOutTexture.GetPointer());
+            } else {
+                // Display area copy
+                const D3D12_TEXTURE_COPY_LOCATION dstLoc{
+                    .pResource = copyTarget,
+                    .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                    .SubresourceIndex = 0,
+                };
+                const D3D12_TEXTURE_COPY_LOCATION srcLoc{
+                    .pResource = vdp2.compositeOutTexture.GetPointer(),
+                    .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                    .SubresourceIndex = 0,
+                };
+                const D3D12_BOX srcBox{
+                    .left = 0,
+                    .top = 0,
+                    .front = 0,
+                    .right = HRes,
+                    .bottom = VRes,
+                    .back = 1,
+                };
+                cmdList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, &srcBox);
+            }
+        }
+
         // Close and submit command list
         cmdList->Close();
         cmdQueue->ExecuteCommandLists(1, cmdList.GetAddressOfBase());
 
         // Advance frame
-        vdp2.uploadBuffer.EndFrame(vdp2.frames.currFenceValue + 1);
+        vdp2.uploadBuffer.EndFrame(vdp2.frames.GetNextFenceValue());
         vdp2.frames.MoveToNextFrame(computeFence, cmdQueue);
 
         // Setup command list
@@ -3452,6 +3509,13 @@ Direct3D12VDPRenderer::Create(VDPState &state, const config::VDP2DebugRender &vd
 
 // -----------------------------------------------------------------------------
 // Configuration
+
+void Direct3D12VDPRenderer::SetFrameCopyCallback(Direct3D12GetFrameCopyTargetCallback cbGetFrameCopyTarget) {
+    m_impl->cbGetFrameCopyTarget = cbGetFrameCopyTarget;
+}
+
+// -----------------------------------------------------------------------------
+// Basics
 
 bool Direct3D12VDPRenderer::IsValid() const {
     return true;
