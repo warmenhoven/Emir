@@ -10,6 +10,8 @@
     #include "gfx/gfx_metal_utils.hpp"
 #endif
 
+#include <ymir/hw/vdp/vdp.hpp>
+
 #include <SDL3/SDL_video.h>
 
 #include <imgui.h>
@@ -28,6 +30,21 @@ GraphicsService::GraphicsService(Settings &settings)
     , m_gfxContext(std::make_unique<NullGraphicsContext>()) {}
 
 GraphicsService::~GraphicsService() {}
+
+void GraphicsService::RegisterHardwareRendererCallbacks(ymir::vdp::VDP &vdp) {
+#if YMIR_PLATFORM_HAS_DIRECT3D
+    vdp.SetDirect3D12FrameCopyRequestCallback(
+        {this, [](ID3D12Fence *fence, uint64 fenceValue, void *ctx) -> ID3D12Resource * {
+             // TODO: this might need a mutex
+             auto &graphicsService = *static_cast<GraphicsService *>(ctx);
+             auto *graphicsContext = graphicsService.GetGraphicsContext().As<Direct3D12GraphicsContext>();
+             if (graphicsContext == nullptr) {
+                 return nullptr;
+             }
+             return graphicsContext->GetNextDisplayOutputFrame(fence, fenceValue);
+         }});
+#endif
+}
 
 util::VoidResult<> GraphicsService::InitGraphicsContext(const GraphicsContextSpec &spec, PresentMode presentMode) {
     m_gfxContext->Shutdown();

@@ -6,6 +6,8 @@
 // Forward declarations
 
 struct ID3D12Device;
+struct ID3D12Resource;
+struct ID3D12Fence;
 
 // -----------------------------------------------------------------------------
 // Implementation
@@ -59,6 +61,16 @@ public:
     /// @brief Retrieves a pointer to the `ID3D12Device` managed by this graphics context.
     /// @return a pointer to the context's Direct3D 12 device instance
     ID3D12Device *GetDevice() const;
+
+    /// @brief Retrieves a pointer to the next free display output frame, or `nullptr` if no frame slots are available.
+    /// @param[in] fence the compute fence to wait for
+    /// @param[in] fenceValue the fence value to wait for
+    /// @return a pointer to the next free display output frame, or `nullptr` if no frame is available
+    ID3D12Resource *GetNextDisplayOutputFrame(ID3D12Fence *fence, uint64 fenceValue);
+
+    // TODO: get TextureID of current frame
+    // - updated dynamically when queried to the latest completed frame
+    // - some way to detect changes to allow frontend to redraw the frame only if needed
 
 private:
     std::unique_ptr<Impl> m_impl;

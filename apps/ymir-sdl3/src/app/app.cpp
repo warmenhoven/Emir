@@ -1096,28 +1096,7 @@ void App::RunEmulator() {
             },
         });
 
-#if YMIR_PLATFORM_HAS_DIRECT3D
-        vdp.SetDirect3D12FrameCopyRequestCallback(
-            {this, [](ID3D12Fence *fence, uint64 fenceValue, void *ctx) -> ID3D12Resource * {
-                 auto &app = *static_cast<App *>(ctx);
-
-                 // TODO: implement:
-                 // - data:
-                 //   - raw framebuffer textures ring buffer with one frame more than the number of swapchain textures
-                 //     to guarantee at least one free frame
-                 //   - current free slot index (texture to be handed over to compute for copying the final output)
-                 //   - current draw slot index (texture to be rendered to the scaled framebuffer texture)
-                 //   - last drawn slot index (so that we know whether to draw the next frame)
-                 // - when callback is invoked:
-                 //   - hand over next free frame (round-robin increment unless next frame is still in use by graphics)
-                 //   - store fence pointer + value with the frame
-                 //   - when fence completed value is met (non-blocking check), use that as the new framebuffer
-                 //     - never increment draw slot index past free slot index
-                 // - consider moving this to the D3D12 graphics context
-
-                 return nullptr;
-             }});
-#endif
+        m_graphicsService.RegisterHardwareRendererCallbacks(vdp);
     }
 
     // ---------------------------------

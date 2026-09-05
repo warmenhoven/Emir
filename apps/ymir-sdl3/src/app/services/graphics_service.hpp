@@ -17,6 +17,18 @@
 #include <unordered_map>
 #include <vector>
 
+// -----------------------------------------------------------------------------
+// Forward declarations
+
+namespace ymir::vdp {
+
+class VDP;
+
+} // namespace ymir::vdp
+
+// -----------------------------------------------------------------------------
+// Implementation
+
 namespace app::services {
 
 /// @brief Specifications for creating a graphics backend.
@@ -36,6 +48,10 @@ class GraphicsService {
 public:
     GraphicsService(Settings &settings);
     ~GraphicsService();
+
+    /// @brief Registers hardware renderer callbacks with the given VDP instance.
+    /// @param[in] vdp the VDP object
+    void RegisterHardwareRendererCallbacks(ymir::vdp::VDP &vdp);
 
     /// @brief Initializes a graphics context.
     /// `gfx::Backend::Null` cannot be created this way. Use `DestroyGraphicsContext()` to use it.
@@ -61,6 +77,13 @@ public:
     /// @return the current graphics backend in use
     gfx::Backend GetGraphicsContextBackend() const {
         return m_gfxContext->GetBackend();
+    }
+
+    /// @brief Retrieves a reference to the currently instantiated graphics context.
+    /// This is intended to grant access to low-level graphics API objects where needed.
+    /// @return a reference to the graphics context
+    gfx::IGraphicsContext &GetGraphicsContext() {
+        return *m_gfxContext;
     }
 
     /// @brief Retrieves a reference to the currently instantiated graphics context.

@@ -14,6 +14,8 @@
 
 #include <ymir/gpu/shaders/gpu_shaders.hpp>
 
+#include <ymir/hw/vdp/vdp_defs.hpp>
+
 #include <ymir/util/string.hpp>
 
 #include <backends/imgui_impl_dx12.h>
@@ -173,7 +175,7 @@ struct Direct3D12GraphicsContext::Impl {
         std::array<D3D12Resource, kFrameCount> stagingBuffers;
         UINT srvIndex;
         UINT rtvIndex;
-        UINT64 targetFenceVance;
+        UINT64 targetFenceValue;
         bool isRenderTarget;
 
         void Destroy(DescriptorHeapAllocator &resourceHeapAlloc, DescriptorHeapAllocator &rtvHeapAlloc) {
@@ -191,6 +193,14 @@ struct Direct3D12GraphicsContext::Impl {
 
     std::unordered_map<TextureID, TextureInstance> textures;
     std::deque<TextureToDelete> texturesToDelete;
+
+    struct DisplayFrameContext {
+        D3D12Resource texture;
+        D3D12Fence *fence;
+        UINT64 fenceValue;
+        DescriptorRange srvDesc;
+    };
+    std::array<DisplayFrameContext, kFrameCount + 1> displayFrames;
 
     // -------------------------------------------------------------------------
 
@@ -309,28 +319,58 @@ struct Direct3D12GraphicsContext::Impl {
         }
 
         // Create frame resources
-        {
-            // Create a RTV for each frame
-            for (UINT n = 0; n < kFrameCount; n++) {
-                ID3D12Resource *resource;
-                if (FAILED(swapchain->GetBuffer(n, IID_PPV_ARGS(&resource)))) {
-                    return util::ErrorMessage{fmt::format("Failed to get swapchain buffer {}", n)};
-                }
-                if (FAILED(frames[n].cmdAlloc.Create(device, D3D12_COMMAND_LIST_TYPE_DIRECT))) {
-                    return util::ErrorMessage{
-                        fmt::format("Failed to create command allocator for swapchain frame #{}", n)};
-                }
-                DescriptorRange &rtvDesc = frames[n].rtvDesc;
-                if (!rtvHeapAlloc.Allocate(rtvDesc)) {
-                    return util::ErrorMessage{fmt::format("Failed to allocate RTV for swapchain frame #{}", n)};
-                }
-                frames[n].cmdAlloc->SetName(
-                    fmt::format(L"[Ymir-GCtx] Command allocator for swapchain buffer #{}", n).c_str());
-                device->CreateRenderTargetView(resource, nullptr, rtvDesc.cpuHandle);
-                resource->SetName(fmt::format(L"[Ymir-GCtx] Swapchain buffer #{}", n).c_str());
-                frames[n].renderTarget.Attach(resource);
-                frames[n].fenceValue = 1;
+        for (UINT n = 0; n < kFrameCount; n++) {
+            ID3D12Resource *resource;
+            if (FAILED(swapchain->GetBuffer(n, IID_PPV_ARGS(&resource)))) {
+                return util::ErrorMessage{fmt::format("Failed to get swapchain buffer {}", n)};
             }
+            if (FAILED(frames[n].cmdAlloc.Create(device, D3D12_COMMAND_LIST_TYPE_DIRECT))) {
+                return util::ErrorMessage{fmt::format("Failed to create command allocator for swapchain frame #{}", n)};
+            }
+            DescriptorRange &rtvDesc = frames[n].rtvDesc;
+            if (!rtvHeapAlloc.Allocate(rtvDesc)) {
+                return util::ErrorMessage{fmt::format("Failed to allocate RTV for swapchain frame #{}", n)};
+            }
+            frames[n].cmdAlloc->SetName(
+                fmt::format(L"[Ymir-GCtx] Command allocator for swapchain buffer #{}", n).c_str());
+            device->CreateRenderTargetView(resource, nullptr, rtvDesc.cpuHandle);
+            resource->SetName(fmt::format(L"[Ymir-GCtx] Swapchain buffer #{}", n).c_str());
+            frames[n].renderTarget.Attach(resource);
+            frames[n].fenceValue = 1;
+        }
+
+        // Create display frame resources
+        for (UINT n = 0; n < kFrameCount + 1; n++) {
+            static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+            DisplayFrameContext &frameCtx = displayFrames[n];
+            auto builder = frameCtx.texture.Texture2DBuilder(ymir::vdp::kMaxResH, ymir::vdp::kMaxResV);
+            builder.Format(kFormat);
+            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                return util::ErrorMessage{
+                    fmt::format("Failed to create display texture #{}, error code {:X}", n, (uint32)hr)};
+            }
+
+            if (!resourceHeapAlloc.Allocate(frameCtx.srvDesc)) {
+                return util::ErrorMessage{fmt::format("Could not allocate display texture #{} SRV", n)};
+            }
+            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                .Format = kFormat,
+                .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D,
+                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                .Texture2D =
+                    {
+                        .MostDetailedMip = 0,
+                        .MipLevels = 1,
+                        .PlaneSlice = 0,
+                        .ResourceMinLODClamp = 0.0f,
+                    },
+            };
+            device->CreateShaderResourceView(frameCtx.texture.GetPointer(), &srvDesc, frameCtx.srvDesc.cpuHandle);
+
+            // These come from the VDP renderer callback
+            frameCtx.fence = nullptr;
+            frameCtx.fenceValue = 0;
         }
 
         // Create command lists
@@ -1029,7 +1069,7 @@ struct Direct3D12GraphicsContext::Impl {
         texToDelete.stagingBuffers.swap(texture.stagingBuffers);
         texToDelete.srvIndex = texture.srvDesc.baseIndex;
         texToDelete.rtvIndex = texture.rtvDesc.baseIndex;
-        texToDelete.targetFenceVance = currFrame.fenceValue + kFrameCount;
+        texToDelete.targetFenceValue = currFrame.fenceValue + kFrameCount;
         texToDelete.isRenderTarget = texture.spec.access == TextureAccess::RenderTarget;
     }
 
@@ -1040,7 +1080,7 @@ struct Direct3D12GraphicsContext::Impl {
 
         const FrameContext &currFrame = GetCurrentFrameContext();
         const UINT64 fenceValue = currFrame.fenceValue;
-        while (!texturesToDelete.empty() && (force || texturesToDelete.front().targetFenceVance <= fenceValue)) {
+        while (!texturesToDelete.empty() && (force || texturesToDelete.front().targetFenceValue <= fenceValue)) {
             texturesToDelete.front().Destroy(resourceHeapAlloc, rtvHeapAlloc);
             texturesToDelete.pop_front();
         }
@@ -1626,6 +1666,23 @@ util::ValueResult<PresentResult> Direct3D12GraphicsContext::Present() {
 
 ID3D12Device *Direct3D12GraphicsContext::GetDevice() const {
     return m_impl->device.GetPointer();
+}
+
+ID3D12Resource *Direct3D12GraphicsContext::GetNextDisplayOutputFrame(ID3D12Fence *fence, uint64 fenceValue) {
+    // TODO: implement:
+    // - data:
+    //   - raw framebuffer textures ring buffer with one frame more than the number of swapchain textures to
+    //     guarantee at least one free frame
+    //   - current free slot index (texture to be handed over to compute for copying the final output)
+    //   - current draw slot index (texture to be rendered to the scaled framebuffer texture)
+    //   - last drawn slot index (so that we know whether to draw the next frame)
+    // - when callback is invoked:
+    //   - hand over next free frame (round-robin increment unless next frame is still in use by graphics)
+    //   - store fence pointer + value with the frame
+    //   - when fence completed value is met (non-blocking check), use that as the new framebuffer
+    //     - never increment draw slot index past free slot index
+
+    return nullptr;
 }
 
 } // namespace app::gfx
