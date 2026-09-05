@@ -56,6 +56,7 @@ Introduces save state file version 14.
     - Metal Fighter Miku: goes in-game, no longer stuck after start menu. (#466)
     - Soviet Strike: VDP1 graphics no longer flicker.
 - GameDB: Force-enable SH-2 cache emulation for Dino Island to fix palette glitches. (#764)
+- GameDB: Force-enable SH-2 cache emulation for Dragon Force II to fix black screen when entering 100 vs 100 battles. (#945)
 - GameDB: Force fast bus timings on Resident Evil to fix start menu crashes. (#907)
 - GameDB: Slow down VDP1 execution speed in 3D Baseball to fix team name plates and announcer voice line glitches. (#593)
 - GUI: Reinitialize style from scratch when rescaling GUI elements. Fixes Settings windows (and probably others) from growing extremely large when constantly switching display scales.
