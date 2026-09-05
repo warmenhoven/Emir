@@ -2698,6 +2698,14 @@ void App::RunEmulator() {
                     }
 
                     ImGui::MenuItem("Debug output", nullptr, &m_windowManagerService.DebugOutputWindow().Open);
+                    ImGui::Separator();
+                    if (ImGui::MenuItem(
+                            "Windowed video output",
+                            input::ToShortcut(inputContext, actions::general::ToggleWindowedVideoOutput).c_str(),
+                            &settings.video.displayVideoOutputInWindow)) {
+                        fitWindowToScreenNow = true;
+                        settings.MakeDirty();
+                    }
                     ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("Help")) {
