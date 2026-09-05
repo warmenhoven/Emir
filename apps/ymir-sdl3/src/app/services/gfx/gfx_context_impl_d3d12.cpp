@@ -25,14 +25,13 @@
 
 #include <d3d12.h>
 
-#include <wil/com.h>
-
 #include <fmt/format.h>
 
 #include <cmrc/cmrc.hpp>
 CMRC_DECLARE(ymir_sdl3_shaders);
 
 #include <array>
+#include <atomic>
 #include <deque>
 #include <unordered_map>
 
@@ -201,12 +200,20 @@ struct Direct3D12GraphicsContext::Impl {
 
     struct DisplayFrameContext {
         TextureID textureID;
-        bool initialized;
 
-        ID3D12Fence *fence; // Compute fence to be waited on
-        UINT64 fenceValue;  // Value to wait for
+        std::atomic<ID3D12Fence *> computeFence; // Compute fence to be waited on
+        std::atomic<UINT64> computeFenceValue;   // Value to wait for
+        std::atomic<UINT64> graphicsFenceValue;  // Graphics fence value on which this frame is being used
     };
     std::array<DisplayFrameContext, kFrameCount + 1> displayFrames;
+
+    static constexpr size_t kInvalidFrameIndex = -1;
+
+    // Index of next display frame for the VDP compute renderer to draw into
+    size_t computeDisplayFrame = 0;
+
+    // Index of the display frame containing the latest rendered graphics
+    size_t graphicsDisplayFrame = kInvalidFrameIndex;
 
     // -------------------------------------------------------------------------
 
@@ -364,12 +371,12 @@ struct Direct3D12GraphicsContext::Impl {
                     fmt::format("Failed to create display output #{} texture: {}", n, textureResult.Error().message)};
             }
             frameCtx.textureID = texIDMgr.GetNextTextureID();
-            frameCtx.initialized = false;
             textures.insert({frameCtx.textureID, textureResult.Value()});
 
             // These come from the VDP renderer callback
-            frameCtx.fence = nullptr;
-            frameCtx.fenceValue = 0;
+            frameCtx.computeFence = nullptr;
+            frameCtx.computeFenceValue = 0;
+            frameCtx.graphicsFenceValue = 0;
         }
 
         // Create command lists
@@ -1520,37 +1527,87 @@ struct Direct3D12GraphicsContext::Impl {
         return frames[frameIndex];
     }
 
-    ID3D12Resource *GetNextDisplayOutputTexture(ID3D12Fence *fence, uint64 fenceValue) {
-        // TODO: implement:
-        // - data:
-        //   - current free slot index (texture to be handed over to compute for copying the final output)
-        //   - current draw slot index (texture to be rendered to the scaled framebuffer texture)
-        //   - last drawn slot index (so that we know whether the frame changed)
-        // - when callback is invoked:
-        //   - hand over next free frame (round-robin increment unless next frame is still in use by graphics)
-        //   - store fence pointer + value with the frame
-        //   - when fence completed value is met (non-blocking check), use that as the new framebuffer
-        //     - never increment draw slot index past free slot index
+    size_t GetDisplayFrameIndexForCompute() {
+        const DisplayFrameContext &currFrameCtx = displayFrames[computeDisplayFrame];
+        if (currFrameCtx.computeFence.load(std::memory_order_acquire) == nullptr) {
+            // Never used by compute - context just initialized
+            return computeDisplayFrame;
+        }
 
-        const size_t frameIndex = 0; // TODO: pick next target
-        DisplayFrameContext &frameCtx = displayFrames[frameIndex];
+        // Go to next frame, skipping all frames taken by graphics right now.
+        // Reuse current frame if they're all taken. (This should never happen, but we implement it as a safeguard.)
+        size_t nextFrameIndex = (computeDisplayFrame + 1) % displayFrames.size();
+        while (true) {
+            if (nextFrameIndex == computeDisplayFrame) {
+                // Looped back to current frame
+                break;
+            }
+            if (fenceFrame.GetCompletedValue() >=
+                displayFrames[nextFrameIndex].graphicsFenceValue.load(std::memory_order_acquire)) {
+                // Not in use by graphics
+                break;
+            }
+            nextFrameIndex = (nextFrameIndex + 1) % displayFrames.size();
+        }
+        computeDisplayFrame = nextFrameIndex;
+        return computeDisplayFrame;
+    }
+
+    ID3D12Resource *GetNextDisplayOutputTexture(ID3D12Fence *fence, uint64 fenceValue) {
+        const size_t nextIndex = GetDisplayFrameIndexForCompute();
+        DisplayFrameContext &frameCtx = displayFrames[nextIndex];
 
         TextureInstance *texture = GetTexture(frameCtx.textureID);
         if (texture == nullptr) {
             return nullptr; // Shouldn't happen
         }
 
-        frameCtx.fence = fence;
-        frameCtx.fenceValue = fenceValue;
+        frameCtx.computeFence.store(fence, std::memory_order_release);
+        frameCtx.computeFenceValue.store(fenceValue, std::memory_order_release);
         return texture->resource.GetPointer();
     }
 
+    size_t GetDisplayFrameIndexForGraphics() {
+        UINT64 maxComputeFenceValue;
+        if (graphicsDisplayFrame == kInvalidFrameIndex) {
+            maxComputeFenceValue = 0;
+        } else {
+            maxComputeFenceValue =
+                displayFrames[graphicsDisplayFrame].computeFenceValue.load(std::memory_order_acquire);
+        }
+
+        // Scan the whole array for the latest frame completed in the compute context that's ahead of the last frame
+        // returned in the previous iteration
+        for (size_t i = 0; i < displayFrames.size(); ++i) {
+            const DisplayFrameContext &frameCtx = displayFrames[i];
+            if (frameCtx.computeFence.load(std::memory_order_acquire) == nullptr) {
+                // This frame was never assigned to compute, skip it
+                continue;
+            }
+
+            // Check if the frame is newer
+            const UINT64 fenceValue = frameCtx.computeFenceValue.load(std::memory_order_acquire);
+            if (fenceValue > maxComputeFenceValue) {
+                // Update frame index
+                graphicsDisplayFrame = i;
+                maxComputeFenceValue = fenceValue;
+            }
+        }
+
+        return graphicsDisplayFrame;
+    }
+
     TextureID AcquireCurrentDisplayOutputTexture() {
-        // TODO: find index of the latest completed frame
         // TODO: return changed flag to allow frontend to redraw the frame only if needed
 
-        const size_t frameIndex = 0; // TODO: use latest completed frame index
+        // Get latest completed frame index
+        const size_t frameIndex = GetDisplayFrameIndexForGraphics();
+        if (frameIndex >= displayFrames.size()) {
+            // No frames were rendered; bail out
+            return kInvalidTextureID;
+        }
         DisplayFrameContext &frameCtx = displayFrames[frameIndex];
+        frameCtx.graphicsFenceValue = GetCurrentFrameContext().fenceValue;
 
         TextureInstance *texture = GetTexture(frameCtx.textureID);
         if (texture == nullptr) {
@@ -1564,7 +1621,7 @@ struct Direct3D12GraphicsContext::Impl {
                 .SyncAfter = D3D12_BARRIER_SYNC_PIXEL_SHADING,
                 .AccessBefore = D3D12_BARRIER_ACCESS_COPY_DEST,
                 .AccessAfter = D3D12_BARRIER_ACCESS_COMMON,
-                .LayoutBefore = frameCtx.initialized ? D3D12_BARRIER_LAYOUT_COPY_DEST : D3D12_BARRIER_LAYOUT_COMMON,
+                .LayoutBefore = D3D12_BARRIER_LAYOUT_COPY_DEST,
                 .LayoutAfter = D3D12_BARRIER_LAYOUT_COMMON,
                 .pResource = texture->resource.GetPointer(),
                 .Subresources =
@@ -1592,26 +1649,22 @@ struct Direct3D12GraphicsContext::Impl {
                     {
                         .pResource = texture->resource.GetPointer(),
                         .Subresource = 0,
-                        .StateBefore =
-                            frameCtx.initialized ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_COMMON,
+                        .StateBefore = D3D12_RESOURCE_STATE_COPY_DEST,
                         .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                     },
             };
-            cmdListOps->ResourceBarrier(1, &barrier);
+            cmdListFrame->ResourceBarrier(1, &barrier);
         }
-        frameCtx.initialized = true;
 
         // Wait for compute fence
-        if (frameCtx.fence != nullptr) {
-            cmdQueue->Wait(frameCtx.fence, frameCtx.fenceValue);
-        }
+        assert(frameCtx.computeFence != nullptr);
+        cmdQueue->Wait(frameCtx.computeFence, frameCtx.computeFenceValue);
 
         return frameCtx.textureID;
     }
 
     void ReleaseCurrentDisplayOutputTexture() {
-        const size_t frameIndex = 0; // TODO: get latest completed frame index
-        DisplayFrameContext &frameCtx = displayFrames[frameIndex];
+        DisplayFrameContext &frameCtx = displayFrames[graphicsDisplayFrame];
 
         TextureInstance *texture = GetTexture(frameCtx.textureID);
         if (texture == nullptr) {
@@ -1659,7 +1712,7 @@ struct Direct3D12GraphicsContext::Impl {
                         .StateAfter = D3D12_RESOURCE_STATE_COPY_DEST,
                     },
             };
-            cmdListOps->ResourceBarrier(1, &barrier);
+            cmdListFrame->ResourceBarrier(1, &barrier);
         }
     }
 };

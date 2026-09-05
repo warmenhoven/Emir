@@ -958,8 +958,6 @@ void App::RunEmulator() {
                 const gfx::TextureID dispTextureID = m_graphicsService.GetTextureID(dispTexture);
                 gfxCtx.RenderToTexture(hwFbTexture, dispTextureID, srcRect, dstRect);
                 gfxCtx.ReleaseCurrentDisplayOutputTexture();
-            } else {
-                m_graphicsService.RenderToTexture(swFbTexture, dispTexture, srcRect, dstRect);
             }
         } else {
             m_graphicsService.RenderToTexture(swFbTexture, dispTexture, srcRect, dstRect);
