@@ -94,7 +94,6 @@ add_executable(ymir-sdl3
 
     src/app/services/gfx/gfx_adapters.cpp
     src/app/services/gfx/gfx_adapters.hpp
-    src/app/services/gfx/gfx_context.cpp
     src/app/services/gfx/gfx_context.hpp
     src/app/services/gfx/gfx_context_impl_null.hpp
     src/app/services/gfx/gfx_context_impl_sdl_renderer.cpp
@@ -102,6 +101,8 @@ add_executable(ymir-sdl3
     src/app/services/gfx/gfx_context_impls.hpp
     src/app/services/gfx/gfx_context_specs.hpp
     src/app/services/gfx/gfx_gui_types.hpp
+    src/app/services/gfx/gfx_texture_id_manager.cpp
+    src/app/services/gfx/gfx_texture_id_manager.hpp
     src/app/services/gfx/gfx_types.cpp
     src/app/services/gfx/gfx_types.hpp
 

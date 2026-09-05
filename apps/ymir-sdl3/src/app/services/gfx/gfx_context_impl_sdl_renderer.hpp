@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gfx_context.hpp"
+#include "gfx_texture_id_manager.hpp"
 
 #include <SDL3/SDL_render.h>
 
@@ -66,6 +67,7 @@ private:
         Texture2DSpec spec;
     };
     std::unordered_map<TextureID, TextureInstance> m_textures;
+    TextureIDManager m_texIDMgr;
 
     TextureInstance *GetTexture(TextureID id);
     const TextureInstance *GetTexture(TextureID id) const;

@@ -146,7 +146,7 @@ util::ValueResult<TextureID> SDLRendererGraphicsContext::CreateTexture(const Tex
     }
     SDL_SetTextureScaleMode(texture, ToSDL3Value(spec.filterMode));
 
-    const TextureID id = GetNextTextureID();
+    const TextureID id = m_texIDMgr.GetNextTextureID();
     assert(!m_textures.contains(id));
     m_textures[id] = {
         .texture = texture,
@@ -160,7 +160,7 @@ void SDLRendererGraphicsContext::DestroyTexture(TextureID id) {
     if (instance != nullptr) {
         SDL_DestroyTexture(instance->texture);
         m_textures.erase(id);
-        FreeTextureID(id);
+        m_texIDMgr.FreeTextureID(id);
     }
 }
 

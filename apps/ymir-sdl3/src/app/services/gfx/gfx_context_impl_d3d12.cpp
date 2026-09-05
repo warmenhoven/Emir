@@ -2,6 +2,8 @@
 
 #include "gfx_context_spec_d3d12.hpp"
 
+#include "gfx_texture_id_manager.hpp"
+
 #include <ymir/gpu/d3d12/d3d12_debug.hpp>
 #include <ymir/gpu/d3d12/d3d12_descriptor_heap.hpp>
 #include <ymir/gpu/d3d12/d3d12_descriptor_heap_allocator.hpp>
@@ -159,6 +161,7 @@ struct Direct3D12GraphicsContext::Impl {
         D3D12Resource resource;
         std::array<D3D12Resource, kFrameCount> stagingBuffers;
         std::array<void *, kFrameCount> stagingBuffersData;
+        bool isReserved; // reserved for display textures
 
         DescriptorRange srvDesc;
         DescriptorRange rtvDesc; // only valid for TextureAccess::RenderTarget
@@ -191,14 +194,16 @@ struct Direct3D12GraphicsContext::Impl {
         }
     };
 
+    TextureIDManager texIDMgr;
+
     std::unordered_map<TextureID, TextureInstance> textures;
     std::deque<TextureToDelete> texturesToDelete;
 
     struct DisplayFrameContext {
-        D3D12Resource texture;
-        D3D12Fence *fence;
-        UINT64 fenceValue;
-        DescriptorRange srvDesc;
+        TextureID textureID;
+
+        D3D12Fence *fence; // Compute fence to be waited on
+        UINT64 fenceValue; // Value to wait for
     };
     std::array<DisplayFrameContext, kFrameCount + 1> displayFrames;
 
@@ -344,29 +349,21 @@ struct Direct3D12GraphicsContext::Impl {
             static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
             DisplayFrameContext &frameCtx = displayFrames[n];
-            auto builder = frameCtx.texture.Texture2DBuilder(ymir::vdp::kMaxResH, ymir::vdp::kMaxResV);
-            builder.Format(kFormat);
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Failed to create display texture #{}, error code {:X}", n, (uint32)hr)};
-            }
-
-            if (!resourceHeapAlloc.Allocate(frameCtx.srvDesc)) {
-                return util::ErrorMessage{fmt::format("Could not allocate display texture #{} SRV", n)};
-            }
-            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                .Format = kFormat,
-                .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D,
-                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                .Texture2D =
-                    {
-                        .MostDetailedMip = 0,
-                        .MipLevels = 1,
-                        .PlaneSlice = 0,
-                        .ResourceMinLODClamp = 0.0f,
-                    },
+            const Texture2DSpec spec{
+                .width = ymir::vdp::kMaxResH,
+                .height = ymir::vdp::kMaxResV,
+                .format = PixelFormat::R8G8B8A8_UNORM,
+                .access = TextureAccess::Static,
+                .filterMode = TextureFilterMode::Nearest,
+                .name = fmt::format("[Ymir-GCtx] Display output #{}", n),
             };
-            device->CreateShaderResourceView(frameCtx.texture.GetPointer(), &srvDesc, frameCtx.srvDesc.cpuHandle);
+            auto textureResult = CreateTexture(spec, true);
+            if (!textureResult) {
+                return util::ErrorMessage{
+                    fmt::format("Failed to create display output #{} texture: {}", n, textureResult.Error().message)};
+            }
+            frameCtx.textureID = texIDMgr.GetNextTextureID();
+            textures.insert({frameCtx.textureID, textureResult.Value()});
 
             // These come from the VDP renderer callback
             frameCtx.fence = nullptr;
@@ -950,8 +947,9 @@ struct Direct3D12GraphicsContext::Impl {
         return {};
     }
 
-    util::ValueResult<TextureInstance> CreateTexture(const Texture2DSpec &spec) {
+    util::ValueResult<TextureInstance> CreateTexture(const Texture2DSpec &spec, bool reserved) {
         TextureInstance texture;
+        texture.isReserved = reserved;
 
         const bool isRenderTarget = spec.access == TextureAccess::RenderTarget;
 
@@ -976,24 +974,26 @@ struct Direct3D12GraphicsContext::Impl {
                                       &texture.uploadBufferSize);
         texture.rowPitch = PixelFormatUnitSize(spec.format) * spec.width;
 
-        // In D3D12, textures cannot be directly written to by the CPU - a staging buffer is always needed.
-        // Static and Streaming access modes have identical behavior.
-        // We store one buffer per frame to enable parallel updates.
-        for (int i = 0; i < kFrameCount; ++i) {
-            D3D12Resource &buffer = texture.stagingBuffers[i];
-            auto builder = buffer.BufferBuilder(texture.uploadBufferSize);
-            builder.HeapType(D3D12_HEAP_TYPE_UPLOAD);
-            builder.InitialState(D3D12_RESOURCE_STATE_GENERIC_READ);
-            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create texture staging buffer #{}, error code {:X}", i, (uint32)hr)};
-            }
-            if (HRESULT hr = buffer->Map(0, nullptr, &texture.stagingBuffersData[i]); FAILED(hr)) {
-                return util::ErrorMessage{
-                    fmt::format("Could not map texture staging buffer #{}, error code {:X}", i, (uint32)hr)};
-            }
-            if (!spec.name.empty()) {
-                buffer->SetName(fmt::format(L"{} staging buffer #{}", util::StringToWString(spec.name), i).c_str());
+        if (!reserved) {
+            // In D3D12, textures cannot be directly written to by the CPU - a staging buffer is always needed.
+            // Static and Streaming access modes have identical behavior.
+            // We store one buffer per frame to enable parallel updates.
+            for (int i = 0; i < kFrameCount; ++i) {
+                D3D12Resource &buffer = texture.stagingBuffers[i];
+                auto builder = buffer.BufferBuilder(texture.uploadBufferSize);
+                builder.HeapType(D3D12_HEAP_TYPE_UPLOAD);
+                builder.InitialState(D3D12_RESOURCE_STATE_GENERIC_READ);
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not create texture staging buffer #{}, error code {:X}", i, (uint32)hr)};
+                }
+                if (HRESULT hr = buffer->Map(0, nullptr, &texture.stagingBuffersData[i]); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not map texture staging buffer #{}, error code {:X}", i, (uint32)hr)};
+                }
+                if (!spec.name.empty()) {
+                    buffer->SetName(fmt::format(L"{} staging buffer #{}", util::StringToWString(spec.name), i).c_str());
+                }
             }
         }
 
@@ -1035,12 +1035,15 @@ struct Direct3D12GraphicsContext::Impl {
             return util::ErrorMessage{"Texture does not exist"};
         }
         TextureInstance &texture = it->second;
+        if (texture.isReserved) {
+            return util::ErrorMessage{"Cannot resize reserved texture"};
+        }
 
         // First, try creating new texture using the existing texture's specifications
         Texture2DSpec newSpec = texture.spec;
         newSpec.width = width;
         newSpec.height = height;
-        auto createResult = CreateTexture(newSpec);
+        auto createResult = CreateTexture(newSpec, texture.isReserved);
         if (!createResult) {
             return createResult.Error();
         }
@@ -1058,6 +1061,9 @@ struct Direct3D12GraphicsContext::Impl {
             return;
         }
         auto &texture = it->second;
+        if (texture.isReserved) {
+            return;
+        }
         SubmitTextureForDeletion(texture);
         textures.erase(it);
     }
@@ -1109,7 +1115,12 @@ struct Direct3D12GraphicsContext::Impl {
         if (it == textures.end()) {
             return util::ErrorMessage{"Invalid texture ID"};
         }
+
         TextureInstance &texture = it->second;
+        if (texture.isReserved) {
+            return util::ErrorMessage{"Cannot update reserved texture"};
+        }
+
         D3D12Resource &stagingBuffer = texture.stagingBuffers[frameIndex];
         void *stagingBufferData = texture.stagingBuffersData[frameIndex];
 
@@ -1506,6 +1517,25 @@ struct Direct3D12GraphicsContext::Impl {
     const FrameContext &GetCurrentFrameContext() const {
         return frames[frameIndex];
     }
+
+    ID3D12Resource *GetNextDisplayOutputFrame(ID3D12Fence *fence, uint64 fenceValue) {
+        // TODO: implement:
+        // - data:
+        //   - current free slot index (texture to be handed over to compute for copying the final output)
+        //   - current draw slot index (texture to be rendered to the scaled framebuffer texture)
+        //   - last drawn slot index (so that we know whether to draw the next frame)
+        // - when callback is invoked:
+        //   - hand over next free frame (round-robin increment unless next frame is still in use by graphics)
+        //   - store fence pointer + value with the frame
+        //   - when fence completed value is met (non-blocking check), use that as the new framebuffer
+        //     - never increment draw slot index past free slot index
+
+        TextureInstance *instance = GetTexture(displayFrames[0].textureID);
+        if (instance == nullptr) {
+            return nullptr; // Shouldn't happen
+        }
+        return instance->resource.GetPointer();
+    }
 };
 
 // -----------------------------------------------------------------------------
@@ -1609,12 +1639,12 @@ void Direct3D12GraphicsContext::ImGuiRenderFrame() {
 }
 
 util::ValueResult<TextureID> Direct3D12GraphicsContext::CreateTexture(const Texture2DSpec &spec) {
-    auto result = m_impl->CreateTexture(spec);
+    auto result = m_impl->CreateTexture(spec, false);
     if (!result) {
         return result.Error();
     }
 
-    const TextureID id = GetNextTextureID();
+    const TextureID id = m_impl->texIDMgr.GetNextTextureID();
     m_impl->textures[id] = std::move(result.Value());
 
     return id;
@@ -1669,20 +1699,7 @@ ID3D12Device *Direct3D12GraphicsContext::GetDevice() const {
 }
 
 ID3D12Resource *Direct3D12GraphicsContext::GetNextDisplayOutputFrame(ID3D12Fence *fence, uint64 fenceValue) {
-    // TODO: implement:
-    // - data:
-    //   - raw framebuffer textures ring buffer with one frame more than the number of swapchain textures to
-    //     guarantee at least one free frame
-    //   - current free slot index (texture to be handed over to compute for copying the final output)
-    //   - current draw slot index (texture to be rendered to the scaled framebuffer texture)
-    //   - last drawn slot index (so that we know whether to draw the next frame)
-    // - when callback is invoked:
-    //   - hand over next free frame (round-robin increment unless next frame is still in use by graphics)
-    //   - store fence pointer + value with the frame
-    //   - when fence completed value is met (non-blocking check), use that as the new framebuffer
-    //     - never increment draw slot index past free slot index
-
-    return nullptr;
+    return m_impl->GetNextDisplayOutputFrame(fence, fenceValue);
 }
 
 } // namespace app::gfx

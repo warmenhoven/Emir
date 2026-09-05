@@ -1,6 +1,8 @@
 #include "gfx_context_impl_metal.hpp"
 #include "gfx_context_spec_metal.hpp"
 
+#include "gfx_texture_id_manager.hpp"
+
 #include <ymir/gpu/shaders/gpu_shaders.hpp>
 
 #include <ymir/util/string.hpp>
@@ -162,6 +164,8 @@ struct MetalGraphicsContext::Impl {
 
     std::unordered_map<TextureID, TextureInstance> textures;
     std::deque<TextureToDelete> texturesToDelete;
+
+    TextureIDManager texIDMgr;
 
     // -------------------------------------------------------------------------
 
@@ -989,7 +993,7 @@ util::ValueResult<TextureID> MetalGraphicsContext::CreateTexture(const Texture2D
         return result.Error();
     }
 
-    const TextureID textureID = GetNextTextureID();
+    const TextureID textureID = m_impl->texIDMgr.GetNextTextureID();
     m_impl->textures[textureID] = std::move(result.Value());
 
     return textureID;

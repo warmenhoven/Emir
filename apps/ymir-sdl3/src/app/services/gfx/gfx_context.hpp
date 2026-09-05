@@ -7,7 +7,6 @@
 #include <imgui.h>
 
 #include <functional>
-#include <vector>
 
 namespace app::gfx {
 
@@ -154,20 +153,8 @@ public:
     /// If failed, it's highly likely that the device was destroyed and needs to be reinitialized.
     virtual util::ValueResult<PresentResult> Present() = 0;
 
-protected:
-    /// @brief Retrieves the next free texture ID.
-    /// @return a free texture ID
-    TextureID GetNextTextureID();
-
-    /// @brief Releases the given texture ID for reuse.
-    /// @param[in] id the texture ID to free
-    void FreeTextureID(TextureID id);
-
 private:
     Backend m_backend;
-
-    std::vector<TextureID> m_freeTextureIDs;
-    TextureID m_nextTextureID = 0;
 };
 
 } // namespace app::gfx
