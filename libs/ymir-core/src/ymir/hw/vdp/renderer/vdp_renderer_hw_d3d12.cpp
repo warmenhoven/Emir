@@ -1420,11 +1420,15 @@ struct Direct3D12VDPRenderer::Impl {
         D3D12Resource layerRenderParamsBuffer;
         /// @brief Layer rendering parameters buffer SRV (offline).
         DescriptorRange layerRenderParamsSRV;
+        /// @brief Current layer rendering parameters generation (dirty tracking).
+        uint32 layerRenderParamsGeneration = 0xFFFFFFFF;
 
         /// @brief Layer composition parameters buffer.
         D3D12Resource composeParamsBuffer;
         /// @brief Layer composition parameters buffer SRV (offline).
         DescriptorRange composeParamsSRV;
+        /// @brief Current composition parameters generation (dirty tracking).
+        uint32 composeParamsGeneration = 0xFFFFFFFF;
 
         /// @brief Pipeline state object for drawing the sprite layer.
         D3D12PipelineState drawSpritePSO;
@@ -1539,8 +1543,8 @@ struct Direct3D12VDPRenderer::Impl {
 
         BarrierTracker barrierTracker;
 
-        bool layerRenderParamsDirty = false;
-        bool composeParamsDirty = false;
+        uint32 layerRenderParamsGeneration = 0;
+        uint32 composeParamsGeneration = 0;
 
         const config::VDP2AccessPatternsConfig &accessPatternsConfig;
         const config::VDP2DebugRender &debugRenderOptions;
@@ -2398,8 +2402,8 @@ struct Direct3D12VDPRenderer::Impl {
         ++vdp2.cramGeneration;
         vdp2.nextLayerRenderLine = 0;
         vdp2.nextComposeLine = 0;
-        vdp2.layerRenderParamsDirty = true;
-        vdp2.composeParamsDirty = true;
+        ++vdp2.layerRenderParamsGeneration;
+        ++vdp2.composeParamsGeneration;
         VDP2UpdateEnabledLayers();
     }
 
@@ -2560,8 +2564,12 @@ struct Direct3D12VDPRenderer::Impl {
 
         if (address <= 0x11E) {
             const auto &dirtyFlags = kDirtyFlags[address / sizeof(uint16)];
-            vdp2.layerRenderParamsDirty |= dirtyFlags.render;
-            vdp2.composeParamsDirty |= dirtyFlags.compose;
+            if (dirtyFlags.render) {
+                ++vdp2.layerRenderParamsGeneration;
+            }
+            if (dirtyFlags.compose) {
+                ++vdp2.composeParamsGeneration;
+            }
 
             if (dirtyFlags.enabledLayers) {
                 VDP2UpdateEnabledLayers();
@@ -2809,10 +2817,11 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     util::VoidResult<> VDP2UpdateLayerRenderParams() {
-        if (!vdp2.layerRenderParamsDirty) {
+        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+        if (frameCtx.layerRenderParamsGeneration == vdp2.layerRenderParamsGeneration) {
             return {};
         }
-        vdp2.layerRenderParamsDirty = false;
+        frameCtx.layerRenderParamsGeneration = vdp2.layerRenderParamsGeneration;
 
         const VDP2Regs &regs2 = vdpState.regs2;
 
@@ -2990,10 +2999,11 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     util::VoidResult<> VDP2UpdateComposeParams() {
-        if (!vdp2.composeParamsDirty) {
+        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+        if (frameCtx.composeParamsGeneration == vdp2.composeParamsGeneration) {
             return {};
         }
-        vdp2.composeParamsDirty = false;
+        frameCtx.composeParamsGeneration = vdp2.composeParamsGeneration;
 
         const VDP2Regs &regs2 = vdpState.regs2;
 
@@ -3061,7 +3071,9 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void VDP2CalcAccessPatterns() {
-        vdp2.layerRenderParamsDirty |= vdpState.regs2.accessPatternsDirty;
+        if (vdpState.regs2.accessPatternsDirty) {
+            ++vdp2.layerRenderParamsGeneration;
+        }
         vdpState.state2.CalcAccessPatterns(vdpState.regs2, vdp2.accessPatternsConfig);
     }
 
@@ -3080,7 +3092,7 @@ struct Direct3D12VDPRenderer::Impl {
             }
         }
 
-        vdp2.layerRenderParamsDirty = true;
+        ++vdp2.layerRenderParamsGeneration;
     }
 
     void VDP2UpdateEnabledLayers() {
@@ -3088,7 +3100,9 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void VDP2CalcVCellScrollDelay() {
-        vdp2.layerRenderParamsDirty |= vdpState.regs2.accessPatternsDirty;
+        if (vdpState.regs2.accessPatternsDirty) {
+            ++vdp2.layerRenderParamsGeneration;
+        }
         vdpState.state2.CalcVCellScrollDelay(vdpState.regs2);
     }
 
@@ -3403,9 +3417,11 @@ struct Direct3D12VDPRenderer::Impl {
         if (y > 0) {
             const VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
             const bool cramDirty = vdp2.cramGeneration != frameCtx.cramGeneration;
-            const bool renderLayers =
-                vdp2.vramDirty || cramDirty || vdp2.layerRenderParamsDirty || vdp2.composeParamsDirty;
-            const bool compose = vdp2.composeParamsDirty;
+            const bool layerRenderParamsDirty =
+                vdp2.layerRenderParamsGeneration != frameCtx.layerRenderParamsGeneration;
+            const bool composeParamsDirty = vdp2.composeParamsGeneration != frameCtx.composeParamsGeneration;
+            const bool renderLayers = vdp2.vramDirty || cramDirty || layerRenderParamsDirty || composeParamsDirty;
+            const bool compose = composeParamsDirty;
             if (renderLayers) {
                 VDP2RenderLayerLines(y - 1);
             }
@@ -3533,8 +3549,8 @@ void Direct3D12VDPRenderer::PostLoadStateSync() {
     m_impl->VDP2UpdateEnabledLayers();
     m_impl->vdp2.vramDirty.SetAll();
     ++m_impl->vdp2.cramGeneration;
-    m_impl->vdp2.layerRenderParamsDirty = true;
-    m_impl->vdp2.composeParamsDirty = true;
+    ++m_impl->vdp2.layerRenderParamsGeneration;
+    ++m_impl->vdp2.composeParamsGeneration;
 }
 
 void Direct3D12VDPRenderer::SaveState(savestate::VDPSaveState::VDPRendererSaveState &state) {}
