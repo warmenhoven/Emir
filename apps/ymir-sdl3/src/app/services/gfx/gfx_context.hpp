@@ -143,6 +143,15 @@ public:
     virtual util::VoidResult<> DrawTextureRotated(TextureID id, const FRect &srcRect, const FRect &dstRect,
                                                   double rotAngle, const FPoint2D *anchorPoint = nullptr) = 0;
 
+    /// @brief Acquires the most recent display frame drawn the hardware-accelerated VDP renderer.
+    /// This may involve barrier transitions, locking the texture or other such mechanisms.
+    /// @return the texture ID of the latest display frame. Use the graphics context to check if the texture ID is valid
+    virtual TextureID AcquireCurrentDisplayOutputTexture() = 0;
+
+    /// @brief Releases the most recent display frame drawn by the hardware-accelerated VDP renderer.
+    /// Must be invoked after acquiring and using the frame.
+    virtual void ReleaseCurrentDisplayOutputTexture() = 0;
+
     /// @brief Changes the frame presentation mode.
     /// @param[in] mode the new frame presentation mode
     /// @return nothing on success, an error message on failure

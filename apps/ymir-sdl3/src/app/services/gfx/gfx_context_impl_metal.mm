@@ -1034,6 +1034,17 @@ util::VoidResult<> MetalGraphicsContext::DrawTextureRotated(TextureID textureID,
     return m_impl->DrawTextureRotated(textureID, srcRect, dstRect, rotAngle, rotPivot);
 }
 
+TextureID MetalGraphicsContext::AcquireCurrentDisplayOutputTexture() {
+    // TODO: find and update index of the latest complete display output texture, emit transition to copy destination
+    // barrier and return its texture ID
+    return kInvalidTextureID;
+}
+
+void MetalGraphicsContext::ReleaseCurrentDisplayOutputTexture() {
+    // TODO: if the display texture was previously acquired, emit a transition to pixel shading barrier and mark as
+    // released
+}
+
 util::VoidResult<> MetalGraphicsContext::SetPresentMode(PresentMode mode) {
     m_impl->presentMode = mode;
     if (m_impl->metalLayer != nil) {

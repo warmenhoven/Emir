@@ -41,7 +41,7 @@ void GraphicsService::RegisterHardwareRendererCallbacks(ymir::vdp::VDP &vdp) {
              if (graphicsContext == nullptr) {
                  return nullptr;
              }
-             return graphicsContext->GetNextDisplayOutputFrame(fence, fenceValue);
+             return graphicsContext->GetNextDisplayOutputTexture(fence, fenceValue);
          }});
 #endif
 }
@@ -216,6 +216,14 @@ util::VoidResult<> GraphicsService::DrawTextureRotated(GUITextureHandle handle, 
         return util::ErrorMessage{"Invalid source texture handle"};
     }
     return m_gfxContext->DrawTextureRotated(texture->id, srcRect, dstRect, rotAngle, anchorPoint);
+}
+
+gfx::TextureID GraphicsService::GetTextureID(gfx::GUITextureHandle handle) const {
+    const Texture2DInstance *texture = GetTexture(handle);
+    if (texture == nullptr) {
+        return gfx::kInvalidTextureID;
+    }
+    return texture->id;
 }
 
 ImTextureID GraphicsService::GetImGuiTextureID(GUITextureHandle handle) const {

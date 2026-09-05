@@ -98,6 +98,17 @@ util::VoidResult<> VulkanGraphicsContext::DrawTextureRotated(TextureID id, const
     return util::ErrorMessage{"Unimplemented"};
 }
 
+TextureID VulkanGraphicsContext::AcquireCurrentDisplayOutputTexture() {
+    // TODO: find and update index of the latest complete display output texture, emit transition to copy destination
+    // barrier and return its texture ID
+    return TextureID();
+}
+
+void VulkanGraphicsContext::ReleaseCurrentDisplayOutputTexture() {
+    // TODO: if the display texture was previously acquired, emit a transition to pixel shading barrier and mark as
+    // released
+}
+
 util::VoidResult<> VulkanGraphicsContext::SetPresentMode(PresentMode mode) {
     // TODO: set presentation mode
     return util::ErrorMessage{"Unimplemented"};

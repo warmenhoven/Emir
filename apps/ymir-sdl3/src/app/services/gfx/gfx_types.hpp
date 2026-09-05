@@ -202,6 +202,9 @@ enum class TextureFilterMode {
 /// This ID is immutable for the lifetime of the texture, even when resized.
 using TextureID = uintptr_t;
 
+/// @brief Sentinel value representing an invalid texture ID.
+inline constexpr TextureID kInvalidTextureID = -1;
+
 /// @brief Texture format specifications.
 struct Texture2DSpec {
     /// @brief Width of the texture.

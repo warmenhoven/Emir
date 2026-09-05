@@ -951,7 +951,15 @@ void App::RunEmulator() {
                            .w = (float)screen.width * screen.fbScale,
                            .h = (float)screen.height * screen.fbScale};
 
-        m_graphicsService.RenderToTexture(swFbTexture, dispTexture, srcRect, dstRect);
+        gfx::IGraphicsContext &gfxCtx = m_graphicsService.GetGraphicsContext();
+        const gfx::TextureID hwFbTexture = gfxCtx.AcquireCurrentDisplayOutputTexture();
+        if (gfxCtx.IsTextureValid(hwFbTexture)) {
+            const gfx::TextureID dispTextureID = m_graphicsService.GetTextureID(dispTexture);
+            gfxCtx.RenderToTexture(hwFbTexture, dispTextureID, srcRect, dstRect);
+            gfxCtx.ReleaseCurrentDisplayOutputTexture();
+        } else {
+            m_graphicsService.RenderToTexture(swFbTexture, dispTexture, srcRect, dstRect);
+        }
     };
 
     // Logo texture

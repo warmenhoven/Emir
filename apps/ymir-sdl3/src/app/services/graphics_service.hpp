@@ -167,6 +167,11 @@ public:
                                           const gfx::FRect &dstRect, double rotAngle,
                                           const gfx::FPoint2D *anchorPoint = nullptr);
 
+    /// @brief Retrieves the context's texture ID for the given texture handle.
+    /// @param[in] handle the texture
+    /// @return the corresponding texture ID in the underlying graphics context
+    gfx::TextureID GetTextureID(gfx::GUITextureHandle handle) const;
+
     /// @brief Retrieves the ImGui texture ID for the given texture handle.
     /// @param[in] handle the texture
     /// @return the corresponding ImGui texture ID

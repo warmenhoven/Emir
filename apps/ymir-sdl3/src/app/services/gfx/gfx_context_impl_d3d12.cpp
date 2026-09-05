@@ -201,9 +201,10 @@ struct Direct3D12GraphicsContext::Impl {
 
     struct DisplayFrameContext {
         TextureID textureID;
+        bool initialized;
 
-        D3D12Fence *fence; // Compute fence to be waited on
-        UINT64 fenceValue; // Value to wait for
+        ID3D12Fence *fence; // Compute fence to be waited on
+        UINT64 fenceValue;  // Value to wait for
     };
     std::array<DisplayFrameContext, kFrameCount + 1> displayFrames;
 
@@ -363,6 +364,7 @@ struct Direct3D12GraphicsContext::Impl {
                     fmt::format("Failed to create display output #{} texture: {}", n, textureResult.Error().message)};
             }
             frameCtx.textureID = texIDMgr.GetNextTextureID();
+            frameCtx.initialized = false;
             textures.insert({frameCtx.textureID, textureResult.Value()});
 
             // These come from the VDP renderer callback
@@ -1518,23 +1520,147 @@ struct Direct3D12GraphicsContext::Impl {
         return frames[frameIndex];
     }
 
-    ID3D12Resource *GetNextDisplayOutputFrame(ID3D12Fence *fence, uint64 fenceValue) {
+    ID3D12Resource *GetNextDisplayOutputTexture(ID3D12Fence *fence, uint64 fenceValue) {
         // TODO: implement:
         // - data:
         //   - current free slot index (texture to be handed over to compute for copying the final output)
         //   - current draw slot index (texture to be rendered to the scaled framebuffer texture)
-        //   - last drawn slot index (so that we know whether to draw the next frame)
+        //   - last drawn slot index (so that we know whether the frame changed)
         // - when callback is invoked:
         //   - hand over next free frame (round-robin increment unless next frame is still in use by graphics)
         //   - store fence pointer + value with the frame
         //   - when fence completed value is met (non-blocking check), use that as the new framebuffer
         //     - never increment draw slot index past free slot index
 
-        TextureInstance *instance = GetTexture(displayFrames[0].textureID);
-        if (instance == nullptr) {
+        const size_t frameIndex = 0; // TODO: pick next target
+        DisplayFrameContext &frameCtx = displayFrames[frameIndex];
+
+        TextureInstance *texture = GetTexture(frameCtx.textureID);
+        if (texture == nullptr) {
             return nullptr; // Shouldn't happen
         }
-        return instance->resource.GetPointer();
+
+        frameCtx.fence = fence;
+        frameCtx.fenceValue = fenceValue;
+        return texture->resource.GetPointer();
+    }
+
+    TextureID AcquireCurrentDisplayOutputTexture() {
+        // TODO: find index of the latest completed frame
+        // TODO: return changed flag to allow frontend to redraw the frame only if needed
+
+        const size_t frameIndex = 0; // TODO: use latest completed frame index
+        DisplayFrameContext &frameCtx = displayFrames[frameIndex];
+
+        TextureInstance *texture = GetTexture(frameCtx.textureID);
+        if (texture == nullptr) {
+            return kInvalidTextureID; // Shouldn't happen
+        }
+
+        // Transition texture to pixel shading
+        if (auto *enhCmdList = GetCommandListForEnhancedBarriers(cmdListFrame)) {
+            D3D12_TEXTURE_BARRIER barrier{
+                .SyncBefore = D3D12_BARRIER_SYNC_COPY,
+                .SyncAfter = D3D12_BARRIER_SYNC_PIXEL_SHADING,
+                .AccessBefore = D3D12_BARRIER_ACCESS_COPY_DEST,
+                .AccessAfter = D3D12_BARRIER_ACCESS_COMMON,
+                .LayoutBefore = frameCtx.initialized ? D3D12_BARRIER_LAYOUT_COPY_DEST : D3D12_BARRIER_LAYOUT_COMMON,
+                .LayoutAfter = D3D12_BARRIER_LAYOUT_COMMON,
+                .pResource = texture->resource.GetPointer(),
+                .Subresources =
+                    {
+                        .IndexOrFirstMipLevel = 0,
+                        .NumMipLevels = 1,
+                        .FirstArraySlice = 0,
+                        .NumArraySlices = 1,
+                        .FirstPlane = 0,
+                        .NumPlanes = 1,
+                    },
+                .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
+            };
+            const D3D12_BARRIER_GROUP group{
+                .Type = D3D12_BARRIER_TYPE_TEXTURE,
+                .NumBarriers = 1,
+                .pTextureBarriers = &barrier,
+            };
+            enhCmdList->Barrier(1, &group);
+        } else {
+            D3D12_RESOURCE_BARRIER barrier{
+                .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                .Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                .Transition =
+                    {
+                        .pResource = texture->resource.GetPointer(),
+                        .Subresource = 0,
+                        .StateBefore =
+                            frameCtx.initialized ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_COMMON,
+                        .StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    },
+            };
+            cmdListOps->ResourceBarrier(1, &barrier);
+        }
+        frameCtx.initialized = true;
+
+        // Wait for compute fence
+        if (frameCtx.fence != nullptr) {
+            cmdQueue->Wait(frameCtx.fence, frameCtx.fenceValue);
+        }
+
+        return frameCtx.textureID;
+    }
+
+    void ReleaseCurrentDisplayOutputTexture() {
+        const size_t frameIndex = 0; // TODO: get latest completed frame index
+        DisplayFrameContext &frameCtx = displayFrames[frameIndex];
+
+        TextureInstance *texture = GetTexture(frameCtx.textureID);
+        if (texture == nullptr) {
+            return; // Shouldn't happen
+        }
+
+        // TODO: emit only if needed
+
+        // Transition texture to copy destination
+        if (auto *enhCmdList = GetCommandListForEnhancedBarriers(cmdListFrame)) {
+            D3D12_TEXTURE_BARRIER barrier{
+                .SyncBefore = D3D12_BARRIER_SYNC_PIXEL_SHADING,
+                .SyncAfter = D3D12_BARRIER_SYNC_COPY,
+                .AccessBefore = D3D12_BARRIER_ACCESS_COMMON,
+                .AccessAfter = D3D12_BARRIER_ACCESS_COPY_DEST,
+                .LayoutBefore = D3D12_BARRIER_LAYOUT_COMMON,
+                .LayoutAfter = D3D12_BARRIER_LAYOUT_COPY_DEST,
+                .pResource = texture->resource.GetPointer(),
+                .Subresources =
+                    {
+                        .IndexOrFirstMipLevel = 0,
+                        .NumMipLevels = 1,
+                        .FirstArraySlice = 0,
+                        .NumArraySlices = 1,
+                        .FirstPlane = 0,
+                        .NumPlanes = 1,
+                    },
+                .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
+            };
+            const D3D12_BARRIER_GROUP group{
+                .Type = D3D12_BARRIER_TYPE_TEXTURE,
+                .NumBarriers = 1,
+                .pTextureBarriers = &barrier,
+            };
+            enhCmdList->Barrier(1, &group);
+        } else {
+            D3D12_RESOURCE_BARRIER barrier{
+                .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                .Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                .Transition =
+                    {
+                        .pResource = texture->resource.GetPointer(),
+                        .Subresource = 0,
+                        .StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                        .StateAfter = D3D12_RESOURCE_STATE_COPY_DEST,
+                    },
+            };
+            cmdListOps->ResourceBarrier(1, &barrier);
+        }
     }
 };
 
@@ -1685,6 +1811,14 @@ util::VoidResult<> Direct3D12GraphicsContext::DrawTextureRotated(TextureID id, c
     return m_impl->DrawTextureRotated(id, srcRect, dstRect, rotAngle, rotPivot);
 }
 
+TextureID Direct3D12GraphicsContext::AcquireCurrentDisplayOutputTexture() {
+    return m_impl->AcquireCurrentDisplayOutputTexture();
+}
+
+void Direct3D12GraphicsContext::ReleaseCurrentDisplayOutputTexture() {
+    m_impl->ReleaseCurrentDisplayOutputTexture();
+}
+
 util::VoidResult<> Direct3D12GraphicsContext::SetPresentMode(PresentMode mode) {
     m_impl->presentMode = mode;
     return {};
@@ -1698,8 +1832,8 @@ ID3D12Device *Direct3D12GraphicsContext::GetDevice() const {
     return m_impl->device.GetPointer();
 }
 
-ID3D12Resource *Direct3D12GraphicsContext::GetNextDisplayOutputFrame(ID3D12Fence *fence, uint64 fenceValue) {
-    return m_impl->GetNextDisplayOutputFrame(fence, fenceValue);
+ID3D12Resource *Direct3D12GraphicsContext::GetNextDisplayOutputTexture(ID3D12Fence *fence, uint64 fenceValue) {
+    return m_impl->GetNextDisplayOutputTexture(fence, fenceValue);
 }
 
 } // namespace app::gfx

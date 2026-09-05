@@ -42,6 +42,9 @@ public:
     util::VoidResult<> DrawTextureRotated(TextureID id, const FRect &srcRect, const FRect &dstRect, double rotAngle,
                                           const FPoint2D *anchorPoint = nullptr) override;
 
+    TextureID AcquireCurrentDisplayOutputTexture() override;
+    void ReleaseCurrentDisplayOutputTexture() override;
+
     util::VoidResult<> SetPresentMode(PresentMode mode) override;
     util::ValueResult<PresentResult> Present() override;
 
