@@ -189,7 +189,7 @@ bool InsideWindows(uint2 pos) {
 // Rotation parameter calculation
 
 uint2 CalcRotationSpriteCoordinates(uint2 pos) {
-    const RotParamBase base = rotParamBases[pos.y + g_commonParams.startY];
+    const RotParamBase base = rotParamBases[pos.y];
 
     const int Xst = SignExtend(Read32(vram, base.tableAddress + 0x00) >> 6, 23);
     const int Yst = SignExtend(Read32(vram, base.tableAddress + 0x04) >> 6, 23);

@@ -388,7 +388,7 @@ RotCoefficient ReadRotCoefficient(const uint coeffDataSize, const uint coeffData
 // Rotation parameter calculation
 
 uint2 CalcRotationScreenCoords(uint2 pos, uint index) {
-    const RotParamBase base = rotParamBases[index * kMaxNormalResV + pos.y + g_commonParams.startY];
+    const RotParamBase base = rotParamBases[index * kMaxNormalResV + pos.y];
     const uint coeffParamsOffset = 6 + index * 5;
     const bool coeffTableEnable = BitTest(g_commonParams.rotParams, coeffParamsOffset + 0);
     const uint coeffDataSize = BitExtract(g_commonParams.rotParams, coeffParamsOffset + 1, 1);
@@ -479,7 +479,7 @@ uint2 CalcRotationScreenCoords(uint2 pos, uint index) {
 }
 
 RotCoefficient CalcRotationCoefficient(uint2 pos, uint index) {
-    const RotParamBase base = rotParamBases[index * kMaxNormalResV + pos.y + g_commonParams.startY];
+    const RotParamBase base = rotParamBases[index * kMaxNormalResV + pos.y];
     const uint coeffParamsOffset = 6 + index * 5;
     const bool coeffTableEnable = BitTest(g_commonParams.rotParams, coeffParamsOffset + 0);
 
