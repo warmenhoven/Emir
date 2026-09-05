@@ -352,6 +352,20 @@ struct Direct3D12GraphicsContext::Impl {
             frames[n].fenceValue = 1;
         }
 
+        // Create command lists
+        if (FAILED(cmdListFrame.Create(device, frames[frameIndex].cmdAlloc, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                       pipelineStateFrame.GetPointer()))) {
+            return util::ErrorMessage{"Failed to create frame command list"};
+        }
+        cmdListFrame->Close();
+        cmdListFrame->SetName(L"[Ymir-GCtx] Frame command list");
+
+        if (FAILED(cmdListOps.Create(device, cmdAllocOps, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                     pipelineStateFrame.GetPointer()))) {
+            return util::ErrorMessage{"Failed to create operations command list"};
+        }
+        cmdListOps->SetName(L"[Ymir-GCtx] Operations command list");
+
         // Create display frame resources
         for (UINT n = 0; n < kFrameCount + 1; n++) {
             static constexpr DXGI_FORMAT kFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -373,26 +387,45 @@ struct Direct3D12GraphicsContext::Impl {
             frameCtx.textureID = texIDMgr.GetNextTextureID();
             textures.insert({frameCtx.textureID, textureResult.Value()});
 
+            // Transition to COPY_DEST if using enhanced barriers
+            if (auto *enhCmdList = GetCommandListForEnhancedBarriers(cmdListOps)) {
+                D3D12_TEXTURE_BARRIER barrier{
+                    .SyncBefore = D3D12_BARRIER_SYNC_NONE,
+                    .SyncAfter = D3D12_BARRIER_SYNC_NONE,
+                    .AccessBefore = D3D12_BARRIER_ACCESS_NO_ACCESS,
+                    .AccessAfter = D3D12_BARRIER_ACCESS_NO_ACCESS,
+                    .LayoutBefore = D3D12_BARRIER_LAYOUT_COMMON,
+                    .LayoutAfter = D3D12_BARRIER_LAYOUT_COPY_DEST,
+                    .pResource = textures[frameCtx.textureID].resource.GetPointer(),
+                    .Subresources =
+                        {
+                            .IndexOrFirstMipLevel = 0,
+                            .NumMipLevels = 0,
+                            .FirstArraySlice = 0,
+                            .NumArraySlices = 0,
+                            .FirstPlane = 0,
+                            .NumPlanes = 0,
+                        },
+                    .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
+                };
+                const D3D12_BARRIER_GROUP group{
+                    .Type = D3D12_BARRIER_TYPE_TEXTURE,
+                    .NumBarriers = 1,
+                    .pTextureBarriers = &barrier,
+                };
+                enhCmdList->Barrier(1, &group);
+            }
+
             // These come from the VDP renderer callback
             frameCtx.computeFence = nullptr;
             frameCtx.computeFenceValue = 0;
+
+            // This is filled in when requested by the frontend
             frameCtx.graphicsFenceValue = 0;
         }
 
-        // Create command lists
-        if (FAILED(cmdListFrame.Create(device, frames[frameIndex].cmdAlloc, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                       pipelineStateFrame.GetPointer()))) {
-            return util::ErrorMessage{"Failed to create frame command list"};
-        }
-        cmdListFrame->Close();
-        cmdListFrame->SetName(L"[Ymir-GCtx] Frame command list");
-
-        if (FAILED(cmdListOps.Create(device, cmdAllocOps, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                     pipelineStateFrame.GetPointer()))) {
-            return util::ErrorMessage{"Failed to create operations command list"};
-        }
         cmdListOps->Close();
-        cmdListOps->SetName(L"[Ymir-GCtx] Operations command list");
+        cmdQueue->ExecuteCommandLists(1, cmdListOps.GetAddressOfBase());
 
         // Create root signature for texture drawing operations with:
         // [0] descriptor table with one SRV slot for the texture to draw
@@ -780,11 +813,11 @@ struct Direct3D12GraphicsContext::Impl {
                 .Subresources =
                     {
                         .IndexOrFirstMipLevel = 0,
-                        .NumMipLevels = 1,
+                        .NumMipLevels = 0,
                         .FirstArraySlice = 0,
-                        .NumArraySlices = 1,
+                        .NumArraySlices = 0,
                         .FirstPlane = 0,
-                        .NumPlanes = 1,
+                        .NumPlanes = 0,
                     },
                 .Flags = D3D12_TEXTURE_BARRIER_FLAG_DISCARD,
             };
@@ -837,11 +870,11 @@ struct Direct3D12GraphicsContext::Impl {
                 .Subresources =
                     {
                         .IndexOrFirstMipLevel = 0,
-                        .NumMipLevels = 1,
+                        .NumMipLevels = 0,
                         .FirstArraySlice = 0,
-                        .NumArraySlices = 1,
+                        .NumArraySlices = 0,
                         .FirstPlane = 0,
-                        .NumPlanes = 1,
+                        .NumPlanes = 0,
                     },
                 .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
             };
@@ -1164,11 +1197,11 @@ struct Direct3D12GraphicsContext::Impl {
                 .Subresources =
                     {
                         .IndexOrFirstMipLevel = 0,
-                        .NumMipLevels = 1,
+                        .NumMipLevels = 0,
                         .FirstArraySlice = 0,
-                        .NumArraySlices = 1,
+                        .NumArraySlices = 0,
                         .FirstPlane = 0,
-                        .NumPlanes = 1,
+                        .NumPlanes = 0,
                     },
                 .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
             };
@@ -1219,11 +1252,11 @@ struct Direct3D12GraphicsContext::Impl {
                 .Subresources =
                     {
                         .IndexOrFirstMipLevel = 0,
-                        .NumMipLevels = 1,
+                        .NumMipLevels = 0,
                         .FirstArraySlice = 0,
-                        .NumArraySlices = 1,
+                        .NumArraySlices = 0,
                         .FirstPlane = 0,
-                        .NumPlanes = 1,
+                        .NumPlanes = 0,
                     },
                 .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
             };
@@ -1358,11 +1391,11 @@ struct Direct3D12GraphicsContext::Impl {
                 .Subresources =
                     {
                         .IndexOrFirstMipLevel = 0,
-                        .NumMipLevels = 1,
+                        .NumMipLevels = 0,
                         .FirstArraySlice = 0,
-                        .NumArraySlices = 1,
+                        .NumArraySlices = 0,
                         .FirstPlane = 0,
-                        .NumPlanes = 1,
+                        .NumPlanes = 0,
                     },
                 .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
             };
@@ -1426,11 +1459,11 @@ struct Direct3D12GraphicsContext::Impl {
                 .Subresources =
                     {
                         .IndexOrFirstMipLevel = 0,
-                        .NumMipLevels = 1,
+                        .NumMipLevels = 0,
                         .FirstArraySlice = 0,
-                        .NumArraySlices = 1,
+                        .NumArraySlices = 0,
                         .FirstPlane = 0,
-                        .NumPlanes = 1,
+                        .NumPlanes = 0,
                     },
                 .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
             };
@@ -1627,11 +1660,11 @@ struct Direct3D12GraphicsContext::Impl {
                 .Subresources =
                     {
                         .IndexOrFirstMipLevel = 0,
-                        .NumMipLevels = 1,
+                        .NumMipLevels = 0,
                         .FirstArraySlice = 0,
-                        .NumArraySlices = 1,
+                        .NumArraySlices = 0,
                         .FirstPlane = 0,
-                        .NumPlanes = 1,
+                        .NumPlanes = 0,
                     },
                 .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
             };
@@ -1686,11 +1719,11 @@ struct Direct3D12GraphicsContext::Impl {
                 .Subresources =
                     {
                         .IndexOrFirstMipLevel = 0,
-                        .NumMipLevels = 1,
+                        .NumMipLevels = 0,
                         .FirstArraySlice = 0,
-                        .NumArraySlices = 1,
+                        .NumArraySlices = 0,
                         .FirstPlane = 0,
-                        .NumPlanes = 1,
+                        .NumPlanes = 0,
                     },
                 .Flags = D3D12_TEXTURE_BARRIER_FLAG_NONE,
             };
