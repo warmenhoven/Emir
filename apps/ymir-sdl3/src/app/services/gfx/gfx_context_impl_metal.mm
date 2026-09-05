@@ -1045,6 +1045,10 @@ void MetalGraphicsContext::ReleaseCurrentDisplayOutputTexture() {
     // released
 }
 
+void MetalGraphicsContext::ResetDisplayOutputTextures() {
+    // TODO: clear display texture state
+}
+
 util::VoidResult<> MetalGraphicsContext::SetPresentMode(PresentMode mode) {
     m_impl->presentMode = mode;
     if (m_impl->metalLayer != nil) {

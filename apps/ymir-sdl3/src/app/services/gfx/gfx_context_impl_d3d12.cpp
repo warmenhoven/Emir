@@ -417,15 +417,12 @@ struct Direct3D12GraphicsContext::Impl {
             }
 
             // These come from the VDP renderer callback
-            frameCtx.computeFence = nullptr;
-            frameCtx.computeFenceValue = 0;
+            frameCtx.computeFence.store(nullptr, std::memory_order_release);
+            frameCtx.computeFenceValue.store(0, std::memory_order_release);
 
             // This is filled in when requested by the frontend
-            frameCtx.graphicsFenceValue = 0;
+            frameCtx.graphicsFenceValue.store(0, std::memory_order_release);
         }
-
-        cmdListOps->Close();
-        cmdQueue->ExecuteCommandLists(1, cmdListOps.GetAddressOfBase());
 
         // Create root signature for texture drawing operations with:
         // [0] descriptor table with one SRV slot for the texture to draw
@@ -616,11 +613,6 @@ struct Direct3D12GraphicsContext::Impl {
             }
             memcpy(pVertexDataBegin, vertices, sizeof(vertices));
             vertexUploadBuffer->Unmap(0, nullptr);
-
-            // Copy the vertex data to the vertex buffer
-            if (HRESULT hr = cmdListOps->Reset(cmdAllocOps.GetPointer(), pipelineStateFrame.GetPointer()); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format("Failed to reset command list, error code {:X}", (uint32)hr)};
-            }
 
             if (auto *enhCmdList = GetCommandListForEnhancedBarriers(cmdListOps)) {
                 // Indicate that the vertex buffer will be used as copy destination
@@ -1748,6 +1740,16 @@ struct Direct3D12GraphicsContext::Impl {
             cmdListFrame->ResourceBarrier(1, &barrier);
         }
     }
+
+    void ResetDisplayOutputTextures() {
+        for (DisplayFrameContext &frameCtx : displayFrames) {
+            frameCtx.computeFence.store(nullptr, std::memory_order_release);
+            frameCtx.computeFenceValue.store(0, std::memory_order_release);
+            frameCtx.graphicsFenceValue.store(0, std::memory_order_release);
+        }
+        computeDisplayFrame = 0;
+        graphicsDisplayFrame = kInvalidFrameIndex;
+    }
 };
 
 // -----------------------------------------------------------------------------
@@ -1903,6 +1905,10 @@ TextureID Direct3D12GraphicsContext::AcquireCurrentDisplayOutputTexture() {
 
 void Direct3D12GraphicsContext::ReleaseCurrentDisplayOutputTexture() {
     m_impl->ReleaseCurrentDisplayOutputTexture();
+}
+
+void Direct3D12GraphicsContext::ResetDisplayOutputTextures() {
+    m_impl->ResetDisplayOutputTextures();
 }
 
 util::VoidResult<> Direct3D12GraphicsContext::SetPresentMode(PresentMode mode) {

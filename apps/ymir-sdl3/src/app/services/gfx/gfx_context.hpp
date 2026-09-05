@@ -152,6 +152,11 @@ public:
     /// Must be invoked after acquiring and using the frame.
     virtual void ReleaseCurrentDisplayOutputTexture() = 0;
 
+    /// @brief Resets the display frame manager.
+    /// Must be invoked after the hardware-accelerated VDP renderer is destroyed to clear stale graphics API object
+    /// references.
+    virtual void ResetDisplayOutputTextures() = 0;
+
     /// @brief Changes the frame presentation mode.
     /// @param[in] mode the new frame presentation mode
     /// @return nothing on success, an error message on failure

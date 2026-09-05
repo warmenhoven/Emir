@@ -86,11 +86,12 @@ EmuEvent SwitchVDPRenderer(bool verbose) {
             }
         };
 
+        auto &svc = ctx.serviceLocator.GetRequired<services::GraphicsService>();
+        gfx::IGraphicsContext &gfxCtx = svc.GetGraphicsContext();
+
         auto &settings = ctx.serviceLocator.GetRequired<Settings>();
         auto &vdp = ctx.saturn.instance->VDP;
         if (settings.video.useHardwareAcceleration) {
-            auto &svc = ctx.serviceLocator.GetRequired<services::GraphicsService>();
-            const gfx::IGraphicsContext &gfxCtx = svc.GetGraphicsContext();
             const gfx::Backend backend = gfxCtx.GetBackend();
             switch (backend) {
 #if YMIR_PLATFORM_HAS_DIRECT3D
@@ -127,6 +128,7 @@ EmuEvent SwitchVDPRenderer(bool verbose) {
         // Fall back to software renderer if not using GPU acceleration or the hardware renderer failed to initialize
         if (vdp.GetRenderer().GetType() != vdp::VDPRendererType::Software) {
             vdp.UseSoftwareRenderer();
+            gfxCtx.ResetDisplayOutputTextures();
             notifySuccess("Software renderer initialized successfully");
         }
     });

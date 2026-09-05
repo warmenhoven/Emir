@@ -63,6 +63,7 @@ public:
         return kInvalidTextureID;
     }
     void ReleaseCurrentDisplayOutputTexture() override {}
+    void ResetDisplayOutputTextures() override {}
 
     util::VoidResult<> SetPresentMode(PresentMode mode) override {
         return {};

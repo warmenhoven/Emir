@@ -109,6 +109,10 @@ void VulkanGraphicsContext::ReleaseCurrentDisplayOutputTexture() {
     // released
 }
 
+void VulkanGraphicsContext::ResetDisplayOutputTextures() {
+    // TODO: clear display texture state
+}
+
 util::VoidResult<> VulkanGraphicsContext::SetPresentMode(PresentMode mode) {
     // TODO: set presentation mode
     return util::ErrorMessage{"Unimplemented"};

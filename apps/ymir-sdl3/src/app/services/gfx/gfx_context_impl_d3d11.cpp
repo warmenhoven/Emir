@@ -112,6 +112,10 @@ void Direct3D11GraphicsContext::ReleaseCurrentDisplayOutputTexture() {
     // released
 }
 
+void Direct3D11GraphicsContext::ResetDisplayOutputTextures() {
+    // TODO: clear display texture state
+}
+
 util::VoidResult<> Direct3D11GraphicsContext::SetPresentMode(PresentMode mode) {
     // TODO: set presentation mode
     return util::ErrorMessage{"Unimplemented"};

@@ -50,6 +50,7 @@ public:
 
     TextureID AcquireCurrentDisplayOutputTexture() override;
     void ReleaseCurrentDisplayOutputTexture() override;
+    void ResetDisplayOutputTextures() override;
 
     util::VoidResult<> SetPresentMode(PresentMode mode) override;
     util::ValueResult<PresentResult> Present() override;
