@@ -347,17 +347,18 @@ uint3 Compose(uint2 basePos) {
     if (IsColorCalcEnabled(layerStack[0], pos)) {
         uint3 layer1Pixel = GetLayerOutput(layerStack[1], pos).rgb;
 
-        // Color gradation
+        // Compute layer 1 output
         if (useColorGrad) {
+            // Compute color gradation
             const uint colorGradScreen = BitExtract(g_commonParams.layerParams, 29, 3);
             const uint colorGradLayer = GetColorGradScreenLayerIndex(colorGradScreen);
 
             // Set layer 1 output to the color gradation screen where the designated screen is the topmost two layers
             if (layerStack[0] == colorGradLayer || layerStack[1] == colorGradLayer) {
-                // Compute color gradation
                 const uint3 input2 = GetLayerOutput(colorGradLayer, uint2(max(pos.x - 2, 0), pos.y)).rgb;
                 const uint3 input1 = GetLayerOutput(colorGradLayer, uint2(max(pos.x - 1, 0), pos.y)).rgb;
                 const uint3 input0 = GetLayerOutput(colorGradLayer, pos).rgb;
+                layerStack[1] = colorGradLayer;
                 layer1Pixel = (((input2 + input1) >> 1u) + input0) >> 1u;
             }
         } else if (normalTVMode && extendedColorCalc) {

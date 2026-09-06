@@ -3038,7 +3038,7 @@ struct Direct3D12VDPRenderer::Impl {
         params.colorOffsetB.b = bit::sign_extend<9>(regs2.colorOffset[1].b);
 
         for (int i = 0; i < 5; ++i) {
-            params.bgColorCalcRatios[i] = regs2.bgParams[0].colorCalcRatio;
+            params.bgColorCalcRatios[i] = regs2.bgParams[i].colorCalcRatio;
         }
         params.backLineColorCalcRatios[0] = regs2.backScreenParams.colorCalcRatio;
         params.backLineColorCalcRatios[1] = regs2.lineScreenParams.colorCalcRatio;
@@ -3546,6 +3546,7 @@ void Direct3D12VDPRenderer::PreSaveStateSync() {}
 void Direct3D12VDPRenderer::PostLoadStateSync() {
     // TODO: m_impl->vdp1.vramDirty.SetAll();
 
+    m_impl->VDP2CacheAllCRAMColors();
     m_impl->VDP2UpdateEnabledLayers();
     m_impl->vdp2.vramDirty.SetAll();
     ++m_impl->vdp2.cramGeneration;

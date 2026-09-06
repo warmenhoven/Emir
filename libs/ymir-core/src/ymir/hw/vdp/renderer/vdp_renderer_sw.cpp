@@ -4071,12 +4071,12 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
             }
         }
 
-        // Color gradation
+        // Compute layer 1 output
         if (useColorGrad) {
+            // Compute color gradation
             const auto colorGradIndex = static_cast<size_t>(colorCalcParams.colorGradScreen);
             const LayerIndex colorGradLayer = kColorGradLayers[colorGradIndex];
 
-            // Compute color gradation
             auto &mask = composeLineBuffers.colorGradEnabled;
             for (uint32 x = 0; x < m_HRes; x++) {
                 mask[x] = scanline_layers[x][0] == colorGradLayer || scanline_layers[x][1] == colorGradLayer;
