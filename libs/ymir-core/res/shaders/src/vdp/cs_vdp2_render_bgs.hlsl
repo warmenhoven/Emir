@@ -820,7 +820,7 @@ uint4 DrawNBG(uint2 pos, // pixel coordinates
 
     // Apply line scroll table effects on NBG0 and NBG1 if enabled
     if (index <= 1 && (params.lineScrollXEnable || params.lineScrollYEnable || params.lineZoomEnable)) {
-        const uint lineScrollTableAddress = params.lineScrollTableAddress << 1;
+        const uint lineScrollTableAddress = params.lineScrollTableAddress;
         const uint lineScrollIntervalShift = params.lineScrollInterval;
         const bool lineScrollXEnable = params.lineScrollXEnable;
         const bool lineScrollYEnable = params.lineScrollYEnable;
