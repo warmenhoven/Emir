@@ -459,6 +459,7 @@ uint3 Compose(uint2 basePos) {
 // ---------------------------------------------------------------------------------------------------------------------
 // Entrypoint
 
+// TODO: 32 threads might be suboptimal on AMD GPUs
 [numthreads(32, 1, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID) {
     const uint2 drawCoord = uint2(id.x, id.y + g_commonParams.startY);
