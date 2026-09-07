@@ -395,11 +395,40 @@ endif ()
 set(SHADER_INPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
 set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 
+# The syntax for each entry is "<path>[|<variant>[|<macro>[|<macro[...]]]]"
+#   <path> is the path to the shader source code relative CMAKE_CURRENT_SOURCE_DIR
+#   <variant> specifies an optional variant name for the shader
+#   <macro> defines macros for that variant
 set(COMPUTE_SHADER_SOURCES
     res/shaders/src/vdp/cs_vdp2_compose.hlsl
     res/shaders/src/vdp/cs_vdp2_render_bgs.hlsl
     res/shaders/src/vdp/cs_vdp2_render_sprite.hlsl
 )
+
+# Generate VDP1 shader specializations
+# Naming scheme: <shader_name>_<antialias>_<textured>_<mesh-mode>_<gouraud>_<half-src>_<half-dst>
+foreach (_antialias RANGE 1)
+    foreach (_textured RANGE 1)
+        foreach (_mesh_mode RANGE 2)
+            foreach (_gouraud RANGE 1)
+                foreach (_half_src RANGE 1)
+                    foreach (_half_dst RANGE 1)
+                        set(_variant_name "${_antialias}_${_textured}_${_mesh_mode}_${_gouraud}_${_half_src}_${_half_dst}")
+                        set(_macros_antialias "POLYSPEC_ANTIALIAS=${_antialias}")
+                        set(_macros_textured "POLYSPEC_TEXTURED=${_textured}")
+                        set(_macros_mesh_mode "POLYSPEC_MESH_MODE=${_mesh_mode}")
+                        set(_macros_gouraud "POLYSPEC_SHADING_GOURAUD=${_gouraud}")
+                        set(_macros_half_src "POLYSPEC_SHADING_HALF_SRC=${_half_src}")
+                        set(_macros_half_dst "POLYSPEC_SHADING_HALF_DST=${_half_dst}")
+                        set(_macros "${_macros_antialias}|${_macros_textured}|${_macros_mesh_mode}|${_macros_gouraud}|${_macros_half_src}|${_macros_half_dst}")
+                        list(APPEND COMPUTE_SHADER_SOURCES "res/shaders/src/vdp/cs_vdp1_polydraw.hlsl|${_variant_name}|${_macros}")
+                    endforeach ()
+                endforeach ()
+            endforeach ()
+        endforeach ()
+    endforeach ()
+endforeach ()
+
 ## TODO: add per-platform shader code if needed
 # if (WIN32)
 #     list(APPEND COMPUTE_SHADER_SOURCES
@@ -410,23 +439,41 @@ set(COMPUTE_SHADER_SOURCES
 # endif ()
 
 set(COMPILED_SHADERS "")
+set(COMPILED_SHADERS_SOURCE_PATHS "")
 foreach (SHADER_SRC ${COMPUTE_SHADER_SOURCES})
+    # Split shader parameters
+    string(REPLACE "|" ";" _sublist "${SHADER_SRC}")
+    set(_shader_src_path "")
+    set(_variant "")
+    set(_macros "")
+    list(LENGTH  _sublist _list_length)
+    list(GET _sublist 0 _shader_src_path)
+    if (${_list_length} GREATER_EQUAL 2)
+        list(GET _sublist 1 _variant)
+    endif ()
+    if (${_list_length} GREATER_EQUAL 3)
+        list(SUBLIST _sublist 2 -1 _macros)
+    endif ()
+
     compile_shader(
         OUT_PATHS SHADER_BINARY_FILES
-        SOURCE "${SHADER_SRC}"
+        SOURCE "${_shader_src_path}"
         WHENCE "${SHADER_INPUT_DIR}"
         DESTINATION "${SHADER_OUTPUT_DIR}"
         ENTRYPOINT "CSMain"
         PROFILE "cs_6_0"
+        VARIANT ${_variant}
+        MACROS ${_macros}
         INCLUDE_PATHS "${SHADER_INPUT_DIR}/include"
     )
     list(APPEND COMPILED_SHADERS ${SHADER_BINARY_FILES})
+    list(APPEND COMPILED_SHADERS_SOURCE_PATHS ${_shader_src_path})
 endforeach ()
 
 # Configure properties for shader source files in Visual Studio solutions
 if (WIN32)
     set_source_files_properties(
-        ${COMPUTE_SHADER_SOURCES}
+        ${COMPILED_SHADERS_SOURCE_PATHS}
         PROPERTIES
             VS_SHADER_TYPE "Compute"
             VS_SHADER_MODEL "6.0"

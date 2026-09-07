@@ -805,7 +805,95 @@ struct Direct3D12VDPRenderer::Impl {
     // =================================================================================================================
     // VDP1 rendering
     //
-    // TODO
+    // The VDP1 rendering pipeline is submitted once per framebuffer swap.
+    //
+    // VDP1 erase dispatched done only once per swap.
+    // Each VDP1 command is dispatched individually, sometimes multiple times depending on the number of lines in the
+    // polygon.
+    // CPU writes to FBRAM are handled at swap time.
+    // CPU reads from FBRAM force a synchronization point (fence wait) for the most recent VDP1 frame.
+    //
+    // Root 32-bit constants hold renderer parameters shared across all VDP1 compute shaders such as relevant registers
+    // and active enhancements, as well as per-shader parameters.
+
+    /// @brief Common VDP1 rendering parameters shared by all shaders.
+    struct VDP1CommonRenderParams {
+        struct DisplayParams {                 //  bits  use
+            HLSLuint fbSizeH : 1;              //     0  Framebuffer horizontal size shift    (512 << x)
+            HLSLuint fbSizeV : 1;              //     1  Framebuffer vertical size shift      (256 << x)
+            HLSLuint pixel8Bits : 1;           //     2  Pixel data size                      0=16 bits; 1=8 bits
+            HLSLuint doubleDensity : 1;        //     3  Double-density interlace mode
+            HLSLuint dblInterlaceEnable : 1;   //     4  Double interlace enable
+            HLSLuint dblInterlaceDrawLine : 1; //     5  Double interlace line                0=even; 1=odd
+            HLSLuint evenOddCoordSelect : 1;   //     6  Even/odd coordinate select (HSS)     0=even; 1=odd
+            HLSLuint drawFB : 1;               //     7  Current draw framebuffer index
+        } displayParams;
+        static_assert(sizeof(DisplayParams) == sizeof(HLSLuint));
+
+        struct Enhancements {               //  bits  use
+            HLSLuint deinterlace : 1;       //     0  Deinterlace
+            HLSLuint transparentMeshes : 1; //     1  Render mesh sprites as transparent
+        } enhancements;
+        static_assert(sizeof(Enhancements) == sizeof(HLSLuint));
+    };
+
+    /// @brief VDP1 erase parameters, appended to common rendering parameters in the erase shader.
+    struct VDP1EraseParams {
+        struct Coords {          //  bits  use
+            HLSLuint x1 : 6;     //   0-5  Erase X1 (left) coordinate (x << 3)
+            HLSLuint y1 : 9;     //  6-14  Erase Y1 (top) coordinate
+            HLSLuint x3 : 7;     // 15-21  Erase X3 (right) coordinate (x << 3)
+            HLSLuint y3 : 9;     // 22-30  Erase Y3 (bottom) coordinate
+            HLSLuint scaleV : 1; //    31  Erase Y coordinate shift
+        } coords;
+        static_assert(sizeof(Coords) == sizeof(HLSLuint));
+
+        HLSLuint writeValue; // Erase write value
+
+        struct VBlankEraseParams {          //  bits  use
+            HLSLuint vblankErase : 1;       //     0  VBlank erase active
+            HLSLuint vblankEraseMaxY : 9;   //   1-9  Last VBlank erase line
+            HLSLuint vblankEraseMaxX : 10;  // 10-19  Last VBlank erase pixel in line
+            HLSLuint eraseAddressShift : 1; //    20  Erase address shift (coordY << (x + 8))
+        } vblankEraseParams;
+        static_assert(sizeof(VBlankEraseParams) == sizeof(HLSLuint));
+    };
+
+    /// @brief VDP1 polygon drawing parameters, appended to common rendering parameters in the polygon drawing shader.
+    struct VDP1PolyDrawParams {
+        struct Command {
+            // NOTE: shader doesn't need CMDLINK nor CMDGRDA, and all CMDCTRL parameters are handled on the CPU side or
+            // passed to `params` above.
+            HLSLuint cmdpmod : 16; // CMDPMOD value
+            HLSLuint cmdcolr : 16; // CMDCOLR value
+            HLSLuint cmdsrca : 16; // CMDSRCA value
+            HLSLuint cmdsize : 16; // CMDSIZE value
+        } command;
+
+        struct SysClip {     //  bits  use
+            HLSLuint h : 16; //  0-15  System clipping area width
+            HLSLuint v : 16; // 16-31  System clipping area height
+        } sysClip;
+        static_assert(sizeof(SysClip) == sizeof(HLSLuint));
+
+        struct UserClip {    //  bits  use
+            HLSLuint x : 16; //  0-15  User clipping area horizontal coordinate
+            HLSLuint y : 16; // 16-31  User clipping area vertical coordinate
+        };
+        static_assert(sizeof(UserClip) == sizeof(HLSLuint));
+        UserClip userClip0; // User clipping area top-left coordinate
+        UserClip userClip1; // User clipping area bottom-right coordinate
+    };
+
+    struct VDP1LineParams {
+        HLSLint2 coord0; // Starting coordinates
+        HLSLint2 coord1; // Ending coordinates
+        HLSLuint texV;   // Texture V coordinate
+        HLSLbool flipH;  // Horizontal flip
+
+        ColorR8G8B8A8 gouraud0; // Starting gouraud value
+        ColorR8G8B8A8 gouraud1; // Ending gouraud value
+    };
 
     struct VDP1Resources {
         /// @brief VDP1 per-frame resources.
@@ -816,6 +904,67 @@ struct Direct3D12VDPRenderer::Impl {
 
         /// @brief Upload ring buffer.
         UploadRingBuffer uploadBuffer;
+
+        // VDP1 VRAM is exposed as a ByteAddressBuffer to shaders as they often need to access raw bytes in 8-bit and
+        // 16-bit formats.
+
+        /// @brief VRAM data buffer.
+        D3D12Resource vramBuffer;
+        /// @brief VRAM data buffer SRV (offline).
+        DescriptorRange vramSRV;
+
+        /// @brief Bit shift for the granularity for VRAM dirty bitmap chunks.
+        static constexpr size_t kVRAMDirtyBitmapChunkSizeShift = 8;
+
+        /// @brief Granularity for VRAM dirty bitmap chunks, in bytes.
+        static constexpr size_t kVRAMDirtyBitmapChunkSize = static_cast<size_t>(1) << kVRAMDirtyBitmapChunkSizeShift;
+
+        /// @brief Number of bits in the VRAM dirty bitmap.
+        static constexpr size_t kVRAMDirtyBitmapSize = kVDP1VRAMSize / kVRAMDirtyBitmapChunkSize;
+
+        // D3D12 buffer transfers must be done in multiples of 4 bytes.
+        // The chunk must not be larger than VDP1 VRAM itself. In fact, it shouldn't be too large as it wastes memory
+        // and time with unnecessary copies of VRAM data.
+        static_assert(kVRAMDirtyBitmapChunkSize >= sizeof(uint32) && kVRAMDirtyBitmapChunkSize <= kVDP1VRAMSize,
+                      "VDP1 VRAM upload chunk size is out of range");
+
+        /// @brief VRAM dirty bitmap.
+        util::DirtyBitmap<kVRAMDirtyBitmapSize> vramDirty;
+
+        // ---------------------------------------------------------------------
+
+        /// @brief Common rendering parameters, uploaded as 32-bit root constants.
+        VDP1CommonRenderParams cpuCommonRenderParams{};
+
+        /// @brief CPU-side erase parameters, uploaded as 32-bit root constants.
+        VDP1EraseParams cpuEraseParams{};
+
+        /// @brief CPU-side polygon drawing parameters, uploaded as 32-bit root constants.
+        VDP1PolyDrawParams cpuPolyDrawParams{};
+
+        /// @brief Compute shader for drawing polygons.
+        /// The shader operates on batches of spans of consecutive polygons that share the same properties:
+        /// - System and user clipping areas
+        /// - CMDPMOD, CMDCOLR, CMDSRCA and CMDSIZE values
+        /// - Shader specializations
+        /// The shader is compiled for all possible combinations of the following properties:
+        /// - normal vs. anti-aliased lines
+        /// - solid color vs. textured
+        /// - solid vs. mesh vs. transparent mesh polygons
+        /// - shading modes (bits 0-2 of CMDPMOD):
+        ///   - gouraud shading
+        ///   - half-source
+        ///   - half-destination
+        /// Array indexing: [antialias][textured][mesh_mode][mode_bits]
+        std::array<std::array<std::array<std::array<gpu::ComputeShader, 8>, 3>, 2>, 2> polyDrawShaders;
+        /// @brief Root signature for drawing polygons.
+        /// The same root signature applies to all variants of the polygon drawing shader.
+        D3D12RootSignature polyDrawRootSig;
+
+        // ---------------------------------------------------------------------
+        // Rendering state
+
+        BarrierTracker barrierTracker;
     } vdp1;
 
     // =================================================================================================================
@@ -871,8 +1020,9 @@ struct Direct3D12VDPRenderer::Impl {
             HLSLuint dblInterlaceEnable : 1;   //    15  VDP1 double interlace enable flag (VDP1 FBCR.DIE)
             HLSLuint dblInterlaceDrawLine : 1; //    16  VDP1 double interlace draw line   (VDP1 FBCR.DIL)
         } displayParams;
+        static_assert(sizeof(DisplayParams) == sizeof(HLSLuint));
 
-        struct {                               //  bits  use
+        struct LayerParams {                   //  bits  use
             HLSLuint layerEnabled : 6;         //   0-5  Layer enable state based on BGON and other factors:
                                                //        bit  RBG0+RBG1   RBG0        RBG1        no RBGs
                                                //          0  Sprite      Sprite      Sprite      Sprite
@@ -916,8 +1066,9 @@ struct Direct3D12VDPRenderer::Impl {
                                                //          6  NBG3
                                                //          7  (invalid)
         } layerParams;
+        static_assert(sizeof(LayerParams) == sizeof(HLSLuint));
 
-        struct {                                 //  bits  use
+        struct RotParams {                       //  bits  use
             HLSLuint coeffTableCRAM : 1;         //     0  Coefficient table location
                                                  //          0 = VRAM
                                                  //          1 = CRAM
@@ -953,8 +1104,9 @@ struct Direct3D12VDPRenderer::Impl {
                                                  //          3 = Px
             HLSLuint coeffBUseLineColorData : 1; //    15  Use coefficient B line color data
         } rotParams;
+        static_assert(sizeof(RotParams) == sizeof(HLSLuint));
 
-        struct {                          //  bits  use
+        struct SpriteParams {             //  bits  use
             HLSLuint rotate : 1;          //     0  Sprite layer rotation
                                           //          0 = normal
                                           //          1 = use rotation parameter A
@@ -977,16 +1129,18 @@ struct Direct3D12VDPRenderer::Impl {
             HLSLuint windowInverted : 1;  //    21  Sprite window inverted for the sprite layer
             HLSLuint displayFB : 1;       //    22  Current sprite display framebuffer index
         } spriteParams;
+        static_assert(sizeof(SpriteParams) == sizeof(HLSLuint));
 
         // Packed 8x 3-bit sprite priorities + 5-bit color calculation ratios
         HLSLuint2 spritePriosRatios;
 
-        struct {                        //  bits  use
+        struct VCellScroll {            //  bits  use
             HLSLuint tableAddress : 19; //  0-18  Vertical cell scroll table address
             HLSLuint inc : 3;           // 19-21  Vertical cell scroll address increment per cell  (x << 2)
         } vcellScroll;
+        static_assert(sizeof(VCellScroll) == sizeof(HLSLuint));
 
-        struct {                               //  bits  use
+        struct Windows {                       //  bits  use
             HLSLuint spriteWindowLogic : 1;    //     0  Sprite window logic        0=OR; 1=AND
             HLSLuint spriteW0Enable : 1;       //     1  Sprite W0 enable           0=disable; 1=enable
             HLSLuint spriteW0Invert : 1;       //     2  Sprite W0 invert           0=disable; 1=enable
@@ -1000,11 +1154,13 @@ struct Direct3D12VDPRenderer::Impl {
             HLSLuint colorCalcSWEnable : 1;    //    10  Color calc. SW enable      0=disable; 1=enable
             HLSLuint colorCalcSWInvert : 1;    //    11  Color calc. SW invert      0=disable; 1=enable
         } windows;
+        static_assert(sizeof(Windows) == sizeof(HLSLuint));
 
-        struct {                            //  bits  use
+        struct Enhancements {               //  bits  use
             HLSLuint deinterlace : 1;       //     0  Deinterlace
             HLSLuint transparentMeshes : 1; //     1  Render mesh sprites as transparent
         } enhancements;
+        static_assert(sizeof(Enhancements) == sizeof(HLSLuint));
     };
 
     /// @brief Global VDP2 window parameters.
@@ -1484,7 +1640,7 @@ struct Direct3D12VDPRenderer::Impl {
         static_assert(kVRAMDirtyBitmapChunkSize >= sizeof(uint32) && kVRAMDirtyBitmapChunkSize <= kVDP2VRAMSize,
                       "VDP2 VRAM upload chunk size is out of range");
 
-        /// @brief VDP2 VRAM dirty bitmap.
+        /// @brief VRAM dirty bitmap.
         util::DirtyBitmap<kVRAMDirtyBitmapSize> vramDirty;
 
         // VDP2 CRAM is not directly exposed. Instead, shaders get two convenient views:
@@ -1563,6 +1719,7 @@ struct Direct3D12VDPRenderer::Impl {
         } else {
             features.enhancedBarriers = false;
         }
+        vdp1.barrierTracker.UseEnhancedBarriers(features.enhancedBarriers);
         vdp2.barrierTracker.UseEnhancedBarriers(features.enhancedBarriers);
 
         // Main command queue
@@ -1606,6 +1763,9 @@ struct Direct3D12VDPRenderer::Impl {
         // =============================================================================================================
         // VDP1
 
+        // -------------------------------------------------------------------------------------------------------------
+        // Common resources
+
         // VDP1 command allocators and list
         for (int i = 0; i < vdp1.frames.Count(); ++i) {
             FrameContext &frame = vdp1.frames[i];
@@ -1631,6 +1791,88 @@ struct Direct3D12VDPRenderer::Impl {
             }
             vdp1.uploadBuffer.SetDebugName("VDP1");
             vdp1.uploadBuffer.GetBufferResource()->SetName(L"[Ymir-VDP1] Upload buffer");
+        }
+
+        // VDP1 VRAM buffer
+        {
+            auto builder = vdp1.vramBuffer.BufferBuilder(kVDP1VRAMSize);
+            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                return util::ErrorMessage{
+                    fmt::format("Could not create VDP1 VRAM buffer, error code {:X}", (uint32)hr)};
+            }
+            vdp1.vramBuffer->SetName(L"[Ymir-VDP1] VRAM buffer");
+
+            vdp1.barrierTracker.InitializeBuffer(
+                vdp1.vramBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+            if (!offlineHeapAlloc.Allocate(vdp1.vramSRV)) {
+                return util::ErrorMessage{"Could not allocate VDP1 VRAM buffer SRV"};
+            }
+            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                .Format = DXGI_FORMAT_R32_TYPELESS,
+                .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                .Buffer =
+                    {
+                        .FirstElement = 0,
+                        .NumElements = kVDP1VRAMSize / sizeof(uint32),
+                        .StructureByteStride = 0,
+                        .Flags = D3D12_BUFFER_SRV_FLAG_RAW,
+                    },
+            };
+            device->CreateShaderResourceView(vdp1.vramBuffer.GetPointer(), &srvDesc, vdp1.vramSRV.cpuHandle);
+        }
+
+        // -------------------------------------------------------------------------------------------------------------
+        // Shaders and root signatures
+
+        // Polygon drawing (all variants)
+        for (int antialias : {0, 1}) {
+            for (int textured : {0, 1}) {
+                for (int meshMode : {0, 1, 2}) {
+                    for (int gouraud : {0, 1}) {
+                        for (int halfSrc : {0, 1}) {
+                            for (int halfDst : {0, 1}) {
+                                std::string filename =
+                                    fmt::format("src/vdp/cs_vdp1_polydraw_{}_{}_{}_{}_{}_{}.cso", antialias, textured,
+                                                meshMode, gouraud, halfSrc, halfDst);
+                                auto shaderBlobResult = LoadShader(filename.c_str());
+                                if (!shaderBlobResult) {
+                                    return util::ErrorMessage{
+                                        fmt::format("Could not load VDP1 polygon drawing compute shader: {}",
+                                                    shaderBlobResult.Error().message)};
+                                }
+                                gpu::ComputeShader &polyDrawShader =
+                                    vdp1.polyDrawShaders[antialias][textured][meshMode]
+                                                        [(gouraud << 2) | (halfSrc << 1) | halfDst];
+                                polyDrawShader.format = gpu::ShaderBytecodeFormat::DXIL;
+                                polyDrawShader.bytecode = shaderBlobResult.Value();
+                                polyDrawShader.entrypoint = kCSEntrypoint;
+                                auto result = gpu::ValidateShader(polyDrawShader);
+                                if (!result) {
+                                    return util::ErrorMessage{
+                                        fmt::format("VDP1 polygon drawing compute shader validation failed: {}",
+                                                    result.Error().message)};
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        {
+            auto rootSigBuilder = vdp1.polyDrawRootSig.Builder();
+            rootSigBuilder.Add32BitConstants(0, (sizeof(VDP1CommonRenderParams) + sizeof(VDP1PolyDrawParams)) /
+                                                    sizeof(uint32));
+            // rootSigBuilder.AddDescriptorTable()
+            //     .AddSRVs(4, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
+            //     .AddUAVs(2, 0);
+            if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
+                return util::ErrorMessage{
+                    fmt::format("Could not build VDP1 polygon drawing root signature, error code {:X}", (uint32)hr)};
+            }
+            vdp1.polyDrawRootSig->SetName(L"[Ymir-VDP1] Polygon drawing root signature");
         }
 
         // =============================================================================================================
@@ -2400,6 +2642,7 @@ struct Direct3D12VDPRenderer::Impl {
     void Reset() {
         vdp2.vramDirty.SetAll();
         ++vdp2.cramGeneration;
+        VDP2CacheAllCRAMColors();
         vdp2.nextLayerRenderLine = 0;
         vdp2.nextComposeLine = 0;
         ++vdp2.layerRenderParamsGeneration;
