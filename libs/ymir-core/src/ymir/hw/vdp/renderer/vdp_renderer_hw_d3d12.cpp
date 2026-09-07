@@ -2702,6 +2702,18 @@ struct Direct3D12VDPRenderer::Impl {
         vdp1.vramDirty.Set(address >> VDP1Resources::kVRAMDirtyBitmapChunkSizeShift);
     }
 
+    void VDP1SyncFB() {
+        // TODO: wait until VDP1 rendering has caught up
+    }
+
+    void VDP1DebugSyncFB() {
+        // TODO: loosely wait until VDP1 rendering has caught up, maybe
+    }
+
+    void VDP1WriteFB(uint32 address) {
+        // TODO: mark as dirty
+    }
+
     [[nodiscard]] util::VoidResult<> VDP1FlushVRAM() {
         if (!vdp1.vramDirty) {
             return {};
@@ -2736,6 +2748,109 @@ struct Direct3D12VDPRenderer::Impl {
         vdp1.vramDirty.ClearAll();
 
         return {};
+    }
+
+    void VDP1EraseFramebuffer(uint64 cycles) {
+        // TODO: setup framebuffer erase, run erase shader
+    }
+
+    void VDP1SwapFramebuffer() {
+        // TODO: submit command list, swap framebuffer
+    }
+
+    void VDP1ExecuteCommand(uint32 cmdAddress, VDP1Command::Control control) {
+        if (auto result = VDP1FlushVRAM(); !result) {
+            devlog::warn<grp::dx12_vdp1>("VDP1 VRAM flush failed: {}", result.Error().message);
+        }
+
+        switch (control.command) {
+        case VDP1Command::CommandType::DrawNormalSprite: VDP1Cmd_DrawNormalSprite(cmdAddress, control); break;
+        case VDP1Command::CommandType::DrawScaledSprite: VDP1Cmd_DrawScaledSprite(cmdAddress, control); break;
+        case VDP1Command::CommandType::DrawDistortedSprite: [[fallthrough]];
+        case VDP1Command::CommandType::DrawDistortedSpriteAlt: VDP1Cmd_DrawDistortedSprite(cmdAddress, control); break;
+
+        case VDP1Command::CommandType::DrawPolygon: VDP1Cmd_DrawPolygon(cmdAddress); break;
+        case VDP1Command::CommandType::DrawPolylines: [[fallthrough]];
+        case VDP1Command::CommandType::DrawPolylinesAlt: VDP1Cmd_DrawPolylines(cmdAddress); break;
+        case VDP1Command::CommandType::DrawLine: VDP1Cmd_DrawLine(cmdAddress); break;
+
+        case VDP1Command::CommandType::UserClipping: [[fallthrough]];
+        case VDP1Command::CommandType::UserClippingAlt: VDP1Cmd_SetUserClipping(cmdAddress); break;
+        case VDP1Command::CommandType::SystemClipping: VDP1Cmd_SetSystemClipping(cmdAddress); break;
+        case VDP1Command::CommandType::SetLocalCoordinates: VDP1Cmd_SetLocalCoordinates(cmdAddress); break;
+        }
+    }
+
+    void VDP1Cmd_DrawNormalSprite(uint32 cmdAddress, VDP1Command::Control control) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        // TODO: implement
+    }
+
+    void VDP1Cmd_DrawScaledSprite(uint32 cmdAddress, VDP1Command::Control control) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        // TODO: implement
+    }
+
+    void VDP1Cmd_DrawDistortedSprite(uint32 cmdAddress, VDP1Command::Control control) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        // TODO: implement
+    }
+
+    void VDP1Cmd_DrawPolygon(uint32 cmdAddress) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        // TODO: implement
+    }
+
+    void VDP1Cmd_DrawPolylines(uint32 cmdAddress) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        // TODO: implement
+    }
+
+    void VDP1Cmd_DrawLine(uint32 cmdAddress) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        // TODO: implement
+    }
+
+    void VDP1Cmd_SetUserClipping(uint32 cmdAddress) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        // TODO: implement
+    }
+
+    void VDP1Cmd_SetSystemClipping(uint32 cmdAddress) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        // TODO: implement
+    }
+
+    void VDP1Cmd_SetLocalCoordinates(uint32 cmdAddress) {
+        if (!vdpState.state2.layerEnabled[0]) {
+            return;
+        }
+
+        // TODO: implement
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -3206,7 +3321,6 @@ struct Direct3D12VDPRenderer::Impl {
         for (int i = 0; i < 2; ++i) {
             const BGParams &bgParams = regs2.bgParams[i];
             const RotationParams &rotParams = regs2.rotParams[i];
-            const RotationParamState &rotState = vdpState.state2.rotParamStates[i];
 
             const bool bitmap = bgParams.bitmap;
 
@@ -3879,28 +3993,29 @@ void Direct3D12VDPRenderer::VDP1WriteVRAM(uint32 address, uint8 value) {
 }
 
 void Direct3D12VDPRenderer::VDP1WriteVRAM(uint32 address, uint16 value) {
-    // The address is always word-aligned, so the value will never straddle two chunks
+    // The address is always word-aligned
     m_impl->VDP1WriteVRAM(address);
 }
 
 void Direct3D12VDPRenderer::VDP1SyncFB() {
-    // TODO: wait until VDP1 rendering has caught up
+    m_impl->VDP1SyncFB();
 }
 
 void Direct3D12VDPRenderer::VDP1DebugSyncFB() {
-    // TODO: loosely wait until VDP1 rendering has caught up, maybe
+    m_impl->VDP1DebugSyncFB();
 }
 
 void Direct3D12VDPRenderer::VDP1WriteFB(uint32 address, uint8 value) {
-    // TODO: mark as dirty
+    m_impl->VDP1WriteFB(address);
 }
 
 void Direct3D12VDPRenderer::VDP1WriteFB(uint32 address, uint16 value) {
-    // TODO: mark as dirty
+    m_impl->VDP1WriteFB(address);
 }
 
 void Direct3D12VDPRenderer::VDP1WriteReg(uint32 address, uint16 value) {
-    // TODO: mark as dirty
+    // All important registers are passed as root 32-bit constants.
+    // Nothing needs to be marked dirty as a result of VDP1 register changes.
 }
 
 // -------------------------------------------------------------------------
@@ -3911,7 +4026,7 @@ void Direct3D12VDPRenderer::VDP2WriteVRAM(uint32 address, uint8 value) {
 }
 
 void Direct3D12VDPRenderer::VDP2WriteVRAM(uint32 address, uint16 value) {
-    // The address is always word-aligned, so the value will never straddle two chunks
+    // The address is always word-aligned
     m_impl->VDP2WriteVRAM(address);
 }
 
@@ -3946,24 +4061,21 @@ void Direct3D12VDPRenderer::DumpExtraVDP1Framebuffers(std::ostream &out) const {
 // Rendering process
 
 void Direct3D12VDPRenderer::VDP1EraseFramebuffer(uint64 cycles) {
-    // TODO: execute operation
+    m_impl->VDP1EraseFramebuffer(cycles);
 }
 
 void Direct3D12VDPRenderer::VDP1SwapFramebuffer() {
-    // TODO: execute operation
+    m_impl->VDP1SwapFramebuffer();
     Callbacks.VDP1FramebufferSwap();
 }
 
-void Direct3D12VDPRenderer::VDP1BeginFrame() {
-    // TODO: prepare new VDP1 frame
-}
+void Direct3D12VDPRenderer::VDP1BeginFrame() {}
 
 void Direct3D12VDPRenderer::VDP1ExecuteCommand(uint32 cmdAddress, VDP1Command::Control control) {
-    // TODO: execute operation
+    m_impl->VDP1ExecuteCommand(cmdAddress, control);
 }
 
 void Direct3D12VDPRenderer::VDP1EndFrame() {
-    // TODO: finish VDP1 frame
     Callbacks.VDP1DrawFinished();
 }
 
