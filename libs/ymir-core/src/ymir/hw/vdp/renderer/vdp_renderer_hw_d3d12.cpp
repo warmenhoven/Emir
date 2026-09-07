@@ -891,9 +891,10 @@ struct Direct3D12VDPRenderer::Impl {
         UserClip userClip1; // User clipping area bottom-right coordinate
     };
 
-    struct VDP1LineParams {
+    struct VDP1SpanParams {
         HLSLint2 coord0; // Starting coordinates
         HLSLint2 coord1; // Ending coordinates
+        HLSLuint length; // Span length
         HLSLuint texV;   // Texture V coordinate
         HLSLbool flipH;  // Horizontal flip
 
@@ -961,8 +962,7 @@ struct Direct3D12VDPRenderer::Impl {
         ///   - gouraud shading
         ///   - half-source
         ///   - half-destination
-        /// Array indexing: [antialias][textured][mesh_mode][mode_bits]
-        std::array<std::array<std::array<std::array<gpu::ComputeShader, 8>, 3>, 2>, 2> polyDrawShaders;
+        std::array<gpu::ComputeShader, 2 * 2 * 3 * 8> polyDrawShaders;
         /// @brief Root signature for drawing polygons.
         /// The same root signature applies to all variants of the polygon drawing shader.
         D3D12RootSignature polyDrawRootSig;
@@ -972,6 +972,51 @@ struct Direct3D12VDPRenderer::Impl {
 
         BarrierTracker barrierTracker;
     } vdp1;
+
+    /// @brief Constructs a polygon drawing shader index from its variant options.
+    /// @param[in] antialias use antialiasing
+    /// @param[in] textured use textures
+    /// @param[in] mesh draw as mesh
+    /// @param[in] gouraud use gouraud shading
+    /// @param[in] halfSrc half-source / half-luminance (color blending)
+    /// @param[in] halfDst half-destination / shadow (color blending)
+    /// @return the shader index
+    size_t MakeVDP1PolyDrawShaderIndex(bool antialias, bool textured, bool mesh, bool gouraud, bool halfSrc,
+                                       bool halfDst) const {
+        size_t value = 0;
+        if (mesh) {
+            bit::deposit_into<5, 6>(value, enhancements.transparentMeshes ? 2u : 1u);
+        }
+        bit::deposit_into<4>(value, antialias);
+        bit::deposit_into<3>(value, textured);
+        bit::deposit_into<2>(value, gouraud);
+        bit::deposit_into<1>(value, halfSrc);
+        bit::deposit_into<0>(value, halfDst);
+        return value;
+    }
+
+    struct PolyDrawShaderIndex {
+        size_t antialias;
+        size_t textured;
+        size_t meshMode; // 0=solid, 1=checkerboard, 2=transparent
+        size_t gouraud;
+        size_t halfSrc;
+        size_t halfDst;
+    };
+
+    /// @brief Expands a bit-packed polygon drawing shader index into its components.
+    /// @param[in] index the polygon drawing shader index
+    /// @return the index's components
+    PolyDrawShaderIndex ExpandPolyDrawShaderIndex(size_t index) {
+        return {
+            .antialias = bit::extract<0>(index),
+            .textured = bit::extract<1>(index),
+            .meshMode = bit::extract<5, 6>(index),
+            .gouraud = bit::extract<2>(index),
+            .halfSrc = bit::extract<3>(index),
+            .halfDst = bit::extract<4>(index),
+        };
+    }
 
     // =================================================================================================================
     // VDP2 rendering
@@ -1834,37 +1879,24 @@ struct Direct3D12VDPRenderer::Impl {
         // Shaders and root signatures
 
         // Polygon drawing (all variants)
-        for (int antialias : {0, 1}) {
-            for (int textured : {0, 1}) {
-                for (int meshMode : {0, 1, 2}) {
-                    for (int gouraud : {0, 1}) {
-                        for (int halfSrc : {0, 1}) {
-                            for (int halfDst : {0, 1}) {
-                                std::string filename =
-                                    fmt::format("src/vdp/cs_vdp1_polydraw_{}_{}_{}_{}_{}_{}.cso", antialias, textured,
-                                                meshMode, gouraud, halfSrc, halfDst);
-                                auto shaderBlobResult = LoadShader(filename.c_str());
-                                if (!shaderBlobResult) {
-                                    return util::ErrorMessage{
-                                        fmt::format("Could not load VDP1 polygon drawing compute shader: {}",
-                                                    shaderBlobResult.Error().message)};
-                                }
-                                gpu::ComputeShader &polyDrawShader =
-                                    vdp1.polyDrawShaders[antialias][textured][meshMode]
-                                                        [(gouraud << 2) | (halfSrc << 1) | halfDst];
-                                polyDrawShader.format = gpu::ShaderBytecodeFormat::DXIL;
-                                polyDrawShader.bytecode = shaderBlobResult.Value();
-                                polyDrawShader.entrypoint = kCSEntrypoint;
-                                auto result = gpu::ValidateShader(polyDrawShader);
-                                if (!result) {
-                                    return util::ErrorMessage{
-                                        fmt::format("VDP1 polygon drawing compute shader validation failed: {}",
-                                                    result.Error().message)};
-                                }
-                            }
-                        }
-                    }
-                }
+        for (size_t shaderIndex = 0; shaderIndex < vdp1.polyDrawShaders.size(); ++shaderIndex) {
+            const auto [antialias, textured, meshMode, gouraud, halfSrc, halfDst] =
+                ExpandPolyDrawShaderIndex(shaderIndex);
+            std::string filename = fmt::format("src/vdp/cs_vdp1_polydraw_{}_{}_{}_{}_{}_{}.cso", antialias, textured,
+                                               meshMode, gouraud, halfSrc, halfDst);
+            auto shaderBlobResult = LoadShader(filename.c_str());
+            if (!shaderBlobResult) {
+                return util::ErrorMessage{fmt::format("Could not load VDP1 polygon drawing compute shader: {}",
+                                                      shaderBlobResult.Error().message)};
+            }
+            gpu::ComputeShader &polyDrawShader = vdp1.polyDrawShaders[shaderIndex];
+            polyDrawShader.format = gpu::ShaderBytecodeFormat::DXIL;
+            polyDrawShader.bytecode = shaderBlobResult.Value();
+            polyDrawShader.entrypoint = kCSEntrypoint;
+            auto result = gpu::ValidateShader(polyDrawShader);
+            if (!result) {
+                return util::ErrorMessage{
+                    fmt::format("VDP1 polygon drawing compute shader validation failed: {}", result.Error().message)};
             }
         }
         {
@@ -2759,6 +2791,7 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void VDP1ExecuteCommand(uint32 cmdAddress, VDP1Command::Control control) {
+        // TODO: only flush VRAM on draw commands; the other commands don't dispatch shaders
         if (auto result = VDP1FlushVRAM(); !result) {
             devlog::warn<grp::dx12_vdp1>("VDP1 VRAM flush failed: {}", result.Error().message);
         }
