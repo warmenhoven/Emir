@@ -174,6 +174,12 @@ namespace settings::video {
             videoSettings.useHardwareAcceleration = hwAccel;
             ctx.EnqueueEvent(events::emu::SwitchVDPRenderer());
         }
+        widgets::ExplanationTooltip("Enables use of GPU compute shaders to accelerate VDP1 and VDP2 rendering.\n"
+                                    "Greatly improves performance and enables additional enhancements.\n"
+                                    "\n"
+                                    "NOTE: Support for hardware acceleration is currently EXPERIMENTAL. You may "
+                                    "encounter bugs, stability and performance issues.",
+                                    ctx.displayScale);
         if (isSDLRenderer) {
             widgets::ExplanationTooltip("Not supported with SDL Renderer", ctx.displayScale);
             ImGui::EndDisabled();
