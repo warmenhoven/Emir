@@ -243,6 +243,12 @@ public:
         m_debugName = name;
     }
 
+    /// @brief Retrieves the debug name for this buffer.
+    /// @return this upload buffer's debug name
+    std::string_view GetDebugName() const {
+        return m_debugName;
+    }
+
     /// @brief Attempts to allocate a chunk of memory from the upload buffer.
     /// @param[in] size the requested size
     /// @param[in] alignment the requested alignment
@@ -2640,14 +2646,96 @@ struct Direct3D12VDPRenderer::Impl {
     // State
 
     void Reset() {
+        // VDP1
+        vdp1.vramDirty.SetAll();
+
+        // VDP2
         vdp2.vramDirty.SetAll();
         ++vdp2.cramGeneration;
-        VDP2CacheAllCRAMColors();
-        vdp2.nextLayerRenderLine = 0;
-        vdp2.nextComposeLine = 0;
         ++vdp2.layerRenderParamsGeneration;
         ++vdp2.composeParamsGeneration;
+
+        vdp2.nextLayerRenderLine = 0;
+        vdp2.nextComposeLine = 0;
+
+        VDP2CacheAllCRAMColors();
         VDP2UpdateEnabledLayers();
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    // Common
+
+    /// @brief Attempts to allocate a chunk of data in the specified upload buffer, waiting to free up space if needed.
+    /// @param[in] uploadBuffer the upload buffer
+    /// @param[in] size the requested size
+    /// @param[in] alignment the requested alignment
+    /// @param[out] outAlloc receives the allocation information
+    /// @return nothing on success, an error message on failure
+    util::VoidResult<> AllocateUploadBuffer(UploadRingBuffer &uploadBuffer, size_t size, size_t alignment,
+                                            UploadAllocation &outAlloc) {
+        // Sanity check: the upload buffer can hold transfers of this size
+        YMIR_DEV_ASSERT(size < uploadBuffer.GetSize());
+
+        if (!uploadBuffer.Allocate(size, alignment, computeFence.GetCompletedValue(), outAlloc)) {
+            // Block until next fence completes and retry
+            const UINT64 waitValue = uploadBuffer.FindFenceValueForAllocation(size, alignment);
+            computeFence.Wait(INFINITE, waitValue);
+
+            // At this point, we really should be able to allocate the buffer
+            if (!uploadBuffer.Allocate(size, alignment, computeFence->GetCompletedValue(), outAlloc)) {
+                // TODO: consider increasing the upload buffer size or allocating overflow buffers.
+                // For now we'll just log the error and fail
+                YMIR_DEV_CHECK();
+                std::string message = fmt::format("Failed to allocate {} bytes (align {}) in {} upload buffer", size,
+                                                  alignment, uploadBuffer.GetDebugName());
+                devlog::warn<grp::dx12_vdp2>("{}", message);
+                return util::ErrorMessage{std::move(message)};
+            }
+        }
+        return {};
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    // VDP1 rendering
+
+    void VDP1WriteVRAM(uint32 address) {
+        vdp1.vramDirty.Set(address >> VDP1Resources::kVRAMDirtyBitmapChunkSizeShift);
+    }
+
+    [[nodiscard]] util::VoidResult<> VDP1FlushVRAM() {
+        if (!vdp1.vramDirty) {
+            return {};
+        }
+
+        ID3D12Resource *dstResource = vdp1.vramBuffer.GetPointer();
+        ID3D12Resource *uploadBufferPtr = vdp1.uploadBuffer.GetBufferResource().GetPointer();
+
+        // Emit barrier transition
+        vdp1.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                             D3D12_BARRIER_ACCESS_COPY_DEST);
+        vdp1.barrierTracker.Flush(vdp1.cmdList);
+
+        // Upload all modified VRAM chunks
+        size_t pos, count = 0;
+        UploadAllocation alloc{};
+        for (pos = vdp1.vramDirty.FindNext(count); pos < vdp1.vramDirty.Size();
+             pos = vdp1.vramDirty.FindNext(count, pos + count)) {
+            const uint32 vramOffset = pos << VDP2Resources::kVRAMDirtyBitmapChunkSizeShift;
+            const uint32 size = count << VDP2Resources::kVRAMDirtyBitmapChunkSizeShift;
+
+            // Get upload buffer chunk for this transfer
+            if (auto result = AllocateUploadBuffer(vdp1.uploadBuffer, size, 4, alloc); !result) {
+                return util::ErrorMessage{
+                    fmt::format("Failed to allocate upload buffer for VDP1 VRAM chunk: {}", result.Error().message)};
+            }
+
+            // Upload VRAM chunk
+            memcpy(alloc.data, &vdpState.mem1.VRAM[vramOffset], size);
+            vdp1.cmdList->CopyBufferRegion(dstResource, vramOffset, uploadBufferPtr, alloc.offset, size);
+        }
+        vdp1.vramDirty.ClearAll();
+
+        return {};
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -2825,29 +2913,6 @@ struct Direct3D12VDPRenderer::Impl {
         }
     }
 
-    util::VoidResult<> VDP2AllocateUploadBuffer(size_t size, size_t alignment, UploadAllocation &outAlloc) {
-        // Sanity check: the upload buffer can hold transfers of this size
-        YMIR_DEV_ASSERT(size < vdp2.uploadBuffer.GetSize());
-
-        if (!vdp2.uploadBuffer.Allocate(size, alignment, computeFence.GetCompletedValue(), outAlloc)) {
-            // Block until next fence completes and retry
-            const UINT64 waitValue = vdp2.uploadBuffer.FindFenceValueForAllocation(size, alignment);
-            computeFence.Wait(INFINITE, waitValue);
-
-            // At this point, we really should be able to allocate the buffer
-            if (!vdp2.uploadBuffer.Allocate(size, alignment, computeFence->GetCompletedValue(), outAlloc)) {
-                // TODO: consider increasing the upload buffer size or allocating overflow buffers.
-                // For now we'll just log the error and fail
-                YMIR_DEV_CHECK();
-                std::string message =
-                    fmt::format("Failed to allocate {} bytes (align {}) in VDP2 upload buffer", size, 4);
-                devlog::warn<grp::dx12_vdp2>("{}", message);
-                return util::ErrorMessage{std::move(message)};
-            }
-        }
-        return {};
-    }
-
     [[nodiscard]] util::VoidResult<> VDP2FlushVRAM() {
         if (!vdp2.vramDirty) {
             return {};
@@ -2870,8 +2935,9 @@ struct Direct3D12VDPRenderer::Impl {
             const uint32 size = count << VDP2Resources::kVRAMDirtyBitmapChunkSizeShift;
 
             // Get upload buffer chunk for this transfer
-            if (auto result = VDP2AllocateUploadBuffer(size, 4, alloc); !result) {
-                return util::ErrorMessage{"Failed to allocate upload buffer for VDP2 VRAM chunk"};
+            if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
+                return util::ErrorMessage{
+                    fmt::format("Failed to allocate upload buffer for VDP2 VRAM chunk: {}", result.Error().message)};
             }
 
             // Upload VRAM chunk
@@ -2897,7 +2963,7 @@ struct Direct3D12VDPRenderer::Impl {
         // Update color cache
         {
             const size_t size = sizeof(CRAMColorCache);
-            if (auto result = VDP2AllocateUploadBuffer(size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{fmt::format("Failed to allocate upload buffer for VDP2 CRAM color cache: {}",
                                                       result.Error().message)};
             }
@@ -2917,7 +2983,7 @@ struct Direct3D12VDPRenderer::Impl {
         const VDP2Regs &regs2 = vdpState.regs2;
         if ((regs2.bgEnabled[4] || regs2.bgEnabled[5]) && regs2.vramControl.colorRAMCoeffTableEnable) {
             const size_t size = kVDP2CRAMRotCoeffBufferSize;
-            if (auto result = VDP2AllocateUploadBuffer(size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{
                     fmt::format("Failed to allocate upload buffer for VDP2 CRAM rotation coefficients: {}",
                                 result.Error().message)};
@@ -3223,7 +3289,7 @@ struct Direct3D12VDPRenderer::Impl {
             ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
             const size_t size = sizeof(vdp2.cpuLayerRenderParams);
             UploadAllocation alloc{};
-            if (auto result = VDP2AllocateUploadBuffer(size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{
                     fmt::format("Failed to allocate upload buffer for VDP2 layer rendering parameters: {}",
                                 result.Error().message)};
@@ -3295,7 +3361,7 @@ struct Direct3D12VDPRenderer::Impl {
             const size_t size = sizeof(vdp2.cpuComposeParams);
 
             UploadAllocation alloc{};
-            if (auto result = VDP2AllocateUploadBuffer(size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{
                     fmt::format("Failed to allocate upload buffer for VDP2 layer compositing parameters: {}",
                                 result.Error().message)};
@@ -3383,7 +3449,7 @@ struct Direct3D12VDPRenderer::Impl {
         const size_t size = sizeof(vdp2.cpuLnclBack);
 
         UploadAllocation alloc{};
-        if (auto result = VDP2AllocateUploadBuffer(size, 4, alloc); !result) {
+        if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
             return util::ErrorMessage{
                 fmt::format("Failed to allocate upload buffer for VDP2 LNCL/BACK screens: {}", result.Error().message)};
         }
@@ -3454,7 +3520,7 @@ struct Direct3D12VDPRenderer::Impl {
         const size_t size = sizeof(vdp2.cpuRotParamBases);
 
         UploadAllocation alloc{};
-        if (auto result = VDP2AllocateUploadBuffer(size, 4, alloc); !result) {
+        if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
             return util::ErrorMessage{fmt::format(
                 "Failed to allocate upload buffer for VDP2 rotation parameter bases: {}", result.Error().message)};
         }
@@ -3787,7 +3853,7 @@ void Direct3D12VDPRenderer::Reset(bool hard) {
 void Direct3D12VDPRenderer::PreSaveStateSync() {}
 
 void Direct3D12VDPRenderer::PostLoadStateSync() {
-    // TODO: m_impl->vdp1.vramDirty.SetAll();
+    m_impl->vdp1.vramDirty.SetAll();
 
     m_impl->VDP2CacheAllCRAMColors();
     m_impl->VDP2UpdateEnabledLayers();
@@ -3809,11 +3875,12 @@ void Direct3D12VDPRenderer::LoadState(const savestate::VDPSaveState::VDPRenderer
 // VDP1 memory and register writes
 
 void Direct3D12VDPRenderer::VDP1WriteVRAM(uint32 address, uint8 value) {
-    // TODO: mark as dirty
+    m_impl->VDP1WriteVRAM(address);
 }
 
 void Direct3D12VDPRenderer::VDP1WriteVRAM(uint32 address, uint16 value) {
-    // TODO: mark as dirty
+    // The address is always word-aligned, so the value will never straddle two chunks
+    m_impl->VDP1WriteVRAM(address);
 }
 
 void Direct3D12VDPRenderer::VDP1SyncFB() {
