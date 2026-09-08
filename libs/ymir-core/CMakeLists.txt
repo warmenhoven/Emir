@@ -406,19 +406,19 @@ set(COMPUTE_SHADER_SOURCES
 )
 
 # Generate VDP1 shader specializations
-# Naming scheme: <shader_name>_<mesh-mode>_<textured>_<gouraud>_<half-src>_<half-dst>
-foreach (_mesh_mode RANGE 2)
+# Naming scheme: <shader_name>_<transparent-mesh>_<textured>_<gouraud>_<half-src>_<half-dst>
+foreach (_transparent_mesh RANGE 1)
     foreach (_textured RANGE 1)
         foreach (_gouraud RANGE 1)
             foreach (_half_src RANGE 1)
                 foreach (_half_dst RANGE 1)
-                    set(_variant_name "${_mesh_mode}_${_textured}_${_gouraud}_${_half_src}_${_half_dst}")
-                    set(_macros_mesh_mode "POLYSPEC_MESH_MODE=${_mesh_mode}")
+                    set(_variant_name "${_transparent_mesh}_${_textured}_${_gouraud}_${_half_src}_${_half_dst}")
+                    set(_macros_transparent_mesh "POLYSPEC_TRANSPARENT_MESH=${_transparent_mesh}")
                     set(_macros_textured "POLYSPEC_TEXTURED=${_textured}")
                     set(_macros_gouraud "POLYSPEC_SHADING_GOURAUD=${_gouraud}")
                     set(_macros_half_src "POLYSPEC_SHADING_HALF_SRC=${_half_src}")
                     set(_macros_half_dst "POLYSPEC_SHADING_HALF_DST=${_half_dst}")
-                    set(_macros "${_macros_textured}|${_macros_mesh_mode}|${_macros_gouraud}|${_macros_half_src}|${_macros_half_dst}")
+                    set(_macros "${_macros_transparent_mesh}|${_macros_textured}|${_macros_gouraud}|${_macros_half_src}|${_macros_half_dst}")
                     list(APPEND COMPUTE_SHADER_SOURCES "res/shaders/src/vdp/cs_vdp1_polydraw.hlsl|${_variant_name}|${_macros}")
                 endforeach ()
             endforeach ()

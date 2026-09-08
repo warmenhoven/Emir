@@ -986,12 +986,12 @@ struct Direct3D12VDPRenderer::Impl {
         /// - Shader specializations
         /// The shader is compiled for all possible combinations of the following properties:
         /// - solid color vs. textured
-        /// - solid vs. mesh vs. transparent mesh polygons
+        /// - checkerboard vs. transparent meshes
         /// - shading modes (bits 0-2 of CMDPMOD):
         ///   - gouraud shading
         ///   - half-source
         ///   - half-destination
-        std::array<gpu::ComputeShader, 2 * 3 * 8> polyDrawShaders;
+        std::array<gpu::ComputeShader, 2 * 2 * 8> polyDrawShaders;
         /// @brief Root signature for drawing polygons.
         /// The same root signature applies to all variants of the polygon drawing shader.
         D3D12RootSignature polyDrawRootSig;
@@ -1003,7 +1003,6 @@ struct Direct3D12VDPRenderer::Impl {
     } vdp1;
 
     /// @brief Constructs a polygon drawing shader index from its variant options.
-    /// @param[in] mesh draw as mesh
     /// @param[in] textured use textures
     /// @param[in] gouraud use gouraud shading
     /// @param[in] halfSrc half-source / half-luminance (color blending)
@@ -1011,9 +1010,7 @@ struct Direct3D12VDPRenderer::Impl {
     /// @return the shader index
     size_t MakeVDP1PolyDrawShaderIndex(bool mesh, bool textured, bool gouraud, bool halfSrc, bool halfDst) const {
         size_t value = 0;
-        if (mesh) {
-            bit::deposit_into<4, 5>(value, enhancements.transparentMeshes ? 2u : 1u);
-        }
+        bit::deposit_into<4>(value, enhancements.transparentMeshes ? 1u : 0u);
         bit::deposit_into<3>(value, textured);
         bit::deposit_into<2>(value, gouraud);
         bit::deposit_into<1>(value, halfSrc);
@@ -1022,7 +1019,7 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     struct PolyDrawShaderIndex {
-        size_t meshMode; // 0=solid, 1=checkerboard, 2=transparent
+        size_t transparentMesh;
         size_t textured;
         size_t gouraud;
         size_t halfSrc;
@@ -1034,7 +1031,7 @@ struct Direct3D12VDPRenderer::Impl {
     /// @return the index's components
     PolyDrawShaderIndex ExpandPolyDrawShaderIndex(size_t index) {
         return {
-            .meshMode = bit::extract<4, 5>(index),
+            .transparentMesh = bit::extract<4>(index),
             .textured = bit::extract<3>(index),
             .gouraud = bit::extract<2>(index),
             .halfSrc = bit::extract<1>(index),
@@ -1965,7 +1962,7 @@ struct Direct3D12VDPRenderer::Impl {
                     .Buffer =
                         {
                             .FirstElement = 0,
-                            .NumElements = frameCtx.cpuSpanParams.size(),
+                            .NumElements = static_cast<UINT>(frameCtx.cpuSpanParams.size()),
                             .StructureByteStride = sizeof(VDP1SpanParams),
                             .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
                         },
@@ -1999,7 +1996,7 @@ struct Direct3D12VDPRenderer::Impl {
                     .Buffer =
                         {
                             .FirstElement = 0,
-                            .NumElements = frameCtx.cpuSpanPrefixSums.size(),
+                            .NumElements = static_cast<UINT>(frameCtx.cpuSpanPrefixSums.size()),
                             .StructureByteStride = sizeof(HLSLuint),
                             .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
                         },

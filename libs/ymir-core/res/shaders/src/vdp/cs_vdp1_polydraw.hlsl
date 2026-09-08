@@ -5,8 +5,8 @@
 #include "util/bit_ops.hlsli"
 
 // Shader specialization macros:
-// - POLYSPEC_TEXTURED:  0=solid color; 1=textured
-// - POLYSPEC_MESH_MODE: 0=solid; 1=checkerboard mesh; 2=transparent mesh
+// - POLYSPEC_TEXTURED: 0=solid color; 1=textured
+// - POLYSPEC_TRANSPARENT_MESH: 0=checkerboard mesh; 1=transparent mesh
 // - POLYSPEC_SHADING_GOURAUD  [CMDPMOD.2]: 0=flat shading; 1=gouraud shading
 // - POLYSPEC_SHADING_HALF_SRC [CMDPMOD.1]: 0=don't modify source color; 1=halve source color ("half-luminance")
 // - POLYSPEC_SHADING_HALF_DST [CMDPMOD.0]: 0=don't modify destination color; 1=halve destination color ("shadow")
@@ -14,7 +14,7 @@
 // Modify these to adjust IntelliSense highlighting
 #ifdef __INTELLISENSE__
 #define POLYSPEC_TEXTURED         0
-#define POLYSPEC_MESH_MODE        0
+#define POLYSPEC_TRANSPARENT_MESH 0
 #define POLYSPEC_SHADING_GOURAUD  0
 #define POLYSPEC_SHADING_HALF_SRC 0
 #define POLYSPEC_SHADING_HALF_DST 0
@@ -46,7 +46,6 @@ static const uint drawFB = BitExtract(g_commonParams.displayParams, 7, 1);
 static const bool antialias = BitTest(g_commonParams.displayParams, 8);
 
 static const bool deinterlace = BitTest(g_commonParams.enhancements, 0);
-static const bool transparentMeshes = BitTest(g_commonParams.enhancements, 1);
 
 static const uint2 sysClip = uint2(
     BitExtract(g_polyDrawParams.sysClip, 0, 16),
