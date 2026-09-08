@@ -4,9 +4,26 @@
 // See C++ code for documentation on the fields
 
 struct PolyDrawParams {
-    uint params;
-    uint writeValue;
-    uint vblankEraseParams;
+    uint sysClip;
+    uint userClip0;
+    uint userClip1;
+};
+
+struct PolySpan {
+    int2 coord0;
+    int2 coord1;
+
+    uint gouraud0;
+    uint gouraud1;
+
+    uint cmdpmod;
+    uint cmdcolr;
+    uint cmdsrca;
+    uint cmdsize;
+
+    uint length;
+    uint texV;
+    bool flipH;
 };
 
 #endif

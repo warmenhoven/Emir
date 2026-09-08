@@ -84,14 +84,14 @@ static constexpr const char *kCSEntrypoint = "CSMain";
 /// @brief Contains the compiled shader files from res/shaders/src.
 cmrc::embedded_filesystem g_fsShaders = cmrc::ymir_core_shaders::get_filesystem();
 
-struct ColorR8G8B8A8 {
-    uint8 r, g, b, a;
-};
-static_assert(sizeof(ColorR8G8B8A8) == sizeof(uint32));
-
 using HLSLbool = uint32; // bools align to 4 bytes
 using HLSLint = sint32;
 using HLSLuint = uint32;
+
+struct alignas(HLSLuint) ColorR8G8B8A8 {
+    uint8 r, g, b, a;
+};
+static_assert(sizeof(ColorR8G8B8A8) == sizeof(uint32));
 
 union HLSLuint2 {
     std::array<HLSLuint, 2> array;
@@ -833,8 +833,11 @@ struct Direct3D12VDPRenderer::Impl {
             HLSLuint dblInterlaceDrawLine : 1; //     5  Double interlace line                0=even; 1=odd
             HLSLuint evenOddCoordSelect : 1;   //     6  Even/odd coordinate select (HSS)     0=even; 1=odd
             HLSLuint drawFB : 1;               //     7  Current draw framebuffer index
+            HLSLuint antialias : 1;            //     8  Antialias lines (fill holes)
         } displayParams;
         static_assert(sizeof(DisplayParams) == sizeof(HLSLuint));
+
+        HLSLuint numSpans; // Number of spans in the list
 
         struct Enhancements {               //  bits  use
             HLSLuint deinterlace : 1;       //     0  Deinterlace
@@ -867,15 +870,6 @@ struct Direct3D12VDPRenderer::Impl {
 
     /// @brief VDP1 polygon drawing parameters, appended to common rendering parameters in the polygon drawing shader.
     struct VDP1PolyDrawParams {
-        struct Command {
-            // NOTE: shader doesn't need CMDLINK nor CMDGRDA, and all CMDCTRL parameters are handled on the CPU side or
-            // passed to `params` above.
-            HLSLuint cmdpmod : 16; // CMDPMOD value
-            HLSLuint cmdcolr : 16; // CMDCOLR value
-            HLSLuint cmdsrca : 16; // CMDSRCA value
-            HLSLuint cmdsize : 16; // CMDSIZE value
-        } command;
-
         struct SysClip {     //  bits  use
             HLSLuint h : 16; //  0-15  System clipping area width
             HLSLuint v : 16; // 16-31  System clipping area height
@@ -894,17 +888,53 @@ struct Direct3D12VDPRenderer::Impl {
     struct VDP1SpanParams {
         HLSLint2 coord0; // Starting coordinates
         HLSLint2 coord1; // Ending coordinates
-        HLSLuint length; // Span length
-        HLSLuint texV;   // Texture V coordinate
-        HLSLbool flipH;  // Horizontal flip
 
         ColorR8G8B8A8 gouraud0; // Starting gouraud value
         ColorR8G8B8A8 gouraud1; // Ending gouraud value
+
+        HLSLuint cmdpmod; // CMDPMOD value
+        HLSLuint cmdcolr; // CMDCOLR value
+        HLSLuint cmdsrca; // CMDSRCA value
+        HLSLuint cmdsize; // CMDSIZE value
+
+        HLSLuint length; // Span length
+        HLSLuint texV;   // Texture V coordinate
+        HLSLbool flipH;  // Horizontal flip
+    };
+
+    static constexpr size_t kMaxVDP1Spans = 1024;
+
+    /// @brief Per-frame VDP1 resources.
+    struct VDP1FrameContext : public FrameContext {
+        /// @brief Span parameters buffer.
+        D3D12Resource spanParamsBuffer;
+        /// @brief Span parameters buffer SRV (offline).
+        DescriptorRange spanParamsSRV;
+
+        /// @brief Span prefix sum buffer.
+        D3D12Resource spanPrefixSumsBuffer;
+        /// @brief Span prefix sum buffer SRV (offline).
+        DescriptorRange spanPrefixSumsSRV;
+
+        /// @brief CPU-side span parameters buffer.
+        std::array<VDP1SpanParams, kMaxVDP1Spans> cpuSpanParams;
+        /// @brief CPU-side span prefix sums buffer.
+        /// The first entry is always 0 to simplify implementation.
+        std::array<HLSLuint, kMaxVDP1Spans + 1> cpuSpanPrefixSums;
+        /// @brief Number of spans allocated so far.
+        size_t cpuSpanCount = 0;
+
+        /// @brief Internal sprite output buffer.
+        D3D12Resource internalSpriteOutBuffer;
+        /// @brief Internal sprite output buffer SRV (offline).
+        DescriptorRange internalSpriteOutSRV;
+        /// @brief Internal sprite output buffer UAV (offline).
+        DescriptorRange internalSpriteOutUAV;
     };
 
     struct VDP1Resources {
         /// @brief VDP1 per-frame resources.
-        FrameSet<kNumFrames> frames;
+        FrameSet<kNumFrames, VDP1FrameContext> frames;
 
         /// @brief VDP1 command list.
         D3D12GraphicsCommandList cmdList;
@@ -943,10 +973,10 @@ struct Direct3D12VDPRenderer::Impl {
         /// @brief Common rendering parameters, uploaded as 32-bit root constants.
         VDP1CommonRenderParams cpuCommonRenderParams{};
 
-        /// @brief CPU-side erase parameters, uploaded as 32-bit root constants.
+        /// @brief Erase parameters, uploaded as 32-bit root constants.
         VDP1EraseParams cpuEraseParams{};
 
-        /// @brief CPU-side polygon drawing parameters, uploaded as 32-bit root constants.
+        /// @brief Polygon drawing parameters, uploaded as 32-bit root constants.
         VDP1PolyDrawParams cpuPolyDrawParams{};
 
         /// @brief Compute shader for drawing polygons.
@@ -955,14 +985,13 @@ struct Direct3D12VDPRenderer::Impl {
         /// - CMDPMOD, CMDCOLR, CMDSRCA and CMDSIZE values
         /// - Shader specializations
         /// The shader is compiled for all possible combinations of the following properties:
-        /// - normal vs. anti-aliased lines
         /// - solid color vs. textured
         /// - solid vs. mesh vs. transparent mesh polygons
         /// - shading modes (bits 0-2 of CMDPMOD):
         ///   - gouraud shading
         ///   - half-source
         ///   - half-destination
-        std::array<gpu::ComputeShader, 2 * 2 * 3 * 8> polyDrawShaders;
+        std::array<gpu::ComputeShader, 2 * 3 * 8> polyDrawShaders;
         /// @brief Root signature for drawing polygons.
         /// The same root signature applies to all variants of the polygon drawing shader.
         D3D12RootSignature polyDrawRootSig;
@@ -974,20 +1003,17 @@ struct Direct3D12VDPRenderer::Impl {
     } vdp1;
 
     /// @brief Constructs a polygon drawing shader index from its variant options.
-    /// @param[in] antialias use antialiasing
-    /// @param[in] textured use textures
     /// @param[in] mesh draw as mesh
+    /// @param[in] textured use textures
     /// @param[in] gouraud use gouraud shading
     /// @param[in] halfSrc half-source / half-luminance (color blending)
     /// @param[in] halfDst half-destination / shadow (color blending)
     /// @return the shader index
-    size_t MakeVDP1PolyDrawShaderIndex(bool antialias, bool textured, bool mesh, bool gouraud, bool halfSrc,
-                                       bool halfDst) const {
+    size_t MakeVDP1PolyDrawShaderIndex(bool mesh, bool textured, bool gouraud, bool halfSrc, bool halfDst) const {
         size_t value = 0;
         if (mesh) {
-            bit::deposit_into<5, 6>(value, enhancements.transparentMeshes ? 2u : 1u);
+            bit::deposit_into<4, 5>(value, enhancements.transparentMeshes ? 2u : 1u);
         }
-        bit::deposit_into<4>(value, antialias);
         bit::deposit_into<3>(value, textured);
         bit::deposit_into<2>(value, gouraud);
         bit::deposit_into<1>(value, halfSrc);
@@ -996,9 +1022,8 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     struct PolyDrawShaderIndex {
-        size_t antialias;
-        size_t textured;
         size_t meshMode; // 0=solid, 1=checkerboard, 2=transparent
+        size_t textured;
         size_t gouraud;
         size_t halfSrc;
         size_t halfDst;
@@ -1009,12 +1034,11 @@ struct Direct3D12VDPRenderer::Impl {
     /// @return the index's components
     PolyDrawShaderIndex ExpandPolyDrawShaderIndex(size_t index) {
         return {
-            .antialias = bit::extract<0>(index),
-            .textured = bit::extract<1>(index),
-            .meshMode = bit::extract<5, 6>(index),
+            .meshMode = bit::extract<4, 5>(index),
+            .textured = bit::extract<3>(index),
             .gouraud = bit::extract<2>(index),
-            .halfSrc = bit::extract<3>(index),
-            .halfDst = bit::extract<4>(index),
+            .halfSrc = bit::extract<1>(index),
+            .halfDst = bit::extract<0>(index),
         };
     }
 
@@ -1880,10 +1904,9 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Polygon drawing (all variants)
         for (size_t shaderIndex = 0; shaderIndex < vdp1.polyDrawShaders.size(); ++shaderIndex) {
-            const auto [antialias, textured, meshMode, gouraud, halfSrc, halfDst] =
-                ExpandPolyDrawShaderIndex(shaderIndex);
-            std::string filename = fmt::format("src/vdp/cs_vdp1_polydraw_{}_{}_{}_{}_{}_{}.cso", antialias, textured,
-                                               meshMode, gouraud, halfSrc, halfDst);
+            const auto [meshMode, textured, gouraud, halfSrc, halfDst] = ExpandPolyDrawShaderIndex(shaderIndex);
+            std::string filename = fmt::format("src/vdp/cs_vdp1_polydraw_{}_{}_{}_{}_{}.cso", meshMode, textured,
+                                               gouraud, halfSrc, halfDst);
             auto shaderBlobResult = LoadShader(filename.c_str());
             if (!shaderBlobResult) {
                 return util::ErrorMessage{fmt::format("Could not load VDP1 polygon drawing compute shader: {}",
@@ -1903,14 +1926,144 @@ struct Direct3D12VDPRenderer::Impl {
             auto rootSigBuilder = vdp1.polyDrawRootSig.Builder();
             rootSigBuilder.Add32BitConstants(0, (sizeof(VDP1CommonRenderParams) + sizeof(VDP1PolyDrawParams)) /
                                                     sizeof(uint32));
-            // rootSigBuilder.AddDescriptorTable()
-            //     .AddSRVs(4, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
-            //     .AddUAVs(2, 0);
+            rootSigBuilder.AddDescriptorTable()
+                .AddSRVs(2, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
+                .AddUAVs(1, 0);
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{
                     fmt::format("Could not build VDP1 polygon drawing root signature, error code {:X}", (uint32)hr)};
             }
             vdp1.polyDrawRootSig->SetName(L"[Ymir-VDP1] Polygon drawing root signature");
+        }
+
+        // -------------------------------------------------------------------------------------------------------------
+        // Per-frame VDP1 resources
+
+        for (int i = 0; i < vdp1.frames.Count(); ++i) {
+            VDP1FrameContext &frameCtx = vdp1.frames[i];
+
+            // Span parameters buffer
+            {
+                auto builder = frameCtx.spanParamsBuffer.BufferBuilder(sizeof(frameCtx.cpuSpanParams));
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not create VDP1 span parameters buffer #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.spanParamsBuffer->SetName(fmt::format(L"[Ymir-VDP1] Span parameters buffer #{}", i).c_str());
+
+                vdp1.barrierTracker.InitializeBuffer(
+                    frameCtx.spanParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.spanParamsSRV)) {
+                    return util::ErrorMessage{fmt::format("Could not allocate VDP1 span parameters buffer SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = DXGI_FORMAT_UNKNOWN,
+                    .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = frameCtx.cpuSpanParams.size(),
+                            .StructureByteStride = sizeof(VDP1SpanParams),
+                            .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.spanParamsBuffer.GetPointer(), &srvDesc,
+                                                 frameCtx.spanParamsSRV.cpuHandle);
+            }
+
+            // Span prefix sums buffer
+            {
+                auto builder = frameCtx.spanPrefixSumsBuffer.BufferBuilder(sizeof(frameCtx.cpuSpanPrefixSums));
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not create VDP1 span prefix sums buffer #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.spanPrefixSumsBuffer->SetName(
+                    fmt::format(L"[Ymir-VDP1] Span prefix sums buffer #{}", i).c_str());
+
+                vdp1.barrierTracker.InitializeBuffer(
+                    frameCtx.spanPrefixSumsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.spanPrefixSumsSRV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP1 span prefix sums buffer SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = DXGI_FORMAT_UNKNOWN,
+                    .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = frameCtx.cpuSpanPrefixSums.size(),
+                            .StructureByteStride = sizeof(HLSLuint),
+                            .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.spanPrefixSumsBuffer.GetPointer(), &srvDesc,
+                                                 frameCtx.spanPrefixSumsSRV.cpuHandle);
+            }
+
+            // Internal sprite output buffer
+            {
+                // Each entry in this buffer represents a logical output pixel.
+                // Entries are 32-bit, holding the sprite data in the 8 or 16 LSBs and the pixel index in the 16 MSBs to
+                // enable parallel rendering with guaranteed pixel ordering.
+                auto builder = frameCtx.internalSpriteOutBuffer.BufferBuilder(kVDP1FBRAMSize * sizeof(HLSLuint));
+                builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not create VDP1 internal sprite output buffer #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.internalSpriteOutBuffer->SetName(
+                    fmt::format(L"[Ymir-VDP1] Internal sprite output buffer #{}", i).c_str());
+
+                vdp1.barrierTracker.InitializeBuffer(
+                    frameCtx.internalSpriteOutBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.internalSpriteOutSRV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP1 internal sprite output buffer SRV #{}", i)};
+                }
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                    .Format = DXGI_FORMAT_UNKNOWN,
+                    .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = kVDP1FBRAMSize,
+                            .StructureByteStride = sizeof(HLSLuint),
+                            .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
+                        },
+                };
+                device->CreateShaderResourceView(frameCtx.internalSpriteOutBuffer.GetPointer(), &srvDesc,
+                                                 frameCtx.internalSpriteOutSRV.cpuHandle);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.internalSpriteOutUAV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP1 internal sprite output buffer UAV #{}", i)};
+                }
+                const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+                    .Format = DXGI_FORMAT_UNKNOWN,
+                    .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = kVDP1FBRAMSize,
+                            .StructureByteStride = sizeof(HLSLuint),
+                            .CounterOffsetInBytes = 0,
+                            .Flags = D3D12_BUFFER_UAV_FLAG_NONE,
+                        },
+                };
+                device->CreateUnorderedAccessView(frameCtx.internalSpriteOutBuffer.GetPointer(), nullptr, &uavDesc,
+                                                  frameCtx.internalSpriteOutUAV.cpuHandle);
+            }
         }
 
         // =============================================================================================================
@@ -2102,6 +2255,7 @@ struct Direct3D12VDPRenderer::Impl {
 
         for (int i = 0; i < vdp2.frames.Count(); ++i) {
             VDP2FrameContext &frameCtx = vdp2.frames[i];
+
             // VDP2 CRAM color buffer
             {
                 auto builder = frameCtx.cramColorBuffer.BufferBuilder(kVDP2CRAMColorBufferSize);

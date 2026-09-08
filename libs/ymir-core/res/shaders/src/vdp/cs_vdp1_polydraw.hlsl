@@ -2,8 +2,9 @@
 #include "vdp1_common_params.hlsli"
 #include "vdp1_polydraw_params.hlsli"
 
+#include "util/bit_ops.hlsli"
+
 // Shader specialization macros:
-// - POLYSPEC_ANTIALIAS: 0=no antialiasing (hole-filling); 1=enabled
 // - POLYSPEC_TEXTURED:  0=solid color; 1=textured
 // - POLYSPEC_MESH_MODE: 0=solid; 1=checkerboard mesh; 2=transparent mesh
 // - POLYSPEC_SHADING_GOURAUD  [CMDPMOD.2]: 0=flat shading; 1=gouraud shading
@@ -12,13 +13,53 @@
 
 // Modify these to adjust IntelliSense highlighting
 #ifdef __INTELLISENSE__
-#define POLYSPEC_ANTIALIAS        0
 #define POLYSPEC_TEXTURED         0
 #define POLYSPEC_MESH_MODE        0
 #define POLYSPEC_SHADING_GOURAUD  0
 #define POLYSPEC_SHADING_HALF_SRC 0
 #define POLYSPEC_SHADING_HALF_DST 0
 #endif
+
+cbuffer CommonRenderParamsBuffer : register(b0) {
+    CommonRenderParams g_commonParams;
+    PolyDrawParams g_polyDrawParams;
+}
+
+StructuredBuffer<PolySpan> spans : register(t1);
+Buffer<uint> spanOffsets : register(t2);
+
+RWBuffer<uint> internalSpriteOut : register(u0);
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Parameters
+
+static const uint2 fbSize = uint2(
+    512u << BitExtract(g_commonParams.displayParams, 0, 1),
+    256u << BitExtract(g_commonParams.displayParams, 1, 1)
+);
+static const bool pixel8Bits = BitTest(g_commonParams.displayParams, 2);
+static const bool doubleDensity = BitTest(g_commonParams.displayParams, 3);
+static const bool dblInterlaceEnable = BitTest(g_commonParams.displayParams, 4);
+static const bool dblInterlaceDrawLine = BitTest(g_commonParams.displayParams, 5);
+static const bool evenOddCoordSelect = BitTest(g_commonParams.displayParams, 6);
+static const uint drawFB = BitExtract(g_commonParams.displayParams, 7, 1);
+static const bool antialias = BitTest(g_commonParams.displayParams, 8);
+
+static const bool deinterlace = BitTest(g_commonParams.enhancements, 0);
+static const bool transparentMeshes = BitTest(g_commonParams.enhancements, 1);
+
+static const uint2 sysClip = uint2(
+    BitExtract(g_polyDrawParams.sysClip, 0, 16),
+    BitExtract(g_polyDrawParams.sysClip, 16, 16)
+);
+static const uint2 userClip0 = uint2(
+    BitExtract(g_polyDrawParams.userClip0, 0, 16),
+    BitExtract(g_polyDrawParams.userClip0, 16, 16)
+);
+static const uint2 userClip1 = uint2(
+    BitExtract(g_polyDrawParams.userClip1, 0, 16),
+    BitExtract(g_polyDrawParams.userClip1, 16, 16)
+);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Entrypoint
@@ -52,7 +93,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     //     - index 22 -> span 2 pixel 0
     //     - index 35 -> span 2 pixel 13 (last)
     //     - index 36 -> out of bounds, discarded
-    // - draw spans in parallel into a fragment buffer
+    // - draw spans in parallel into internalSpriteOut
     // - run a second shader to combine that into the output FBRAM (2 or 4 pixels at a time to fit into 32-bit values)
 
     // Possible implementation for Replace and Half-Luminance (and maybe Shadow):
