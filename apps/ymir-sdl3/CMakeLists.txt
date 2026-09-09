@@ -584,6 +584,10 @@ cmrc_add_resource_library(ymir-sdl3-rc
     NAMESPACE Ymir_sdl3_rc
     WHENCE res/embed
 
+    res/embed/about/contributors.txt
+    res/embed/about/friends.txt
+    res/embed/about/patreon.txt
+
     res/embed/fonts/MaterialSymbolsOutlined_Filled-Regular.ttf
     res/embed/fonts/MPLUSU-Ymir-Bold.ttf
     res/embed/fonts/MPLUSU-Ymir-ExtraBold.ttf

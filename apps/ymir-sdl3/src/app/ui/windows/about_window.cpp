@@ -4,6 +4,7 @@
 
 #include <util/std_lib.hpp>
 #include <ymir/util/compiler_info.hpp>
+#include <ymir/util/string.hpp>
 
 #include <ymir/hw/vdp/vdp.hpp>
 
@@ -11,6 +12,9 @@
 #include <app/services/midi_service.hpp>
 
 #include <app/ui/fonts/IconsMaterialSymbols.h>
+
+#include <cmrc/cmrc.hpp>
+CMRC_DECLARE(Ymir_sdl3_rc);
 
 #include <SDL3/SDL_clipboard.h>
 
@@ -585,6 +589,26 @@ void AboutWindow::DrawAcknowledgementsTab() {
 
     // -----------------------------------------------------------------------------
 
+    auto embedfs = cmrc::Ymir_sdl3_rc::get_filesystem();
+
+    auto getList = [&](const std::string &filename) {
+        cmrc::file file = embedfs.open(filename);
+        std::istringstream in({file.begin(), file.end()});
+        fmt::memory_buffer buf{};
+        auto out = std::back_inserter(buf);
+        std::string line{};
+        std::string sep = "";
+        while (std::getline(in, line)) {
+            line = util::TrimWhitespace(line);
+            if (!line.empty()) {
+                fmt::format_to(out, "{}{}", sep, line);
+                sep = ", ";
+            }
+        }
+        fmt::format_to(out, ".");
+        return fmt::to_string(buf);
+    };
+
     ImGui::NewLine();
 
     ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
@@ -601,6 +625,8 @@ void AboutWindow::DrawAcknowledgementsTab() {
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(".");
 
+    std::string contribs = getList("about/contributors.txt");
+
     ImGui::TextUnformatted("To the ");
     ImGui::SameLine(0, 0);
     ImGui::TextLinkOpenURL("project contributors", "https://github.com/ymir-emu/Ymir/graphs/contributors");
@@ -611,23 +637,10 @@ void AboutWindow::DrawAcknowledgementsTab() {
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(", including:");
     ImGui::Indent();
-    ImGui::TextUnformatted("4re, "
-                           "BlueInterlude, "
-                           "bsdcode, "
-                           "Citrodata, "
-                           "floreal, "
-                           "Fueziwa, "
-                           "GlaireDaggers, "
-                           "lvsweat, "
-                           "mmkzer0, "
-                           "PringleElUno, "
-                           "ronan22, "
-                           "SternXD, "
-                           "surajrbhardwaj, "
-                           "tegaidogun, "
-                           "tordona, "
-                           "Wunkolo.");
+    ImGui::TextUnformatted(contribs.c_str());
     ImGui::Unindent();
+
+    std::string friends = getList("about/friends.txt");
 
     ImGui::TextUnformatted("To the friends in the ");
     ImGui::SameLine(0, 0);
@@ -635,25 +648,10 @@ void AboutWindow::DrawAcknowledgementsTab() {
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(", especially:");
     ImGui::Indent();
-    ImGui::TextUnformatted("Aydan Watkins, "
-                           "celeriyacon, "
-                           "Charles / thelastangryman1907, "
-                           "Damian Gracz, "
-                           "fathamburger, "
-                           "GoodWall_533, "
-                           "Jano, "
-                           "Katanchiro, "
-                           "Lordus, "
-                           "Reaven, "
-                           "sasori95 / Immersion95, "
-                           "secreto7, "
-                           "Silanda, "
-                           "Sorer, "
-                           "SternXD, "
-                           "TheCoolPup, "
-                           "waspennator, "
-                           "Zet-sensei.");
+    ImGui::TextUnformatted(friends.c_str());
     ImGui::Unindent();
+
+    std::string patreonSupporters = getList("about/patreon.txt");
 
     ImGui::TextUnformatted("To the current and former ");
     ImGui::SameLine(0, 0);
@@ -661,32 +659,7 @@ void AboutWindow::DrawAcknowledgementsTab() {
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(":");
     ImGui::Indent();
-    ImGui::TextUnformatted("Aitor Guevara, "
-                           "Armonte, "
-                           "Aydan Watkins, "
-                           "Chase Heathcliff, "
-                           "Derek Fagan, "
-                           "Diego Bartolom\u00E9, "
-                           "Elcorsico 28, "
-                           "Giovani Avelar, "
-                           "Israel Jacquez, "
-                           "James Wood, "
-                           "Jeff Greulich, "
-                           "Joek, "
-                           "Julien P, "
-                           "KC, "
-                           "khalifax10, "
-                           "Mario Fonseca, "
-                           "Mored4u, "
-                           "Munch, "
-                           "Oliver Stadler, "
-                           "Phillip O'Toole, "
-                           "rifter, "
-                           "Rustle, "
-                           "Some Guy, "
-                           "TheCoolPup, "
-                           "Zrat, "
-                           "アレ・.");
+    ImGui::TextUnformatted(patreonSupporters.c_str());
     ImGui::Unindent();
 
     ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
