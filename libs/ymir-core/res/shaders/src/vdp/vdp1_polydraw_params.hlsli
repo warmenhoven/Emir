@@ -12,6 +12,7 @@ struct PolyDrawParams {
 struct PolySpan {
     int2 coord0;
     int2 coord1;
+    uint length;
 
     uint gouraud0;
     uint gouraud1;
@@ -21,7 +22,6 @@ struct PolySpan {
     uint cmdsrca;
     uint cmdsize;
 
-    uint length;
     uint texV;
     bool flipH;
 };

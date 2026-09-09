@@ -888,18 +888,20 @@ struct Direct3D12VDPRenderer::Impl {
     struct VDP1SpanParams {
         HLSLint2 coord0; // Starting coordinates
         HLSLint2 coord1; // Ending coordinates
+        HLSLuint length; // Span length
 
+        // Gouraud only parameters
         ColorR8G8B8A8 gouraud0; // Starting gouraud value
         ColorR8G8B8A8 gouraud1; // Ending gouraud value
 
         HLSLuint cmdpmod; // CMDPMOD value
         HLSLuint cmdcolr; // CMDCOLR value
-        HLSLuint cmdsrca; // CMDSRCA value
-        HLSLuint cmdsize; // CMDSIZE value
+        HLSLuint cmdsrca; // CMDSRCA value (textured only)
+        HLSLuint cmdsize; // CMDSIZE value (textured only)
 
-        HLSLuint length; // Span length
-        HLSLuint texV;   // Texture V coordinate
-        HLSLbool flipH;  // Horizontal flip
+        // Textured only parameters
+        HLSLuint texV;  // Texture V coordinate
+        HLSLbool flipH; // Horizontal flip
     };
 
     static constexpr size_t kMaxVDP1Spans = 1024;
@@ -1004,17 +1006,14 @@ struct Direct3D12VDPRenderer::Impl {
 
     /// @brief Constructs a polygon drawing shader index from its variant options.
     /// @param[in] textured use textures
-    /// @param[in] gouraud use gouraud shading
-    /// @param[in] halfSrc half-source / half-luminance (color blending)
-    /// @param[in] halfDst half-destination / shadow (color blending)
+    /// @param[in] mode polygon drawing mode
     /// @return the shader index
-    size_t MakeVDP1PolyDrawShaderIndex(bool mesh, bool textured, bool gouraud, bool halfSrc, bool halfDst) const {
+    size_t MakeVDP1PolyDrawShaderIndex(bool textured, VDP1Command::DrawMode mode) const {
         size_t value = 0;
         bit::deposit_into<4>(value, enhancements.transparentMeshes ? 1u : 0u);
         bit::deposit_into<3>(value, textured);
-        bit::deposit_into<2>(value, gouraud);
-        bit::deposit_into<1>(value, halfSrc);
-        bit::deposit_into<0>(value, halfDst);
+        bit::deposit_into<2>(value, mode.gouraudEnable);
+        bit::deposit_into<0, 1>(value, mode.colorCalcBits);
         return value;
     }
 
@@ -2965,6 +2964,45 @@ struct Direct3D12VDPRenderer::Impl {
         }
     }
 
+    struct VDP1SpanData {
+        VDP1Command::DrawMode mode;
+        uint16 color;
+        Color555 gouraud0;
+        Color555 gouraud1;
+    };
+
+    void VDP1AddSolidSpan(CoordS32 coord0, CoordS32 coord1, const VDP1SpanData &data) {
+        const auto [x0, y0] = coord0;
+        const auto [x1, y1] = coord1;
+
+        VDP1SpanParams spanParams{};
+        spanParams.coord0 = {x0, y0};
+        spanParams.coord1 = {x1, y1};
+
+        spanParams.cmdcolr = data.color;
+        spanParams.cmdpmod = data.mode.u16;
+
+        const uint32 dx = abs(x1 - x0);
+        const uint32 dy = abs(y1 - y0);
+        spanParams.length = std::max(dx, dy);
+
+        if (data.mode.gouraudEnable) {
+            spanParams.gouraud0.r = data.gouraud0.r;
+            spanParams.gouraud0.g = data.gouraud0.g;
+            spanParams.gouraud0.b = data.gouraud0.b;
+            spanParams.gouraud1.r = data.gouraud1.r;
+            spanParams.gouraud1.g = data.gouraud1.g;
+            spanParams.gouraud1.b = data.gouraud1.b;
+        }
+
+        // TODO: select shader using MakeVDP1PolyDrawShaderIndex(false, mode)
+        // - flush existing span list if changed
+        // TODO: append span to list
+        // - also update prefix sum list
+    }
+
+    // TODO: VDP1AddTexturedSpan
+
     void VDP1Cmd_DrawNormalSprite(uint32 cmdAddress, VDP1Command::Control control) {
         if (!vdpState.state2.layerEnabled[0]) {
             return;
@@ -3002,7 +3040,61 @@ struct Direct3D12VDPRenderer::Impl {
             return;
         }
 
-        // TODO: implement
+        const VDP1State &state = vdpState.state1;
+        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
+
+        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
+        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
+        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
+        const sint32 xb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x10)) + state.localCoordX;
+        const sint32 yb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x12)) + state.localCoordY;
+        const sint32 xc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x14)) + state.localCoordX;
+        const sint32 yc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x16)) + state.localCoordY;
+        const sint32 xd = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x18)) + state.localCoordX;
+        const sint32 yd = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x1A)) + state.localCoordY;
+        const uint32 gouraudTable = static_cast<uint32>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x1C)) << 3u;
+
+        const CoordS32 coordA{xa, ya};
+        const CoordS32 coordB{xb, yb};
+        const CoordS32 coordC{xc, yc};
+        const CoordS32 coordD{xd, yd};
+
+        Color555 gouraudA;
+        Color555 gouraudB;
+        Color555 gouraudC;
+        Color555 gouraudD;
+        if (mode.gouraudEnable) {
+            gouraudA.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 0u);
+            gouraudB.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 2u);
+            gouraudC.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 4u);
+            gouraudD.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 6u);
+        }
+
+        VDP1SpanData data{
+            .mode = mode,
+            .color = color,
+        };
+
+        if (mode.gouraudEnable) {
+            data.gouraud0 = gouraudA;
+            data.gouraud1 = gouraudB;
+        }
+        VDP1AddSolidSpan(coordA, coordB, data);
+        if (mode.gouraudEnable) {
+            data.gouraud0 = gouraudB;
+            data.gouraud1 = gouraudC;
+        }
+        VDP1AddSolidSpan(coordB, coordC, data);
+        if (mode.gouraudEnable) {
+            data.gouraud0 = gouraudC;
+            data.gouraud1 = gouraudD;
+        }
+        VDP1AddSolidSpan(coordC, coordD, data);
+        if (mode.gouraudEnable) {
+            data.gouraud0 = gouraudD;
+            data.gouraud1 = gouraudA;
+        }
+        VDP1AddSolidSpan(coordD, coordA, data);
     }
 
     void VDP1Cmd_DrawLine(uint32 cmdAddress) {
@@ -3010,31 +3102,56 @@ struct Direct3D12VDPRenderer::Impl {
             return;
         }
 
-        // TODO: implement
+        const VDP1State &state = vdpState.state1;
+        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
+
+        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
+        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
+        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
+        const sint32 xb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x10)) + state.localCoordX;
+        const sint32 yb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x12)) + state.localCoordY;
+
+        const CoordS32 coordA{xa, ya};
+        const CoordS32 coordB{xb, yb};
+
+        VDP1SpanData data{
+            .mode = mode,
+            .color = color,
+        };
+
+        if (mode.gouraudEnable) {
+            const uint32 gouraudTable = static_cast<uint32>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x1C)) << 3u;
+            data.gouraud0.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 0u);
+            data.gouraud1.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 2u);
+        }
+
+        VDP1AddSolidSpan(coordA, coordB, data);
     }
 
     void VDP1Cmd_SetUserClipping(uint32 cmdAddress) {
-        if (!vdpState.state2.layerEnabled[0]) {
-            return;
-        }
-
-        // TODO: implement
+        VDP1State &state = vdpState.state1;
+        state.userClipX0 = bit::extract<0, 9>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C));
+        state.userClipX1 = bit::extract<0, 9>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x14));
+        state.userClipY0 = bit::extract<0, 8>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E));
+        state.userClipY1 = bit::extract<0, 8>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x16));
+        vdp1.cpuPolyDrawParams.userClip0.x = state.userClipX0;
+        vdp1.cpuPolyDrawParams.userClip0.y = state.userClipY0;
+        vdp1.cpuPolyDrawParams.userClip1.x = state.userClipX1;
+        vdp1.cpuPolyDrawParams.userClip1.y = state.userClipY1;
     }
 
     void VDP1Cmd_SetSystemClipping(uint32 cmdAddress) {
-        if (!vdpState.state2.layerEnabled[0]) {
-            return;
-        }
-
-        // TODO: implement
+        VDP1State &state = vdpState.state1;
+        state.sysClipH = bit::extract<0, 9>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x14));
+        state.sysClipV = bit::extract<0, 8>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x16));
+        vdp1.cpuPolyDrawParams.sysClip.h = state.sysClipH;
+        vdp1.cpuPolyDrawParams.sysClip.v = state.sysClipV;
     }
 
     void VDP1Cmd_SetLocalCoordinates(uint32 cmdAddress) {
-        if (!vdpState.state2.layerEnabled[0]) {
-            return;
-        }
-
-        // TODO: implement
+        VDP1State &state = vdpState.state1;
+        state.localCoordX = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C));
+        state.localCoordY = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E));
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -4152,6 +4269,13 @@ void Direct3D12VDPRenderer::PreSaveStateSync() {}
 
 void Direct3D12VDPRenderer::PostLoadStateSync() {
     m_impl->vdp1.vramDirty.SetAll();
+
+    m_impl->vdp1.cpuPolyDrawParams.userClip0.x = m_impl->vdpState.state1.userClipX0;
+    m_impl->vdp1.cpuPolyDrawParams.userClip0.y = m_impl->vdpState.state1.userClipY0;
+    m_impl->vdp1.cpuPolyDrawParams.userClip1.x = m_impl->vdpState.state1.userClipX1;
+    m_impl->vdp1.cpuPolyDrawParams.userClip1.y = m_impl->vdpState.state1.userClipY1;
+    m_impl->vdp1.cpuPolyDrawParams.sysClip.h = m_impl->vdpState.state1.sysClipH;
+    m_impl->vdp1.cpuPolyDrawParams.sysClip.v = m_impl->vdpState.state1.sysClipV;
 
     m_impl->VDP2CacheAllCRAMColors();
     m_impl->VDP2UpdateEnabledLayers();
