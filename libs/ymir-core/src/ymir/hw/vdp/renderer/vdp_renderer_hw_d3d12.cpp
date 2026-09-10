@@ -3138,9 +3138,30 @@ struct Direct3D12VDPRenderer::Impl {
         // Switch polygon drawing shader based on the current settings
         VDP1SelectPolyDrawShader(false, data.mode);
 
+        // Determine span length
+        LineStepper line{coord0, coord1};
+
         // Append span to list
         VDP1FrameContext &frameCtx = vdp1.frames.GetCurrentFrame();
         VDP1SpanParams &spanParams = frameCtx.cpuSpanParams[frameCtx.cpuSpanCount];
+        const uint32 length = line.Length();
+        const uint32 skip = line.SystemClip(vdpState.state1.sysClipH, vdpState.state1.sysClipV);
+
+        if (skip >= length) {
+            // Entire line was clipped
+            return false;
+        }
+
+        // The polygon drawing shader uses the pixel index as a sequence number to enable parallel drawing.
+        // This sequence has to fit in the top 16 bits of the output value, limiting the number of pixels drawn per
+        // dispatch. We reserve zero as a special value indicating the previous dispatch's contents.
+        // TODO: if this becomes a bottleneck, change output format to 24-bit counter + 8-bit sprite data and splice
+        // 16-bit sprite data across two output values
+        static constexpr uint32 kMaxVDP1PixelsPerDispatch = (1u << 16u) - 1u;
+        assert(length - skip <= kMaxVDP1PixelsPerDispatch);
+        if (frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount] + length - skip > kMaxVDP1PixelsPerDispatch) {
+            VDP1SubmitSpans();
+        }
 
         const auto [x0, y0] = coord0;
         const auto [x1, y1] = coord1;
@@ -3151,16 +3172,10 @@ struct Direct3D12VDPRenderer::Impl {
         spanParams.cmdcolr = data.color;
         spanParams.cmdpmod = data.mode.u16;
 
-        LineStepper line{coord0, coord1};
-
         const uint32 dx = abs(x1 - x0);
         const uint32 dy = abs(y1 - y0);
-        spanParams.length = std::max(dx, dy);
-        spanParams.skip = line.SystemClip(vdpState.state1.sysClipH, vdpState.state1.sysClipV);
-        if (spanParams.skip >= spanParams.length) {
-            // Entire line was clipped
-            return false;
-        }
+        spanParams.length = length;
+        spanParams.skip = skip;
 
         if (data.mode.gouraudEnable) {
             spanParams.gouraud0.r = data.gouraud0.r;

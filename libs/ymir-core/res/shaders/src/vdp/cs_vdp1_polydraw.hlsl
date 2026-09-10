@@ -99,6 +99,8 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     // Possible implementation for Replace and Half-Luminance (and maybe Shadow):
     // - combine 8/16-bit sprite data output with the pixel index into a single 32-bit value to be written to the intermediate output buffer
     //   - top bits contain the pixel sequence number (index into span array)
+    //   - start at 1; reserve 0 for the previous frame's contents
+    //   - FBRAM transfer shader will zero these counters out; apply UAV barriers between these dispatches
     // - use InterlockedMax to plot the latest pixel to the framebuffer
 
     // Half-Transparency needs an order-independent transparency implementation and different inputs and outputs.
