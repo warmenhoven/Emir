@@ -3052,42 +3052,39 @@ struct Direct3D12VDPRenderer::Impl {
         // Errors should never happen, however.
         util::ScopeGuard sgClearSpans{[&] { frameCtx.cpuSpanCount = 0; }};
 
+        ID3D12Resource *uploadBufferPtr = vdp1.uploadBuffer.GetBufferResource().GetPointer();
+        UploadAllocation alloc{};
+
+        vdp1.barrierTracker.TransitionBuffer(frameCtx.spanParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_COPY_DEST,
+                                             D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
+        vdp1.barrierTracker.TransitionBuffer(frameCtx.spanPrefixSumsBuffer.GetPointer(), D3D12_RESOURCE_STATE_COPY_DEST,
+                                             D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
+        vdp1.barrierTracker.Flush(vdp1.cmdList);
+
         // Upload spans
         {
-            ID3D12Resource *dstResource = frameCtx.spanParamsBuffer.GetPointer();
-            ID3D12Resource *uploadBufferPtr = vdp1.uploadBuffer.GetBufferResource().GetPointer();
             const size_t size = sizeof(VDP1SpanData) * frameCtx.cpuSpanCount;
-            UploadAllocation alloc{};
             if (auto result = AllocateUploadBuffer(vdp1.uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{fmt::format("Failed to allocate upload buffer for VDP1 span parameters: {}",
                                                       result.Error().message)};
             }
             memcpy(alloc.data, &frameCtx.cpuSpanParams, size);
 
-            vdp1.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                                 D3D12_BARRIER_ACCESS_COPY_DEST);
-            vdp1.barrierTracker.Flush(vdp1.cmdList);
-
-            vdp1.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+            vdp1.cmdList->CopyBufferRegion(frameCtx.spanParamsBuffer.GetPointer(), 0, uploadBufferPtr, alloc.offset,
+                                           size);
         }
 
         // Upload prefix sums
         {
-            ID3D12Resource *dstResource = frameCtx.spanPrefixSumsBuffer.GetPointer();
-            ID3D12Resource *uploadBufferPtr = vdp1.uploadBuffer.GetBufferResource().GetPointer();
             const size_t size = sizeof(HLSLuint) * (frameCtx.cpuSpanCount + 1);
-            UploadAllocation alloc{};
             if (auto result = AllocateUploadBuffer(vdp1.uploadBuffer, size, 4, alloc); !result) {
-                return util::ErrorMessage{fmt::format("Failed to allocate upload buffer for VDP1 span parameters: {}",
+                return util::ErrorMessage{fmt::format("Failed to allocate upload buffer for VDP1 span prefix sums: {}",
                                                       result.Error().message)};
             }
             memcpy(alloc.data, &frameCtx.cpuSpanPrefixSums, size);
 
-            vdp1.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                                 D3D12_BARRIER_ACCESS_COPY_DEST);
-            vdp1.barrierTracker.Flush(vdp1.cmdList);
-
-            vdp1.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+            vdp1.cmdList->CopyBufferRegion(frameCtx.spanPrefixSumsBuffer.GetPointer(), 0, uploadBufferPtr, alloc.offset,
+                                           size);
         }
 
         vdp1.barrierTracker.TransitionBuffer(frameCtx.spanParamsBuffer.GetPointer(),
