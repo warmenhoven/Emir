@@ -1,5 +1,7 @@
 #include <ymir/hw/vdp/renderer/vdp_renderer_hw_d3d12.hpp>
 
+#include <ymir/hw/vdp/renderer/common/vdp1_steppers.hpp>
+
 #include <ymir/gpu/d3d12/d3d12_commands.hpp>
 #include <ymir/gpu/d3d12/d3d12_descriptor_heap.hpp>
 #include <ymir/gpu/d3d12/d3d12_descriptor_heap_allocator.hpp>
@@ -15,6 +17,7 @@
 #include <ymir/util/dev_assert.hpp>
 #include <ymir/util/dev_log.hpp>
 #include <ymir/util/dirty_bitmap.hpp>
+#include <ymir/util/scope_guard.hpp>
 
 #include <d3d12.h>
 
@@ -889,6 +892,7 @@ struct Direct3D12VDPRenderer::Impl {
         HLSLint2 coord0; // Starting coordinates
         HLSLint2 coord1; // Ending coordinates
         HLSLuint length; // Span length
+        HLSLuint skip;   // Initial skip steps
 
         // Gouraud only parameters
         ColorR8G8B8A8 gouraud0; // Starting gouraud value
@@ -1002,6 +1006,9 @@ struct Direct3D12VDPRenderer::Impl {
         // Rendering state
 
         BarrierTracker barrierTracker;
+
+        // Currently active polygon drawing shader
+        size_t currPolyDrawShaderIndex = -1;
     } vdp1;
 
     /// @brief Constructs a polygon drawing shader index from its variant options.
@@ -2937,7 +2944,23 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void VDP1SwapFramebuffer() {
-        // TODO: submit command list, swap framebuffer
+        auto &cmdList = vdp1.cmdList;
+
+        // Close and submit command list
+        cmdList->Close();
+        cmdQueue->ExecuteCommandLists(1, cmdList.GetAddressOfBase());
+
+        // Advance frame
+        vdp1.uploadBuffer.EndFrame(vdp1.frames.GetNextFenceValue());
+        vdp1.frames.MoveToNextFrame(computeFence, cmdQueue);
+
+        // Setup command list
+        FrameContext &nextFrame = vdp1.frames.GetCurrentFrame();
+        ID3D12DescriptorHeap *heaps[] = {resourceHeap.GetPointer()};
+        cmdList->Reset(nextFrame.cmdAlloc.GetPointer(), nullptr);
+        cmdList->SetDescriptorHeaps(std::size(heaps), heaps);
+
+        // TODO: swap framebuffer
     }
 
     void VDP1ExecuteCommand(uint32 cmdAddress, VDP1Command::Control control) {
@@ -2971,20 +2994,118 @@ struct Direct3D12VDPRenderer::Impl {
         Color555 gouraud1;
     };
 
-    void VDP1AddSolidSpan(CoordS32 coord0, CoordS32 coord1, const VDP1SpanData &data) {
+    util::VoidResult<> VDP1SubmitSpans() {
+        VDP1FrameContext &frameCtx = vdp1.frames.GetCurrentFrame();
+        if (frameCtx.cpuSpanCount == 0) {
+            // No spans to dispatch
+            return {};
+        }
+        // Clear spans even if we fail to submit them to avoid crashes on extreme cases.
+        // Errors should never happen, however.
+        util::ScopeGuard sgClearSpans{[&] { frameCtx.cpuSpanCount = 0; }};
+
+        // Upload spans
+        {
+            ID3D12Resource *dstResource = frameCtx.spanParamsBuffer.GetPointer();
+            ID3D12Resource *uploadBufferPtr = vdp1.uploadBuffer.GetBufferResource().GetPointer();
+            const size_t size = sizeof(VDP1SpanData) * frameCtx.cpuSpanCount;
+            UploadAllocation alloc{};
+            if (auto result = AllocateUploadBuffer(vdp1.uploadBuffer, size, 4, alloc); !result) {
+                return util::ErrorMessage{fmt::format("Failed to allocate upload buffer for VDP1 span parameters: {}",
+                                                      result.Error().message)};
+            }
+            memcpy(alloc.data, &frameCtx.cpuSpanParams, size);
+
+            vdp1.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                                 D3D12_BARRIER_ACCESS_COPY_DEST);
+            vdp1.barrierTracker.Flush(vdp1.cmdList);
+
+            vdp1.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+        }
+
+        // Upload prefix sums
+        {
+            ID3D12Resource *dstResource = frameCtx.spanPrefixSumsBuffer.GetPointer();
+            ID3D12Resource *uploadBufferPtr = vdp1.uploadBuffer.GetBufferResource().GetPointer();
+            const size_t size = sizeof(HLSLuint) * (frameCtx.cpuSpanCount + 1);
+            UploadAllocation alloc{};
+            if (auto result = AllocateUploadBuffer(vdp1.uploadBuffer, size, 4, alloc); !result) {
+                return util::ErrorMessage{fmt::format("Failed to allocate upload buffer for VDP1 span parameters: {}",
+                                                      result.Error().message)};
+            }
+            memcpy(alloc.data, &frameCtx.cpuSpanPrefixSums, size);
+
+            vdp1.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                                 D3D12_BARRIER_ACCESS_COPY_DEST);
+            vdp1.barrierTracker.Flush(vdp1.cmdList);
+
+            vdp1.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+        }
+
+        vdp1.barrierTracker.TransitionBuffer(frameCtx.spanParamsBuffer.GetPointer(),
+                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        vdp1.barrierTracker.TransitionBuffer(frameCtx.spanPrefixSumsBuffer.GetPointer(),
+                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        vdp1.barrierTracker.Flush(vdp1.cmdList);
+        // TODO: dispatch shader
+
+        return {};
+    }
+
+    void VDP1SelectPolyDrawShader(bool textured, VDP1Command::DrawMode mode) {
+        // Submit existing spans before switching shaders
+        const size_t index = MakeVDP1PolyDrawShaderIndex(textured, mode);
+        if (vdp1.currPolyDrawShaderIndex != index) {
+            vdp1.currPolyDrawShaderIndex = index;
+            VDP1SubmitSpans();
+        }
+    }
+
+    bool VDP1AddSolidSpan(CoordS32 coord0, CoordS32 coord1, const VDP1SpanData &data) {
+        // Discard if completely out of bounds
+        if (coord0.x() < 0 && coord1.x() < 0) {
+            return false;
+        }
+        if (coord0.y() < 0 && coord1.y() < 0) {
+            return false;
+        }
+        const sint32 sysClipH = vdpState.state1.sysClipH;
+        if (coord0.x() > sysClipH && coord1.x() > sysClipH) {
+            return false;
+        }
+        const sint32 sysClipV = vdpState.state1.sysClipV;
+        if (coord0.y() > sysClipV && coord1.y() > sysClipV) {
+            return false;
+        }
+
+        // Switch polygon drawing shader based on the current settings
+        VDP1SelectPolyDrawShader(false, data.mode);
+
+        // Append span to list
+        VDP1FrameContext &frameCtx = vdp1.frames.GetCurrentFrame();
+        VDP1SpanParams &spanParams = frameCtx.cpuSpanParams[frameCtx.cpuSpanCount];
+
         const auto [x0, y0] = coord0;
         const auto [x1, y1] = coord1;
 
-        VDP1SpanParams spanParams{};
         spanParams.coord0 = {x0, y0};
         spanParams.coord1 = {x1, y1};
 
         spanParams.cmdcolr = data.color;
         spanParams.cmdpmod = data.mode.u16;
 
+        LineStepper line{coord0, coord1};
+
         const uint32 dx = abs(x1 - x0);
         const uint32 dy = abs(y1 - y0);
         spanParams.length = std::max(dx, dy);
+        spanParams.skip = line.SystemClip(vdpState.state1.sysClipH, vdpState.state1.sysClipV);
+        if (spanParams.skip >= spanParams.length) {
+            // Entire line was clipped
+            return false;
+        }
 
         if (data.mode.gouraudEnable) {
             spanParams.gouraud0.r = data.gouraud0.r;
@@ -2995,10 +3116,19 @@ struct Direct3D12VDPRenderer::Impl {
             spanParams.gouraud1.b = data.gouraud1.b;
         }
 
-        // TODO: select shader using MakeVDP1PolyDrawShaderIndex(false, mode)
-        // - flush existing span list if changed
-        // TODO: append span to list
-        // - also update prefix sum list
+        // Update prefix sum
+        HLSLuint &nextSum = frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount + 1];
+        const HLSLuint currSum = frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount];
+        nextSum = currSum + spanParams.length - spanParams.skip;
+
+        // If list is full, flush it
+        ++frameCtx.cpuSpanCount;
+        if (frameCtx.cpuSpanCount >= frameCtx.cpuSpanParams.size()) {
+            VDP1SubmitSpans();
+        }
+
+        // Indicate that the span was drawn
+        return true;
     }
 
     // TODO: VDP1AddTexturedSpan
@@ -3032,7 +3162,95 @@ struct Direct3D12VDPRenderer::Impl {
             return;
         }
 
-        // TODO: implement
+        const VDP1State &state = vdpState.state1;
+        const VDP1Command::DrawMode mode{.u16 = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x04)};
+
+        const uint16 color = vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x06);
+        const sint32 xa = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0C)) + state.localCoordX;
+        const sint32 ya = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x0E)) + state.localCoordY;
+        const sint32 xb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x10)) + state.localCoordX;
+        const sint32 yb = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x12)) + state.localCoordY;
+        const sint32 xc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x14)) + state.localCoordX;
+        const sint32 yc = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x16)) + state.localCoordY;
+        const sint32 xd = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x18)) + state.localCoordX;
+        const sint32 yd = bit::sign_extend<13>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x1A)) + state.localCoordY;
+        const uint32 gouraudTable = static_cast<uint32>(vdpState.mem1.ReadVRAM<uint16>(cmdAddress + 0x1C)) << 3u;
+
+        const CoordS32 coordA{xa, ya};
+        const CoordS32 coordB{xb, yb};
+        const CoordS32 coordC{xc, yc};
+        const CoordS32 coordD{xd, yd};
+
+        Color555 gouraudA;
+        Color555 gouraudB;
+        Color555 gouraudC;
+        Color555 gouraudD;
+        if (mode.gouraudEnable) {
+            gouraudA.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 0u);
+            gouraudB.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 2u);
+            gouraudC.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 4u);
+            gouraudD.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 6u);
+        }
+
+        VDP1SpanData data{
+            .mode = mode,
+            .color = color,
+        };
+
+        QuadStepper quad{coordA, coordB, coordC, coordD};
+
+        if (mode.gouraudEnable) {
+            quad.SetupGouraud(gouraudA, gouraudB, gouraudC, gouraudD);
+        }
+
+        // Optimization for the case where the quad goes outside the system clipping area.
+        // Skip rendering the rest of the quad when a line is clipped after plotting at least one line.
+        // The first few lines of the quad could also be clipped; that is accounted for by requiring at least one
+        // plotted line. The point is to skip the calculations once the quad iterator reaches a point where no more
+        // lines can be plotted because they all sit outside the system clip area.
+        //
+        // This also handles a degenerate case with a bowtie quad sitting outside the corner of the screen with two
+        // points poking into the screen area in a configuration similar to this:
+        //
+        //                       D
+        //                        B
+        //   +-----------------+
+        //   |            A    |
+        //   |               C |
+        //   |                 |
+        //   |                 |
+        //   |                 |
+        //   +-----------------+
+        //
+        // In this case, the line gets fully clipped partway through the quad, but comes back into view at the end, so
+        // we need to check for two sequences of plotted lines rather than one.
+        bool linePlotted = false;
+        int plottedSegmentsCount = 0;
+        const int plottedSegmentsMax = quad.IsDegenerate() ? 2 : 1;
+
+        // Interpolate linearly over edges A-D and B-C
+        for (; quad.CanStep(); quad.Step()) {
+            // Plot lines between the interpolated points
+            const CoordS32 coordL = quad.LeftEdge().Coord();
+            const CoordS32 coordR = quad.RightEdge().Coord();
+
+            if (mode.gouraudEnable) {
+                data.gouraud0 = quad.LeftEdge().GouraudValue();
+                data.gouraud1 = quad.RightEdge().GouraudValue();
+            }
+
+            if (VDP1AddSolidSpan(coordL, coordR, data)) {
+                if (!linePlotted) {
+                    linePlotted = true;
+                    ++plottedSegmentsCount;
+                }
+            } else if (plottedSegmentsCount >= plottedSegmentsMax) {
+                // No more lines can be drawn past this point
+                break;
+            } else {
+                linePlotted = false;
+            }
+        }
     }
 
     void VDP1Cmd_DrawPolylines(uint32 cmdAddress) {
