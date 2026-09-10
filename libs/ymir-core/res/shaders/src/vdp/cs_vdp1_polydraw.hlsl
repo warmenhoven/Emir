@@ -78,20 +78,21 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     //   - span parameters list
     //     - start and end coordinates and gouraud colors
     //     - span length in pixels
+    //     - span skip amount in pixels
     //     - texture V coordinate
     //     - horizontal flip bit
     //   - precomputed span length and prefix sums to aid pixel-level indexing
     // - id.x is a pixel-level index into the span sequence
-    //   - for example, if the span list contains 3 spans with lengths 10, 12, 14:
+    //   - for example, if the span list contains 3 spans with lengths 10, 12, 14 and skips 0, 0, 10:
     //     - index  0 -> span 0 pixel 0
     //     - index  7 -> span 0 pixel 7
     //     - index  9 -> span 0 pixel 9
     //     - index 10 -> span 1 pixel 0
     //     - index 15 -> span 1 pixel 5
     //     - index 21 -> span 1 pixel 11
-    //     - index 22 -> span 2 pixel 0
-    //     - index 35 -> span 2 pixel 13 (last)
-    //     - index 36 -> out of bounds, discarded
+    //     - index 22 -> span 2 pixel 10
+    //     - index 25 -> span 2 pixel 13 (last)
+    //     - index 26 -> out of bounds, discarded
     // - draw spans in parallel into internalSpriteOut
     // - run a second shader to combine that into the output FBRAM (2 or 4 pixels at a time to fit into 32-bit values)
 
