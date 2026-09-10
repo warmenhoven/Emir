@@ -26,7 +26,7 @@ cbuffer CommonRenderParamsBuffer : register(b0) {
 }
 
 StructuredBuffer<PolySpan> spans : register(t1);
-Buffer<uint> spanOffsets : register(t2);
+Buffer<uint> spanPrefixSums : register(t2);
 
 RWBuffer<uint> internalSpriteOut : register(u0);
 

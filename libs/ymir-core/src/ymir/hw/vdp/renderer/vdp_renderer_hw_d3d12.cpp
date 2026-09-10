@@ -936,6 +936,11 @@ struct Direct3D12VDPRenderer::Impl {
         DescriptorRange internalSpriteOutSRV;
         /// @brief Internal sprite output buffer UAV (offline).
         DescriptorRange internalSpriteOutUAV;
+
+        /// @brief Descriptor range for drawing polygons.
+        DescriptorRange polyDrawDescs;
+        /// @brief Pipeline state objects for drawing polygons.
+        std::array<D3D12PipelineState, 2 * 2 * 8> polyDrawPSOs;
     };
 
     struct VDP1Resources {
@@ -1002,7 +1007,7 @@ struct Direct3D12VDPRenderer::Impl {
         ///   - half-destination
         std::array<gpu::ComputeShader, 2 * 2 * 8> polyDrawShaders;
         /// @brief Root signature for drawing polygons.
-        /// The same root signature applies to all variants of the polygon drawing shader.
+        /// Applies to all variants of the polygon drawing shader.
         D3D12RootSignature polyDrawRootSig;
 
         // ---------------------------------------------------------------------
@@ -1020,7 +1025,7 @@ struct Direct3D12VDPRenderer::Impl {
     /// @return the shader index
     size_t MakeVDP1PolyDrawShaderIndex(bool textured, VDP1Command::DrawMode mode) const {
         size_t value = 0;
-        bit::deposit_into<4>(value, enhancements.transparentMeshes ? 1u : 0u);
+        bit::deposit_into<4>(value, enhancements.transparentMeshes);
         bit::deposit_into<3>(value, textured);
         bit::deposit_into<2>(value, mode.gouraudEnable);
         bit::deposit_into<0, 1>(value, mode.colorCalcBits);
@@ -1821,7 +1826,7 @@ struct Direct3D12VDPRenderer::Impl {
         {
             D3D12_DESCRIPTOR_HEAP_DESC desc{
                 .Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                .NumDescriptors = 64 * kNumFrames,
+                .NumDescriptors = 256 * kNumFrames,
                 .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
             };
             if (HRESULT hr = resourceHeap.Create(device, desc); FAILED(hr)) {
@@ -2074,6 +2079,38 @@ struct Direct3D12VDPRenderer::Impl {
                 };
                 device->CreateUnorderedAccessView(frameCtx.internalSpriteOutBuffer.GetPointer(), nullptr, &uavDesc,
                                                   frameCtx.internalSpriteOutUAV.cpuHandle);
+            }
+
+            // Polygon drawing
+            for (size_t shaderIndex = 0; shaderIndex < vdp1.polyDrawShaders.size(); ++shaderIndex) {
+                const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
+                    .pRootSignature = vdp1.polyDrawRootSig.GetPointer(),
+                    .CS = ToShaderBytecode(vdp1.polyDrawShaders[shaderIndex]),
+                };
+                if (HRESULT hr = frameCtx.polyDrawPSOs[shaderIndex].CreateCompute(device, psoDesc); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not build VDP1 polygon drawing pipeline state object #{}, error code {:X}",
+                                    i, (uint32)hr)};
+                }
+                frameCtx.polyDrawPSOs[shaderIndex]->SetName(
+                    fmt::format(L"[Ymir-VDP1] Polygon drawing pipeline state object variant {} #{}", shaderIndex, i)
+                        .c_str());
+
+                const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
+                    frameCtx.spanParamsSRV.cpuHandle,
+                    frameCtx.spanPrefixSumsSRV.cpuHandle,
+                    frameCtx.internalSpriteOutUAV.cpuHandle,
+                };
+                std::array<UINT, std::size(srcHandles)> srcSizes{};
+                srcSizes.fill(1);
+
+                if (!resourceHeapAlloc.Allocate(frameCtx.polyDrawDescs, std::size(srcHandles))) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP2 sprite layer rendering descriptors #{}", i)};
+                }
+
+                device->CopyDescriptors(1, &frameCtx.polyDrawDescs.cpuHandle, &frameCtx.polyDrawDescs.count,
+                                        std::size(srcHandles), srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
             }
         }
 
@@ -2954,6 +2991,9 @@ struct Direct3D12VDPRenderer::Impl {
     void VDP1SwapFramebuffer() {
         auto &cmdList = vdp1.cmdList;
 
+        // Submit any pending spans
+        VDP1SubmitSpans();
+
         // Close and submit command list
         cmdList->Close();
         cmdQueue->ExecuteCommandLists(1, cmdList.GetAddressOfBase());
@@ -3057,7 +3097,17 @@ struct Direct3D12VDPRenderer::Impl {
                                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                              D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         vdp1.barrierTracker.Flush(vdp1.cmdList);
-        // TODO: dispatch shader
+
+        // Dispatch shader
+        vdp1.cmdList->SetPipelineState(frameCtx.polyDrawPSOs[vdp1.currPolyDrawShaderIndex].GetPointer());
+        vdp1.cmdList->SetComputeRootSignature(vdp1.polyDrawRootSig.GetPointer());
+        vdp1.cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32),
+                                                   &vdp1.cpuCommonRenderParams, 0);
+        vdp1.cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuPolyDrawParams) / sizeof(uint32),
+                                                   &vdp1.cpuPolyDrawParams,
+                                                   sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32));
+        vdp1.cmdList->SetComputeRootDescriptorTable(1, frameCtx.polyDrawDescs.gpuHandle);
+        vdp1.cmdList->Dispatch((frameCtx.cpuSpanCount + 63) / 64, 1, 1);
 
         return {};
     }
