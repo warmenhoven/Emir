@@ -942,6 +942,9 @@ struct Direct3D12VDPRenderer::Impl {
         /// @brief VDP1 per-frame resources.
         FrameSet<kNumFrames, VDP1FrameContext> frames;
 
+        /// @brief VDP1 fence.
+        D3D12Fence fence;
+
         /// @brief VDP1 command list.
         D3D12GraphicsCommandList cmdList;
 
@@ -1860,6 +1863,11 @@ struct Direct3D12VDPRenderer::Impl {
                 fmt::format("Could not create VDP1 renderer command list, error code {:X}", (uint32)hr)};
         }
         vdp1.cmdList->SetName(L"[Ymir-VDP1] Command list");
+
+        // VDP1 fence
+        if (HRESULT hr = vdp1.fence.Create(device, 0, D3D12_FENCE_FLAG_NONE); FAILED(hr)) {
+            return util::ErrorMessage{fmt::format("Could not create VDP1 fence, error code {:X}", (uint32)hr)};
+        }
 
         // Generic VDP1 upload buffer
         {
@@ -2952,7 +2960,7 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Advance frame
         vdp1.uploadBuffer.EndFrame(vdp1.frames.GetNextFenceValue());
-        vdp1.frames.MoveToNextFrame(computeFence, cmdQueue);
+        vdp1.frames.MoveToNextFrame(vdp1.fence, cmdQueue);
 
         // Setup command list
         FrameContext &nextFrame = vdp1.frames.GetCurrentFrame();
