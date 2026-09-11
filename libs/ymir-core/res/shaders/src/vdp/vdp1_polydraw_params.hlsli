@@ -14,6 +14,7 @@ struct PolySpan {
     int2 coord1;
     uint length;
     uint skip;
+    bool antialias;
 
     uint gouraud0;
     uint gouraud1;

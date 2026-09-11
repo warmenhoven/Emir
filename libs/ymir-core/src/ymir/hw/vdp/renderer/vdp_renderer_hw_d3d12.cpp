@@ -720,97 +720,6 @@ struct Direct3D12VDPRenderer::Impl {
     D3D12DescriptorHeap resourceHeap;
     DescriptorHeapAllocator resourceHeapAlloc;
 
-    /// @brief Resources for a single frame.
-    struct FrameContext {
-        D3D12CommandAllocator cmdAlloc;
-        UINT64 signaledValue = 0; // fence value associated with this frame. 0 means never used
-
-        void Reset() {
-            cmdAlloc->Reset();
-        }
-    };
-
-    /// @brief Ring buffer of frame resources.
-    /// @tparam count number of frames
-    /// @tparam TFrameContext frame context type. Extend FrameContext to store additional per-frame resources
-    template <size_t count, typename TFrameContext = FrameContext>
-        requires std::derived_from<TFrameContext, FrameContext>
-    struct FrameSet {
-        std::array<TFrameContext, count> frames;
-        size_t frameIndex = 0;
-        UINT64 currFenceValue = 0;
-
-        TFrameContext &GetCurrentFrame() {
-            return frames[frameIndex];
-        }
-        const TFrameContext &GetCurrentFrame() const {
-            return frames[frameIndex];
-        }
-
-        UINT64 GetNextFenceValue() const {
-            return currFenceValue + 1;
-        }
-
-        util::VoidResult<> MoveToNextFrame(D3D12Fence &fence, D3D12CommandQueue &cmdQueue) {
-            // Schedule a signal command in the queue
-            FrameContext &currFrame = GetCurrentFrame();
-            const UINT64 signalValue = currFenceValue + 1;
-            if (FAILED(fence.Signal(cmdQueue, signalValue))) {
-                return util::ErrorMessage{"Failed to signal fence"};
-            }
-            currFrame.signaledValue = signalValue;
-
-            // Update the frame index
-            ++frameIndex;
-            if (frameIndex >= count) {
-                frameIndex = 0;
-            }
-
-            // Wait for next frame
-            FrameContext &nextFrame = GetCurrentFrame();
-            if (fence->GetCompletedValue() < nextFrame.signaledValue) {
-                fence.Wait(INFINITE, nextFrame.signaledValue);
-            }
-
-            // Reset frame
-            nextFrame.Reset();
-
-            // Set the fence value for the next frame
-            currFenceValue = signalValue;
-
-            return {};
-        }
-
-        util::VoidResult<> WaitForGPU(D3D12Fence &fence, D3D12CommandQueue &cmdQueue) {
-            FrameContext &currFrame = GetCurrentFrame();
-
-            // Schedule a signal command in the queue
-            const UINT64 signalValue = currFenceValue + 1;
-            if (FAILED(fence.Signal(cmdQueue, signalValue))) {
-                return util::ErrorMessage{"Failed to signal fence"};
-            }
-
-            // Wait until the fence has been processed
-            fence.Wait(INFINITE, signalValue);
-
-            // Increment the fence value for the current frame
-            currFenceValue = signalValue;
-
-            return {};
-        }
-
-        TFrameContext &operator[](size_t index) {
-            return frames[index];
-        }
-        const TFrameContext &operator[](size_t index) const {
-            return frames[index];
-        }
-
-        constexpr size_t Count() const {
-            return count;
-        }
-    };
-
     // =================================================================================================================
     // VDP1 rendering
     //
@@ -826,7 +735,7 @@ struct Direct3D12VDPRenderer::Impl {
     // and active enhancements, as well as per-shader parameters.
 
     /// @brief Common VDP1 rendering parameters shared by all shaders.
-    struct VDP1CommonRenderParams {
+    struct alignas(16) VDP1CommonRenderParams {
         struct DisplayParams {                 //  bits  use
             HLSLuint fbSizeH : 1;              //     0  Framebuffer horizontal size shift    (512 << x)
             HLSLuint fbSizeV : 1;              //     1  Framebuffer vertical size shift      (256 << x)
@@ -836,7 +745,6 @@ struct Direct3D12VDPRenderer::Impl {
             HLSLuint dblInterlaceDrawLine : 1; //     5  Double interlace line                0=even; 1=odd
             HLSLuint evenOddCoordSelect : 1;   //     6  Even/odd coordinate select (HSS)     0=even; 1=odd
             HLSLuint drawFB : 1;               //     7  Current draw framebuffer index
-            HLSLuint antialias : 1;            //     8  Antialias lines (fill holes)
         } displayParams;
         static_assert(sizeof(DisplayParams) == sizeof(HLSLuint));
 
@@ -850,7 +758,7 @@ struct Direct3D12VDPRenderer::Impl {
     };
 
     /// @brief VDP1 erase parameters, appended to common rendering parameters in the erase shader.
-    struct VDP1EraseParams {
+    struct alignas(16) VDP1EraseParams {
         struct Coords {          //  bits  use
             HLSLuint x1 : 6;     //   0-5  Erase X1 (left) coordinate (x << 3)
             HLSLuint y1 : 9;     //  6-14  Erase Y1 (top) coordinate
@@ -872,7 +780,7 @@ struct Direct3D12VDPRenderer::Impl {
     };
 
     /// @brief VDP1 polygon drawing parameters, appended to common rendering parameters in the polygon drawing shader.
-    struct VDP1PolyDrawParams {
+    struct alignas(16) VDP1PolyDrawParams {
         struct SysClip {     //  bits  use
             HLSLuint h : 16; //  0-15  System clipping area width
             HLSLuint v : 16; // 16-31  System clipping area height
@@ -889,10 +797,11 @@ struct Direct3D12VDPRenderer::Impl {
     };
 
     struct VDP1SpanParams {
-        HLSLint2 coord0; // Starting coordinates
-        HLSLint2 coord1; // Ending coordinates
-        HLSLuint length; // Span length
-        HLSLuint skip;   // Initial skip steps
+        HLSLint2 coord0;    // Starting coordinates
+        HLSLint2 coord1;    // Ending coordinates
+        HLSLuint length;    // Span length
+        HLSLuint skip;      // Initial skip steps
+        HLSLbool antialias; // Antialias line
 
         // Gouraud only parameters
         ColorR8G8B8A8 gouraud0; // Starting gouraud value
@@ -917,52 +826,12 @@ struct Direct3D12VDPRenderer::Impl {
     // Therefore, the absolute maximum number of spans that can be submitted per dispatch is 65535.
     static_assert(kMaxVDP1Spans <= 65535);
 
-    /// @brief Per-frame VDP1 resources.
-    struct VDP1FrameContext : public FrameContext {
-        /// @brief Span parameters buffer.
-        D3D12Resource spanParamsBuffer;
-        /// @brief Span parameters buffer SRV (offline).
-        DescriptorRange spanParamsSRV;
-
-        /// @brief Span prefix sum buffer.
-        D3D12Resource spanPrefixSumsBuffer;
-        /// @brief Span prefix sum buffer SRV (offline).
-        DescriptorRange spanPrefixSumsSRV;
-
-        /// @brief CPU-side span parameters buffer.
-        std::array<VDP1SpanParams, kMaxVDP1Spans> cpuSpanParams;
-        /// @brief CPU-side span prefix sums buffer.
-        /// The first entry is always 0 to simplify implementation.
-        std::array<HLSLuint, kMaxVDP1Spans + 1> cpuSpanPrefixSums;
-        /// @brief Number of spans allocated so far.
-        size_t cpuSpanCount = 0;
-
-        /// @brief Internal sprite output buffer.
-        D3D12Resource internalSpriteOutBuffer;
-        /// @brief Internal sprite output buffer SRV (offline).
-        DescriptorRange internalSpriteOutSRV;
-        /// @brief Internal sprite output buffer UAV (offline).
-        DescriptorRange internalSpriteOutUAV;
-
-        /// @brief Descriptor range for drawing polygons.
-        DescriptorRange polyDrawDescs;
-        /// @brief Pipeline state objects for drawing polygons.
-        std::array<D3D12PipelineState, 2 * 2 * 8> polyDrawPSOs;
-    };
-
     struct VDP1Resources {
-        /// @brief VDP1 per-frame resources.
-        FrameSet<kNumFrames, VDP1FrameContext> frames;
-
-        /// @brief VDP1 fence.
-        D3D12Fence fence;
-
-        /// @brief VDP1 command list.
-        D3D12GraphicsCommandList cmdList;
-
-        /// @brief Upload ring buffer.
-        UploadRingBuffer uploadBuffer;
-
+        VDP1Resources() {
+            memset(&cpuCommonRenderParams, 0, sizeof(cpuCommonRenderParams));
+            memset(&cpuEraseParams, 0, sizeof(cpuEraseParams));
+            memset(&cpuPolyDrawParams, 0, sizeof(cpuPolyDrawParams));
+        }
         // VDP1 VRAM is exposed as a ByteAddressBuffer to shaders as they often need to access raw bytes in 8-bit and
         // 16-bit formats.
 
@@ -1019,8 +888,6 @@ struct Direct3D12VDPRenderer::Impl {
 
         // ---------------------------------------------------------------------
         // Rendering state
-
-        BarrierTracker barrierTracker;
 
         // Currently active polygon drawing shader
         size_t currPolyDrawShaderIndex = -1;
@@ -1609,8 +1476,145 @@ struct Direct3D12VDPRenderer::Impl {
     /// The second half of CRAM can be used for that purpose.
     static constexpr UINT kVDP2CRAMRotCoeffBufferSize = kVDP2CRAMSize / 2;
 
-    /// @brief Per-frame VDP2 resources.
-    struct VDP2FrameContext : public FrameContext {
+    struct VDP2Resources {
+        VDP2Resources(const config::VDP2AccessPatternsConfig &accessPatternsConfig,
+                      const config::VDP2DebugRender &debugRenderOptions)
+            : accessPatternsConfig(accessPatternsConfig)
+            , debugRenderOptions(debugRenderOptions) {}
+
+        // VDP2 VRAM is exposed as a ByteAddressBuffer to shaders as they often need to access raw bytes in 8-bit,
+        // 16-bit and 32-bit formats.
+
+        /// @brief VRAM data buffer.
+        D3D12Resource vramBuffer;
+        /// @brief VRAM data buffer SRV (offline).
+        DescriptorRange vramSRV;
+
+        /// @brief Bit shift for the granularity for VRAM dirty bitmap chunks.
+        static constexpr size_t kVRAMDirtyBitmapChunkSizeShift = 8;
+
+        /// @brief Granularity for VRAM dirty bitmap chunks, in bytes.
+        static constexpr size_t kVRAMDirtyBitmapChunkSize = static_cast<size_t>(1) << kVRAMDirtyBitmapChunkSizeShift;
+
+        /// @brief Number of bits in the VRAM dirty bitmap.
+        static constexpr size_t kVRAMDirtyBitmapSize = kVDP2VRAMSize / kVRAMDirtyBitmapChunkSize;
+
+        // D3D12 buffer transfers must be done in multiples of 4 bytes.
+        // The chunk must not be larger than VDP2 VRAM itself. In fact, it shouldn't be too large as it wastes memory
+        // and time with unnecessary copies of VRAM data.
+        static_assert(kVRAMDirtyBitmapChunkSize >= sizeof(uint32) && kVRAMDirtyBitmapChunkSize <= kVDP2VRAMSize,
+                      "VDP2 VRAM upload chunk size is out of range");
+
+        /// @brief VRAM dirty bitmap.
+        util::DirtyBitmap<kVRAMDirtyBitmapSize> vramDirty;
+
+        // VDP2 CRAM is not directly exposed. Instead, shaders get two convenient views:
+        // - CRAM converted to R8G8B8A8 colors based on the current color RAM mode
+        // - Top half of raw CRAM bytes, for rotation coefficients
+
+        /// @brief CPU-side CRAM color buffer.
+        CRAMColorCache cpuCRAMColorCache{};
+
+        /// @brief Current CRAM generation (dirty tracking).
+        uint32 cramGeneration = 0;
+
+        /// @brief CPU-side LNCL/BACK screen buffer (0=LNCL; 1=BACK).
+        std::array<std::array<ColorR8G8B8A8, kMaxResV>, 2> cpuLnclBack{};
+
+        /// @brief CPU-side VDP2 rotation parameter base values.
+        std::array<VDP2RotParamBase, kMaxNormalResV * 2> cpuRotParamBases{};
+
+        /// @brief 2D texture for the composited VDP2 output.
+        /// This cannot be instantiated per frame because interlaced graphics are weaved into the same output frame.
+        D3D12Resource compositeOutTexture;
+        /// @brief Composited VDP2 output UAV (offline).
+        DescriptorRange compositeOutUAV;
+
+        // ---------------------------------------------------------------------
+
+        /// @brief Common rendering parameters, uploaded as 32-bit root constants.
+        VDP2CommonRenderParams cpuCommonRenderParams{};
+
+        /// @brief CPU-side layer rendering parameters.
+        VDP2LayerRenderParams cpuLayerRenderParams{};
+
+        /// @brief CPU-side layer composition parameters.
+        VDP2ComposeParams cpuComposeParams{};
+
+        /// @brief Compute shader for drawing the sprite layer.
+        gpu::ComputeShader drawSpriteShader;
+        /// @brief Root signature for drawing the sprite layer.
+        D3D12RootSignature drawSpriteRootSig;
+
+        /// @brief Compute shader for drawing background layers.
+        gpu::ComputeShader drawBGsShader;
+        /// @brief Root signature for drawing background layers.
+        D3D12RootSignature drawBGsRootSig;
+
+        /// @brief Compute shader for compositing layers.
+        gpu::ComputeShader composeShader;
+        /// @brief Root signature for compositing layers.
+        D3D12RootSignature composeRootSig;
+
+        // ---------------------------------------------------------------------
+        // Rendering state
+
+        uint32 nextLayerRenderLine = 0;
+        uint32 nextComposeLine = 0;
+
+        uint32 layerRenderParamsGeneration = 0;
+        uint32 composeParamsGeneration = 0;
+
+        const config::VDP2AccessPatternsConfig &accessPatternsConfig;
+        const config::VDP2DebugRender &debugRenderOptions;
+    } vdp2;
+
+    // =================================================================================================================
+    // Per-frame and shared resources
+
+    BarrierTracker barrierTracker;
+
+    /// @brief Resources for a single frame.
+    struct FrameContext {
+        D3D12CommandAllocator cmdAlloc;
+        UINT64 signaledValue = 0; // fence value associated with this frame. 0 means never used
+
+        // -------------------------------------------------------------------------------------------------------------
+        // VDP1
+
+        /// @brief Span parameters buffer.
+        D3D12Resource spanParamsBuffer;
+        /// @brief Span parameters buffer SRV (offline).
+        DescriptorRange spanParamsSRV;
+
+        /// @brief Span prefix sum buffer.
+        D3D12Resource spanPrefixSumsBuffer;
+        /// @brief Span prefix sum buffer SRV (offline).
+        DescriptorRange spanPrefixSumsSRV;
+
+        /// @brief CPU-side span parameters buffer.
+        std::array<VDP1SpanParams, kMaxVDP1Spans> cpuSpanParams{};
+        /// @brief CPU-side span prefix sums buffer.
+        /// The first entry is always 0 to simplify implementation.
+        std::array<HLSLuint, kMaxVDP1Spans + 1> cpuSpanPrefixSums{};
+        /// @brief Number of spans allocated so far.
+        size_t cpuSpanCount = 0;
+
+        /// @brief Internal sprite output buffer.
+        D3D12Resource internalSpriteOutBuffer;
+        /// @brief Internal sprite output buffer SRV (offline).
+        DescriptorRange internalSpriteOutSRV;
+        /// @brief Internal sprite output buffer UAV (offline).
+        DescriptorRange internalSpriteOutUAV;
+
+        /// @brief Descriptor range for drawing polygons.
+        DescriptorRange polyDrawDescs;
+        /// @brief Pipeline state objects for drawing polygons.
+        std::array<D3D12PipelineState, 2 * 2 * 8> polyDrawPSOs;
+
+        // -------------------------------------------------------------------------------------------------------------
+        // VDP2
+
         /// @brief CRAM color buffer.
         D3D12Resource cramColorBuffer;
         /// @brief CRAM color buffer SRV (offline).
@@ -1693,111 +1697,99 @@ struct Direct3D12VDPRenderer::Impl {
         D3D12PipelineState composePSO;
         /// @brief Descriptor range for compositing layers.
         DescriptorRange composeDescs;
+
+        void Reset() {
+            cmdAlloc->Reset();
+        }
     };
 
-    struct VDP2Resources {
-        VDP2Resources(const config::VDP2AccessPatternsConfig &accessPatternsConfig,
-                      const config::VDP2DebugRender &debugRenderOptions)
-            : accessPatternsConfig(accessPatternsConfig)
-            , debugRenderOptions(debugRenderOptions) {}
+    /// @brief Ring buffer of frame resources.
+    /// @tparam count number of frames
+    template <size_t count>
+    struct FrameSet {
+        std::array<FrameContext, count> frames;
+        size_t frameIndex = 0;
+        UINT64 currFenceValue = 0;
 
-        /// @brief VDP2 per-frame resources.
-        FrameSet<kNumFrames, VDP2FrameContext> frames;
+        FrameContext &GetCurrentFrame() {
+            return frames[frameIndex];
+        }
+        const FrameContext &GetCurrentFrame() const {
+            return frames[frameIndex];
+        }
 
-        /// @brief VDP2 command list.
-        D3D12GraphicsCommandList cmdList;
+        UINT64 GetNextFenceValue() const {
+            return currFenceValue + 1;
+        }
 
-        /// @brief Upload ring buffer.
-        UploadRingBuffer uploadBuffer;
+        util::VoidResult<> MoveToNextFrame(D3D12Fence &fence, D3D12CommandQueue &cmdQueue) {
+            // Schedule a signal command in the queue
+            FrameContext &currFrame = GetCurrentFrame();
+            const UINT64 signalValue = currFenceValue + 1;
+            if (FAILED(fence.Signal(cmdQueue, signalValue))) {
+                return util::ErrorMessage{"Failed to signal fence"};
+            }
+            currFrame.signaledValue = signalValue;
 
-        // VDP2 VRAM is exposed as a ByteAddressBuffer to shaders as they often need to access raw bytes in 8-bit,
-        // 16-bit and 32-bit formats.
+            // Update the frame index
+            ++frameIndex;
+            if (frameIndex >= count) {
+                frameIndex = 0;
+            }
 
-        /// @brief VRAM data buffer.
-        D3D12Resource vramBuffer;
-        /// @brief VRAM data buffer SRV (offline).
-        DescriptorRange vramSRV;
+            // Wait for next frame
+            FrameContext &nextFrame = GetCurrentFrame();
+            if (fence->GetCompletedValue() < nextFrame.signaledValue) {
+                fence.Wait(INFINITE, nextFrame.signaledValue);
+            }
 
-        /// @brief Bit shift for the granularity for VRAM dirty bitmap chunks.
-        static constexpr size_t kVRAMDirtyBitmapChunkSizeShift = 8;
+            // Reset frame
+            nextFrame.Reset();
 
-        /// @brief Granularity for VRAM dirty bitmap chunks, in bytes.
-        static constexpr size_t kVRAMDirtyBitmapChunkSize = static_cast<size_t>(1) << kVRAMDirtyBitmapChunkSizeShift;
+            // Set the fence value for the next frame
+            currFenceValue = signalValue;
 
-        /// @brief Number of bits in the VRAM dirty bitmap.
-        static constexpr size_t kVRAMDirtyBitmapSize = kVDP2VRAMSize / kVRAMDirtyBitmapChunkSize;
+            return {};
+        }
 
-        // D3D12 buffer transfers must be done in multiples of 4 bytes.
-        // The chunk must not be larger than VDP2 VRAM itself. In fact, it shouldn't be too large as it wastes memory
-        // and time with unnecessary copies of VRAM data.
-        static_assert(kVRAMDirtyBitmapChunkSize >= sizeof(uint32) && kVRAMDirtyBitmapChunkSize <= kVDP2VRAMSize,
-                      "VDP2 VRAM upload chunk size is out of range");
+        util::VoidResult<> WaitForGPU(D3D12Fence &fence, D3D12CommandQueue &cmdQueue) {
+            FrameContext &currFrame = GetCurrentFrame();
 
-        /// @brief VRAM dirty bitmap.
-        util::DirtyBitmap<kVRAMDirtyBitmapSize> vramDirty;
+            // Schedule a signal command in the queue
+            const UINT64 signalValue = currFenceValue + 1;
+            if (FAILED(fence.Signal(cmdQueue, signalValue))) {
+                return util::ErrorMessage{"Failed to signal fence"};
+            }
 
-        // VDP2 CRAM is not directly exposed. Instead, shaders get two convenient views:
-        // - CRAM converted to R8G8B8A8 colors based on the current color RAM mode
-        // - Top half of raw CRAM bytes, for rotation coefficients
+            // Wait until the fence has been processed
+            fence.Wait(INFINITE, signalValue);
 
-        /// @brief CPU-side CRAM color buffer.
-        CRAMColorCache cpuCRAMColorCache{};
+            // Increment the fence value for the current frame
+            currFenceValue = signalValue;
 
-        /// @brief Current CRAM generation (dirty tracking).
-        uint32 cramGeneration = 0;
+            return {};
+        }
 
-        /// @brief CPU-side LNCL/BACK screen buffer (0=LNCL; 1=BACK).
-        std::array<std::array<ColorR8G8B8A8, kMaxResV>, 2> cpuLnclBack{};
+        FrameContext &operator[](size_t index) {
+            return frames[index];
+        }
+        const FrameContext &operator[](size_t index) const {
+            return frames[index];
+        }
 
-        /// @brief CPU-side VDP2 rotation parameter base values.
-        std::array<VDP2RotParamBase, kMaxNormalResV * 2> cpuRotParamBases{};
+        constexpr size_t Count() const {
+            return count;
+        }
+    };
 
-        /// @brief 2D texture for the composited VDP2 output.
-        /// This cannot be instantiated per frame because interlaced graphics are weaved into the same output frame.
-        D3D12Resource compositeOutTexture;
-        /// @brief Composited VDP2 output UAV (offline).
-        DescriptorRange compositeOutUAV;
+    /// @brief Per-frame resources.
+    FrameSet<kNumFrames> frames;
 
-        // ---------------------------------------------------------------------
+    /// @brief Command list.
+    D3D12GraphicsCommandList cmdList;
 
-        /// @brief Common rendering parameters, uploaded as 32-bit root constants.
-        VDP2CommonRenderParams cpuCommonRenderParams{};
-
-        /// @brief CPU-side layer rendering parameters.
-        VDP2LayerRenderParams cpuLayerRenderParams{};
-
-        /// @brief CPU-side layer composition parameters.
-        VDP2ComposeParams cpuComposeParams{};
-
-        /// @brief Compute shader for drawing the sprite layer.
-        gpu::ComputeShader drawSpriteShader;
-        /// @brief Root signature for drawing the sprite layer.
-        D3D12RootSignature drawSpriteRootSig;
-
-        /// @brief Compute shader for drawing background layers.
-        gpu::ComputeShader drawBGsShader;
-        /// @brief Root signature for drawing background layers.
-        D3D12RootSignature drawBGsRootSig;
-
-        /// @brief Compute shader for compositing layers.
-        gpu::ComputeShader composeShader;
-        /// @brief Root signature for compositing layers.
-        D3D12RootSignature composeRootSig;
-
-        // ---------------------------------------------------------------------
-        // Rendering state
-
-        uint32 nextLayerRenderLine = 0;
-        uint32 nextComposeLine = 0;
-
-        BarrierTracker barrierTracker;
-
-        uint32 layerRenderParamsGeneration = 0;
-        uint32 composeParamsGeneration = 0;
-
-        const config::VDP2AccessPatternsConfig &accessPatternsConfig;
-        const config::VDP2DebugRender &debugRenderOptions;
-    } vdp2;
+    /// @brief Upload ring buffer.
+    UploadRingBuffer uploadBuffer;
 
     // =================================================================================================================
     // Operations
@@ -1812,8 +1804,7 @@ struct Direct3D12VDPRenderer::Impl {
         } else {
             features.enhancedBarriers = false;
         }
-        vdp1.barrierTracker.UseEnhancedBarriers(features.enhancedBarriers);
-        vdp2.barrierTracker.UseEnhancedBarriers(features.enhancedBarriers);
+        barrierTracker.UseEnhancedBarriers(features.enhancedBarriers);
 
         // Main command queue
         if (HRESULT hr = cmdQueue.Create(device, D3D12_COMMAND_LIST_TYPE_COMPUTE); FAILED(hr)) {
@@ -1853,43 +1844,37 @@ struct Direct3D12VDPRenderer::Impl {
             offlineHeapAlloc.Bind(offlineHeap);
         }
 
+        // Per-frame command allocators and command list
+        for (int i = 0; i < frames.Count(); ++i) {
+            FrameContext &frame = frames[i];
+            if (HRESULT hr = frame.cmdAlloc.Create(device, D3D12_COMMAND_LIST_TYPE_COMPUTE); FAILED(hr)) {
+                return util::ErrorMessage{
+                    fmt::format("Could not create VDP renderer command allocator #{}, error code {:X}", i, (uint32)hr)};
+            }
+            frame.cmdAlloc->SetName(fmt::format(L"[Ymir-VDP] Command allocator #{}", i).c_str());
+        }
+        if (HRESULT hr = cmdList.Create(device, frames.GetCurrentFrame().cmdAlloc, D3D12_COMMAND_LIST_TYPE_COMPUTE);
+            FAILED(hr)) {
+            return util::ErrorMessage{
+                fmt::format("Could not create VDP renderer command list, error code {:X}", (uint32)hr)};
+        }
+        cmdList->SetName(L"[Ymir-VDP] Command list");
+
+        // Generic upload buffer
+        {
+            if (auto result = uploadBuffer.Create(device, kUploadBufferSize); !result) {
+                return util::ErrorMessage{
+                    fmt::format("Could not create VDP upload buffer: {}", result.Error().message)};
+            }
+            uploadBuffer.SetDebugName("VDP");
+            uploadBuffer.GetBufferResource()->SetName(L"[Ymir-VDP] Upload buffer");
+        }
+
         // =============================================================================================================
         // VDP1
 
         // -------------------------------------------------------------------------------------------------------------
         // Common resources
-
-        // VDP1 command allocators and list
-        for (int i = 0; i < vdp1.frames.Count(); ++i) {
-            FrameContext &frame = vdp1.frames[i];
-            if (HRESULT hr = frame.cmdAlloc.Create(device, D3D12_COMMAND_LIST_TYPE_COMPUTE); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format(
-                    "Could not create VDP1 renderer command allocator #{}, error code {:X}", i, (uint32)hr)};
-            }
-            frame.cmdAlloc->SetName(fmt::format(L"[Ymir-VDP1] Command allocator #{}", i).c_str());
-        }
-        if (HRESULT hr =
-                vdp1.cmdList.Create(device, vdp1.frames.GetCurrentFrame().cmdAlloc, D3D12_COMMAND_LIST_TYPE_COMPUTE);
-            FAILED(hr)) {
-            return util::ErrorMessage{
-                fmt::format("Could not create VDP1 renderer command list, error code {:X}", (uint32)hr)};
-        }
-        vdp1.cmdList->SetName(L"[Ymir-VDP1] Command list");
-
-        // VDP1 fence
-        if (HRESULT hr = vdp1.fence.Create(device, 0, D3D12_FENCE_FLAG_NONE); FAILED(hr)) {
-            return util::ErrorMessage{fmt::format("Could not create VDP1 fence, error code {:X}", (uint32)hr)};
-        }
-
-        // Generic VDP1 upload buffer
-        {
-            if (auto result = vdp1.uploadBuffer.Create(device, kUploadBufferSize); !result) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create VDP1 upload buffer: {}", result.Error().message)};
-            }
-            vdp1.uploadBuffer.SetDebugName("VDP1");
-            vdp1.uploadBuffer.GetBufferResource()->SetName(L"[Ymir-VDP1] Upload buffer");
-        }
 
         // VDP1 VRAM buffer
         {
@@ -1900,9 +1885,9 @@ struct Direct3D12VDPRenderer::Impl {
             }
             vdp1.vramBuffer->SetName(L"[Ymir-VDP1] VRAM buffer");
 
-            vdp1.barrierTracker.InitializeBuffer(
-                vdp1.vramBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+            barrierTracker.InitializeBuffer(vdp1.vramBuffer.GetPointer(),
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                            D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
             if (!offlineHeapAlloc.Allocate(vdp1.vramSRV)) {
                 return util::ErrorMessage{"Could not allocate VDP1 VRAM buffer SRV"};
@@ -1962,8 +1947,8 @@ struct Direct3D12VDPRenderer::Impl {
         // -------------------------------------------------------------------------------------------------------------
         // Per-frame VDP1 resources
 
-        for (int i = 0; i < vdp1.frames.Count(); ++i) {
-            VDP1FrameContext &frameCtx = vdp1.frames[i];
+        for (int i = 0; i < frames.Count(); ++i) {
+            FrameContext &frameCtx = frames[i];
 
             // Span parameters buffer
             {
@@ -1974,7 +1959,7 @@ struct Direct3D12VDPRenderer::Impl {
                 }
                 frameCtx.spanParamsBuffer->SetName(fmt::format(L"[Ymir-VDP1] Span parameters buffer #{}", i).c_str());
 
-                vdp1.barrierTracker.InitializeBuffer(
+                barrierTracker.InitializeBuffer(
                     frameCtx.spanParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
@@ -2009,7 +1994,7 @@ struct Direct3D12VDPRenderer::Impl {
                 frameCtx.spanPrefixSumsBuffer->SetName(
                     fmt::format(L"[Ymir-VDP1] Span prefix sums buffer #{}", i).c_str());
 
-                vdp1.barrierTracker.InitializeBuffer(
+                barrierTracker.InitializeBuffer(
                     frameCtx.spanPrefixSumsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
@@ -2047,7 +2032,7 @@ struct Direct3D12VDPRenderer::Impl {
                 frameCtx.internalSpriteOutBuffer->SetName(
                     fmt::format(L"[Ymir-VDP1] Internal sprite output buffer #{}", i).c_str());
 
-                vdp1.barrierTracker.InitializeBuffer(
+                barrierTracker.InitializeBuffer(
                     frameCtx.internalSpriteOutBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
@@ -2129,33 +2114,6 @@ struct Direct3D12VDPRenderer::Impl {
         // -------------------------------------------------------------------------------------------------------------
         // Common resources
 
-        // VDP2 command allocators and list
-        for (int i = 0; i < vdp2.frames.Count(); ++i) {
-            FrameContext &frame = vdp2.frames[i];
-            if (HRESULT hr = frame.cmdAlloc.Create(device, D3D12_COMMAND_LIST_TYPE_COMPUTE); FAILED(hr)) {
-                return util::ErrorMessage{fmt::format(
-                    "Could not create VDP2 renderer command allocator #{}, error code {:X}", i, (uint32)hr)};
-            }
-            frame.cmdAlloc->SetName(fmt::format(L"[Ymir-VDP2] Command allocator #{}", i).c_str());
-        }
-        if (HRESULT hr =
-                vdp2.cmdList.Create(device, vdp2.frames.GetCurrentFrame().cmdAlloc, D3D12_COMMAND_LIST_TYPE_COMPUTE);
-            FAILED(hr)) {
-            return util::ErrorMessage{
-                fmt::format("Could not create VDP2 renderer command list, error code {:X}", (uint32)hr)};
-        }
-        vdp2.cmdList->SetName(L"[Ymir-VDP2] Command list");
-
-        // Generic VDP2 upload buffer
-        {
-            if (auto result = vdp2.uploadBuffer.Create(device, kUploadBufferSize); !result) {
-                return util::ErrorMessage{
-                    fmt::format("Could not create VDP2 upload buffer: {}", result.Error().message)};
-            }
-            vdp2.uploadBuffer.SetDebugName("VDP2");
-            vdp2.uploadBuffer.GetBufferResource()->SetName(L"[Ymir-VDP2] Upload buffer");
-        }
-
         // VDP2 VRAM buffer
         {
             auto builder = vdp2.vramBuffer.BufferBuilder(kVDP2VRAMSize);
@@ -2165,9 +2123,9 @@ struct Direct3D12VDPRenderer::Impl {
             }
             vdp2.vramBuffer->SetName(L"[Ymir-VDP2] VRAM buffer");
 
-            vdp2.barrierTracker.InitializeBuffer(
-                vdp2.vramBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+            barrierTracker.InitializeBuffer(vdp2.vramBuffer.GetPointer(),
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                            D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
             if (!offlineHeapAlloc.Allocate(vdp2.vramSRV)) {
                 return util::ErrorMessage{"Could not allocate VDP2 VRAM buffer SRV"};
@@ -2200,9 +2158,9 @@ struct Direct3D12VDPRenderer::Impl {
             }
             vdp2.compositeOutTexture->SetName(L"[Ymir-VDP2] Composited output texture");
 
-            vdp2.barrierTracker.InitializeTexture(vdp2.compositeOutTexture.GetPointer(), D3D12_RESOURCE_STATE_COMMON,
-                                                  D3D12_BARRIER_SYNC_COMPUTE_SHADING,
-                                                  D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
+            barrierTracker.InitializeTexture(vdp2.compositeOutTexture.GetPointer(), D3D12_RESOURCE_STATE_COMMON,
+                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+                                             D3D12_BARRIER_LAYOUT_COMMON);
 
             if (!offlineHeapAlloc.Allocate(vdp2.compositeOutUAV)) {
                 return util::ErrorMessage{"Could not create composited output texture UAV"};
@@ -2310,8 +2268,8 @@ struct Direct3D12VDPRenderer::Impl {
         // -------------------------------------------------------------------------------------------------------------
         // Per-frame VDP2 resources
 
-        for (int i = 0; i < vdp2.frames.Count(); ++i) {
-            VDP2FrameContext &frameCtx = vdp2.frames[i];
+        for (int i = 0; i < frames.Count(); ++i) {
+            FrameContext &frameCtx = frames[i];
 
             // VDP2 CRAM color buffer
             {
@@ -2322,7 +2280,7 @@ struct Direct3D12VDPRenderer::Impl {
                 }
                 frameCtx.cramColorBuffer->SetName(fmt::format(L"[Ymir-VDP2] CRAM color buffer #{}", i).c_str());
 
-                vdp2.barrierTracker.InitializeBuffer(
+                barrierTracker.InitializeBuffer(
                     frameCtx.cramColorBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
@@ -2356,7 +2314,7 @@ struct Direct3D12VDPRenderer::Impl {
                 frameCtx.cramRotCoeffBuffer->SetName(
                     fmt::format(L"[Ymir-VDP2] CRAM rotation coefficients buffer #{}", i).c_str());
 
-                vdp2.barrierTracker.InitializeBuffer(
+                barrierTracker.InitializeBuffer(
                     frameCtx.cramRotCoeffBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
@@ -2404,10 +2362,10 @@ struct Direct3D12VDPRenderer::Impl {
                 frameCtx.layerOutTexture->SetName(
                     fmt::format(L"[Ymir-VDP2] Layer outputs texture array #{}", i).c_str());
 
-                vdp2.barrierTracker.InitializeTexture(
-                    frameCtx.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
-                    D3D12_BARRIER_LAYOUT_COMMON);
+                barrierTracker.InitializeTexture(frameCtx.layerOutTexture.GetPointer(),
+                                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                                 D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                                 D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
 
                 if (!offlineHeapAlloc.Allocate(frameCtx.layerOutSRV)) {
                     return util::ErrorMessage{fmt::format("Could not allocate layer outputs texture array SRV #{}", i)};
@@ -2463,10 +2421,10 @@ struct Direct3D12VDPRenderer::Impl {
                 frameCtx.rbgLineColorOutTexture->SetName(
                     fmt::format(L"[Ymir-VDP2] RBG line color outputs texture array #{}", i).c_str());
 
-                vdp2.barrierTracker.InitializeTexture(
-                    frameCtx.rbgLineColorOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
-                    D3D12_BARRIER_LAYOUT_COMMON);
+                barrierTracker.InitializeTexture(frameCtx.rbgLineColorOutTexture.GetPointer(),
+                                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                                 D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                                 D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
 
                 if (!offlineHeapAlloc.Allocate(frameCtx.rbgLineColorOutSRV)) {
                     return util::ErrorMessage{
@@ -2522,10 +2480,10 @@ struct Direct3D12VDPRenderer::Impl {
                 frameCtx.colorCalcWindowTexture->SetName(
                     fmt::format(L"[Ymir-VDP2] Color calculation window texture #{}", i).c_str());
 
-                vdp2.barrierTracker.InitializeTexture(
-                    frameCtx.colorCalcWindowTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
-                    D3D12_BARRIER_LAYOUT_COMMON);
+                barrierTracker.InitializeTexture(frameCtx.colorCalcWindowTexture.GetPointer(),
+                                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                                 D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                                 D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
 
                 if (!offlineHeapAlloc.Allocate(frameCtx.colorCalcWindowSRV)) {
                     return util::ErrorMessage{
@@ -2574,7 +2532,7 @@ struct Direct3D12VDPRenderer::Impl {
                 }
                 frameCtx.lnclBackBuffer->SetName(fmt::format(L"[Ymir-VDP2] LNCL/BACK screen buffer #{}", i).c_str());
 
-                vdp2.barrierTracker.InitializeBuffer(
+                barrierTracker.InitializeBuffer(
                     frameCtx.lnclBackBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
@@ -2609,7 +2567,7 @@ struct Direct3D12VDPRenderer::Impl {
                 frameCtx.rotParamBasesBuffer->SetName(
                     fmt::format(L"[Ymir-VDP2] Rotation parameter base values buffer #{}", i).c_str());
 
-                vdp2.barrierTracker.InitializeBuffer(
+                barrierTracker.InitializeBuffer(
                     frameCtx.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
@@ -2648,10 +2606,10 @@ struct Direct3D12VDPRenderer::Impl {
                 frameCtx.spriteAttrsTexture->SetName(
                     fmt::format(L"[Ymir-VDP2] Sprite attributes texture array #{}", i).c_str());
 
-                vdp2.barrierTracker.InitializeTexture(
-                    frameCtx.spriteAttrsTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
-                    D3D12_BARRIER_LAYOUT_COMMON);
+                barrierTracker.InitializeTexture(frameCtx.spriteAttrsTexture.GetPointer(),
+                                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                                 D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                                 D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
 
                 if (!offlineHeapAlloc.Allocate(frameCtx.spriteAttrsSRV)) {
                     return util::ErrorMessage{
@@ -2703,7 +2661,7 @@ struct Direct3D12VDPRenderer::Impl {
                 frameCtx.layerRenderParamsBuffer->SetName(
                     fmt::format(L"[Ymir-VDP2] Layer rendering parameters buffer #{}", i).c_str());
 
-                vdp2.barrierTracker.InitializeBuffer(
+                barrierTracker.InitializeBuffer(
                     frameCtx.layerRenderParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
@@ -2738,7 +2696,7 @@ struct Direct3D12VDPRenderer::Impl {
                 frameCtx.composeParamsBuffer->SetName(
                     fmt::format(L"[Ymir-VDP2] Layer compositing parameters buffer #{}", i).c_str());
 
-                vdp2.barrierTracker.InitializeBuffer(
+                barrierTracker.InitializeBuffer(
                     frameCtx.composeParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
@@ -2865,7 +2823,7 @@ struct Direct3D12VDPRenderer::Impl {
 
         {
             ID3D12DescriptorHeap *heaps[] = {resourceHeap.GetPointer()};
-            vdp2.cmdList->SetDescriptorHeaps(std::size(heaps), heaps);
+            cmdList->SetDescriptorHeaps(std::size(heaps), heaps);
         }
 
         // TODO: upload full VDP1 and VDP2 states
@@ -2874,7 +2832,7 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void Shutdown() {
-        vdp2.frames.WaitForGPU(computeFence, cmdQueue);
+        frames.WaitForGPU(computeFence, cmdQueue);
     }
 
     util::ValueResult<std::vector<char>> LoadShader(const char *path) {
@@ -2963,12 +2921,12 @@ struct Direct3D12VDPRenderer::Impl {
         }
 
         ID3D12Resource *dstResource = vdp1.vramBuffer.GetPointer();
-        ID3D12Resource *uploadBufferPtr = vdp1.uploadBuffer.GetBufferResource().GetPointer();
+        ID3D12Resource *uploadBufferPtr = uploadBuffer.GetBufferResource().GetPointer();
 
         // Emit barrier transition
-        vdp1.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                             D3D12_BARRIER_ACCESS_COPY_DEST);
-        vdp1.barrierTracker.Flush(vdp1.cmdList);
+        barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                        D3D12_BARRIER_ACCESS_COPY_DEST);
+        barrierTracker.Flush(cmdList);
 
         // Upload all modified VRAM chunks
         size_t pos, count = 0;
@@ -2979,14 +2937,14 @@ struct Direct3D12VDPRenderer::Impl {
             const uint32 size = count << VDP2Resources::kVRAMDirtyBitmapChunkSizeShift;
 
             // Get upload buffer chunk for this transfer
-            if (auto result = AllocateUploadBuffer(vdp1.uploadBuffer, size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{
                     fmt::format("Failed to allocate upload buffer for VDP1 VRAM chunk: {}", result.Error().message)};
             }
 
             // Upload VRAM chunk
             memcpy(alloc.data, &vdpState.mem1.VRAM[vramOffset], size);
-            vdp1.cmdList->CopyBufferRegion(dstResource, vramOffset, uploadBufferPtr, alloc.offset, size);
+            cmdList->CopyBufferRegion(dstResource, vramOffset, uploadBufferPtr, alloc.offset, size);
         }
         vdp1.vramDirty.ClearAll();
 
@@ -2998,24 +2956,8 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void VDP1SwapFramebuffer() {
-        auto &cmdList = vdp1.cmdList;
-
         // Submit any pending spans
         VDP1SubmitSpans();
-
-        // Close and submit command list
-        cmdList->Close();
-        cmdQueue->ExecuteCommandLists(1, cmdList.GetAddressOfBase());
-
-        // Advance frame
-        vdp1.uploadBuffer.EndFrame(vdp1.frames.GetNextFenceValue());
-        vdp1.frames.MoveToNextFrame(vdp1.fence, cmdQueue);
-
-        // Setup command list
-        FrameContext &nextFrame = vdp1.frames.GetCurrentFrame();
-        ID3D12DescriptorHeap *heaps[] = {resourceHeap.GetPointer()};
-        cmdList->Reset(nextFrame.cmdAlloc.GetPointer(), nullptr);
-        cmdList->SetDescriptorHeaps(std::size(heaps), heaps);
 
         // TODO: swap framebuffer
     }
@@ -3052,7 +2994,7 @@ struct Direct3D12VDPRenderer::Impl {
     };
 
     util::VoidResult<> VDP1SubmitSpans() {
-        VDP1FrameContext &frameCtx = vdp1.frames.GetCurrentFrame();
+        FrameContext &frameCtx = frames.GetCurrentFrame();
         if (frameCtx.cpuSpanCount == 0) {
             // No spans to dispatch
             return {};
@@ -3061,61 +3003,85 @@ struct Direct3D12VDPRenderer::Impl {
         // Errors should never happen, however.
         util::ScopeGuard sgClearSpans{[&] { frameCtx.cpuSpanCount = 0; }};
 
-        ID3D12Resource *uploadBufferPtr = vdp1.uploadBuffer.GetBufferResource().GetPointer();
+        ID3D12Resource *uploadBufferPtr = uploadBuffer.GetBufferResource().GetPointer();
         UploadAllocation alloc{};
 
-        vdp1.barrierTracker.TransitionBuffer(frameCtx.spanParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_COPY_DEST,
-                                             D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
-        vdp1.barrierTracker.TransitionBuffer(frameCtx.spanPrefixSumsBuffer.GetPointer(), D3D12_RESOURCE_STATE_COPY_DEST,
-                                             D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
-        vdp1.barrierTracker.Flush(vdp1.cmdList);
+        barrierTracker.TransitionBuffer(frameCtx.spanParamsBuffer.GetPointer(), D3D12_RESOURCE_STATE_COPY_DEST,
+                                        D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
+        barrierTracker.TransitionBuffer(frameCtx.spanPrefixSumsBuffer.GetPointer(), D3D12_RESOURCE_STATE_COPY_DEST,
+                                        D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_DEST);
+        barrierTracker.Flush(cmdList);
 
         // Upload spans
         {
             const size_t size = sizeof(VDP1SpanData) * frameCtx.cpuSpanCount;
-            if (auto result = AllocateUploadBuffer(vdp1.uploadBuffer, size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{fmt::format("Failed to allocate upload buffer for VDP1 span parameters: {}",
                                                       result.Error().message)};
             }
             memcpy(alloc.data, &frameCtx.cpuSpanParams, size);
 
-            vdp1.cmdList->CopyBufferRegion(frameCtx.spanParamsBuffer.GetPointer(), 0, uploadBufferPtr, alloc.offset,
-                                           size);
+            cmdList->CopyBufferRegion(frameCtx.spanParamsBuffer.GetPointer(), 0, uploadBufferPtr, alloc.offset, size);
         }
 
         // Upload prefix sums
         {
             const size_t size = sizeof(HLSLuint) * (frameCtx.cpuSpanCount + 1);
-            if (auto result = AllocateUploadBuffer(vdp1.uploadBuffer, size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{fmt::format("Failed to allocate upload buffer for VDP1 span prefix sums: {}",
                                                       result.Error().message)};
             }
             memcpy(alloc.data, &frameCtx.cpuSpanPrefixSums, size);
 
-            vdp1.cmdList->CopyBufferRegion(frameCtx.spanPrefixSumsBuffer.GetPointer(), 0, uploadBufferPtr, alloc.offset,
-                                           size);
+            cmdList->CopyBufferRegion(frameCtx.spanPrefixSumsBuffer.GetPointer(), 0, uploadBufferPtr, alloc.offset,
+                                      size);
         }
 
-        vdp1.barrierTracker.TransitionBuffer(frameCtx.spanParamsBuffer.GetPointer(),
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-        vdp1.barrierTracker.TransitionBuffer(frameCtx.spanPrefixSumsBuffer.GetPointer(),
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-        vdp1.barrierTracker.Flush(vdp1.cmdList);
+        barrierTracker.TransitionBuffer(frameCtx.spanParamsBuffer.GetPointer(),
+                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        barrierTracker.TransitionBuffer(frameCtx.spanPrefixSumsBuffer.GetPointer(),
+                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        barrierTracker.Flush(cmdList);
+
+        VDP1UpdateCommonRenderParams();
 
         // Dispatch shader
-        vdp1.cmdList->SetPipelineState(frameCtx.polyDrawPSOs[vdp1.currPolyDrawShaderIndex].GetPointer());
-        vdp1.cmdList->SetComputeRootSignature(vdp1.polyDrawRootSig.GetPointer());
-        vdp1.cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32),
-                                                   &vdp1.cpuCommonRenderParams, 0);
-        vdp1.cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuPolyDrawParams) / sizeof(uint32),
-                                                   &vdp1.cpuPolyDrawParams,
-                                                   sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32));
-        vdp1.cmdList->SetComputeRootDescriptorTable(1, frameCtx.polyDrawDescs.gpuHandle);
-        vdp1.cmdList->Dispatch((frameCtx.cpuSpanCount + 63) / 64, 1, 1);
+        cmdList->SetPipelineState(frameCtx.polyDrawPSOs[vdp1.currPolyDrawShaderIndex].GetPointer());
+        cmdList->SetComputeRootSignature(vdp1.polyDrawRootSig.GetPointer());
+        cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32),
+                                              &vdp1.cpuCommonRenderParams, 0);
+        cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuPolyDrawParams) / sizeof(uint32),
+                                              &vdp1.cpuPolyDrawParams,
+                                              sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32));
+        cmdList->SetComputeRootDescriptorTable(1, frameCtx.polyDrawDescs.gpuHandle);
+        cmdList->Dispatch((frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount] + 63) / 64, 1, 1);
 
         return {};
+    }
+
+    void VDP1UpdateCommonRenderParams() {
+        VDP1CommonRenderParams &params = vdp1.cpuCommonRenderParams;
+        FrameContext &frameCtx = frames.GetCurrentFrame();
+        const VDP1Regs &regs1 = vdpState.regs1;
+        const VDP2Regs &regs2 = vdpState.regs2;
+        const bool doubleDensity = regs2.TVMD.LSMDn == InterlaceMode::DoubleDensity;
+
+        auto &displayParams = params.displayParams;
+        displayParams.fbSizeH = std::countr_zero(regs1.fbSizeH) - 9u;
+        displayParams.fbSizeV = std::countr_zero(regs1.fbSizeV) - 8u;
+        displayParams.pixel8Bits = regs1.pixel8Bits;
+        displayParams.doubleDensity = doubleDensity;
+        displayParams.dblInterlaceEnable = regs1.dblInterlaceEnable;
+        displayParams.dblInterlaceDrawLine = regs1.dblInterlaceDrawLine;
+        displayParams.evenOddCoordSelect = regs1.evenOddCoordSelect;
+        displayParams.drawFB = vdpState.displayFB ^ 1u;
+
+        params.numSpans = frameCtx.cpuSpanCount;
+
+        params.enhancements.deinterlace = enhancements.deinterlace;
+        params.enhancements.transparentMeshes = enhancements.transparentMeshes;
     }
 
     void VDP1SelectPolyDrawShader(bool textured, VDP1Command::DrawMode mode) {
@@ -3127,7 +3093,7 @@ struct Direct3D12VDPRenderer::Impl {
         }
     }
 
-    bool VDP1AddSolidSpan(CoordS32 coord0, CoordS32 coord1, const VDP1SpanData &data) {
+    bool VDP1AddSolidSpan(CoordS32 coord0, CoordS32 coord1, const VDP1SpanData &data, bool antialias) {
         // Discard if completely out of bounds
         if (coord0.x() < 0 && coord1.x() < 0) {
             return false;
@@ -3151,7 +3117,7 @@ struct Direct3D12VDPRenderer::Impl {
         LineStepper line{coord0, coord1};
 
         // Append span to list
-        VDP1FrameContext &frameCtx = vdp1.frames.GetCurrentFrame();
+        FrameContext &frameCtx = frames.GetCurrentFrame();
         VDP1SpanParams &spanParams = frameCtx.cpuSpanParams[frameCtx.cpuSpanCount];
         const uint32 length = line.Length();
         const uint32 skip = line.SystemClip(vdpState.state1.sysClipH, vdpState.state1.sysClipV);
@@ -3174,6 +3140,7 @@ struct Direct3D12VDPRenderer::Impl {
         const uint32 dy = abs(y1 - y0);
         spanParams.length = length;
         spanParams.skip = skip;
+        spanParams.antialias = antialias;
 
         if (data.mode.gouraudEnable) {
             spanParams.gouraud0.r = data.gouraud0.r;
@@ -3307,7 +3274,7 @@ struct Direct3D12VDPRenderer::Impl {
                 data.gouraud1 = quad.RightEdge().GouraudValue();
             }
 
-            if (VDP1AddSolidSpan(coordL, coordR, data)) {
+            if (VDP1AddSolidSpan(coordL, coordR, data, true)) {
                 if (!linePlotted) {
                     linePlotted = true;
                     ++plottedSegmentsCount;
@@ -3365,22 +3332,22 @@ struct Direct3D12VDPRenderer::Impl {
             data.gouraud0 = gouraudA;
             data.gouraud1 = gouraudB;
         }
-        VDP1AddSolidSpan(coordA, coordB, data);
+        VDP1AddSolidSpan(coordA, coordB, data, false);
         if (mode.gouraudEnable) {
             data.gouraud0 = gouraudB;
             data.gouraud1 = gouraudC;
         }
-        VDP1AddSolidSpan(coordB, coordC, data);
+        VDP1AddSolidSpan(coordB, coordC, data, false);
         if (mode.gouraudEnable) {
             data.gouraud0 = gouraudC;
             data.gouraud1 = gouraudD;
         }
-        VDP1AddSolidSpan(coordC, coordD, data);
+        VDP1AddSolidSpan(coordC, coordD, data, false);
         if (mode.gouraudEnable) {
             data.gouraud0 = gouraudD;
             data.gouraud1 = gouraudA;
         }
-        VDP1AddSolidSpan(coordD, coordA, data);
+        VDP1AddSolidSpan(coordD, coordA, data, false);
     }
 
     void VDP1Cmd_DrawLine(uint32 cmdAddress) {
@@ -3411,7 +3378,7 @@ struct Direct3D12VDPRenderer::Impl {
             data.gouraud1.u16 = vdpState.mem1.ReadVRAM<uint16>(gouraudTable + 2u);
         }
 
-        VDP1AddSolidSpan(coordA, coordB, data);
+        VDP1AddSolidSpan(coordA, coordB, data, false);
     }
 
     void VDP1Cmd_SetUserClipping(uint32 cmdAddress) {
@@ -3621,12 +3588,12 @@ struct Direct3D12VDPRenderer::Impl {
         }
 
         ID3D12Resource *dstResource = vdp2.vramBuffer.GetPointer();
-        ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
+        ID3D12Resource *uploadBufferPtr = uploadBuffer.GetBufferResource().GetPointer();
 
         // Emit barrier transition
-        vdp2.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                             D3D12_BARRIER_ACCESS_COPY_DEST);
-        vdp2.barrierTracker.Flush(vdp2.cmdList);
+        barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                        D3D12_BARRIER_ACCESS_COPY_DEST);
+        barrierTracker.Flush(cmdList);
 
         // Upload all modified VRAM chunks
         size_t pos, count = 0;
@@ -3637,14 +3604,14 @@ struct Direct3D12VDPRenderer::Impl {
             const uint32 size = count << VDP2Resources::kVRAMDirtyBitmapChunkSizeShift;
 
             // Get upload buffer chunk for this transfer
-            if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{
                     fmt::format("Failed to allocate upload buffer for VDP2 VRAM chunk: {}", result.Error().message)};
             }
 
             // Upload VRAM chunk
             memcpy(alloc.data, &vdpState.mem2.VRAM[vramOffset], size);
-            vdp2.cmdList->CopyBufferRegion(dstResource, vramOffset, uploadBufferPtr, alloc.offset, size);
+            cmdList->CopyBufferRegion(dstResource, vramOffset, uploadBufferPtr, alloc.offset, size);
         }
         vdp2.vramDirty.ClearAll();
 
@@ -3652,20 +3619,20 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     [[nodiscard]] util::VoidResult<> VDP2FlushCRAM() {
-        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+        FrameContext &frameCtx = frames.GetCurrentFrame();
         if (frameCtx.cramGeneration == vdp2.cramGeneration) {
             return {};
         }
         frameCtx.cramGeneration = vdp2.cramGeneration;
 
-        ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
+        ID3D12Resource *uploadBufferPtr = uploadBuffer.GetBufferResource().GetPointer();
 
         UploadAllocation alloc{};
 
         // Update color cache
         {
             const size_t size = sizeof(CRAMColorCache);
-            if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{fmt::format("Failed to allocate upload buffer for VDP2 CRAM color cache: {}",
                                                       result.Error().message)};
             }
@@ -3674,18 +3641,18 @@ struct Direct3D12VDPRenderer::Impl {
             ID3D12Resource *dstResource = frameCtx.cramColorBuffer.GetPointer();
 
             // Emit barrier transition
-            vdp2.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                                 D3D12_BARRIER_ACCESS_COPY_DEST);
-            vdp2.barrierTracker.Flush(vdp2.cmdList);
+            barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                            D3D12_BARRIER_ACCESS_COPY_DEST);
+            barrierTracker.Flush(cmdList);
 
-            vdp2.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+            cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
         }
 
         // Update rotation coefficients view
         const VDP2Regs &regs2 = vdpState.regs2;
         if ((regs2.bgEnabled[4] || regs2.bgEnabled[5]) && regs2.vramControl.colorRAMCoeffTableEnable) {
             const size_t size = kVDP2CRAMRotCoeffBufferSize;
-            if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{
                     fmt::format("Failed to allocate upload buffer for VDP2 CRAM rotation coefficients: {}",
                                 result.Error().message)};
@@ -3695,11 +3662,11 @@ struct Direct3D12VDPRenderer::Impl {
             ID3D12Resource *dstResource = frameCtx.cramRotCoeffBuffer.GetPointer();
 
             // Emit barrier transition
-            vdp2.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                                 D3D12_BARRIER_ACCESS_COPY_DEST);
-            vdp2.barrierTracker.Flush(vdp2.cmdList);
+            barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                            D3D12_BARRIER_ACCESS_COPY_DEST);
+            barrierTracker.Flush(cmdList);
 
-            vdp2.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+            cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
         }
 
         return {};
@@ -3828,7 +3795,7 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     util::VoidResult<> VDP2UpdateLayerRenderParams() {
-        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+        FrameContext &frameCtx = frames.GetCurrentFrame();
         if (frameCtx.layerRenderParamsGeneration == vdp2.layerRenderParamsGeneration) {
             return {};
         }
@@ -3984,13 +3951,13 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Update buffer
         {
-            VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+            FrameContext &frameCtx = frames.GetCurrentFrame();
 
             ID3D12Resource *dstResource = frameCtx.layerRenderParamsBuffer.GetPointer();
-            ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
+            ID3D12Resource *uploadBufferPtr = uploadBuffer.GetBufferResource().GetPointer();
             const size_t size = sizeof(vdp2.cpuLayerRenderParams);
             UploadAllocation alloc{};
-            if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{
                     fmt::format("Failed to allocate upload buffer for VDP2 layer rendering parameters: {}",
                                 result.Error().message)};
@@ -3998,18 +3965,18 @@ struct Direct3D12VDPRenderer::Impl {
             memcpy(alloc.data, &vdp2.cpuLayerRenderParams, size);
 
             // Emit barrier transition
-            vdp2.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                                 D3D12_BARRIER_ACCESS_COPY_DEST);
-            vdp2.barrierTracker.Flush(vdp2.cmdList);
+            barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                            D3D12_BARRIER_ACCESS_COPY_DEST);
+            barrierTracker.Flush(cmdList);
 
-            vdp2.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+            cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
         }
 
         return {};
     }
 
     util::VoidResult<> VDP2UpdateComposeParams() {
-        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+        FrameContext &frameCtx = frames.GetCurrentFrame();
         if (frameCtx.composeParamsGeneration == vdp2.composeParamsGeneration) {
             return {};
         }
@@ -4055,14 +4022,14 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Update buffer
         {
-            VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+            FrameContext &frameCtx = frames.GetCurrentFrame();
 
             ID3D12Resource *dstResource = frameCtx.composeParamsBuffer.GetPointer();
-            ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
+            ID3D12Resource *uploadBufferPtr = uploadBuffer.GetBufferResource().GetPointer();
             const size_t size = sizeof(vdp2.cpuComposeParams);
 
             UploadAllocation alloc{};
-            if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
+            if (auto result = AllocateUploadBuffer(uploadBuffer, size, 4, alloc); !result) {
                 return util::ErrorMessage{
                     fmt::format("Failed to allocate upload buffer for VDP2 layer compositing parameters: {}",
                                 result.Error().message)};
@@ -4070,11 +4037,11 @@ struct Direct3D12VDPRenderer::Impl {
             memcpy(alloc.data, &vdp2.cpuComposeParams, size);
 
             // Emit barrier transition
-            vdp2.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                                 D3D12_BARRIER_ACCESS_COPY_DEST);
-            vdp2.barrierTracker.Flush(vdp2.cmdList);
+            barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                            D3D12_BARRIER_ACCESS_COPY_DEST);
+            barrierTracker.Flush(cmdList);
 
-            vdp2.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+            cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
         }
 
         return {};
@@ -4143,25 +4110,25 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     util::VoidResult<> VDP2UploadLineColorBackScreens() {
-        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+        FrameContext &frameCtx = frames.GetCurrentFrame();
 
         ID3D12Resource *dstResource = frameCtx.lnclBackBuffer.GetPointer();
-        ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
+        ID3D12Resource *uploadBufferPtr = uploadBuffer.GetBufferResource().GetPointer();
         const size_t size = sizeof(vdp2.cpuLnclBack);
 
         UploadAllocation alloc{};
-        if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
+        if (auto result = AllocateUploadBuffer(uploadBuffer, size, 4, alloc); !result) {
             return util::ErrorMessage{
                 fmt::format("Failed to allocate upload buffer for VDP2 LNCL/BACK screens: {}", result.Error().message)};
         }
         memcpy(alloc.data, &vdp2.cpuLnclBack, size);
 
         // Emit barrier transition
-        vdp2.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                             D3D12_BARRIER_ACCESS_COPY_DEST);
-        vdp2.barrierTracker.Flush(vdp2.cmdList);
+        barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                        D3D12_BARRIER_ACCESS_COPY_DEST);
+        barrierTracker.Flush(cmdList);
 
-        vdp2.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+        cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
 
         return {};
     }
@@ -4214,25 +4181,25 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     util::VoidResult<> VDP2UploadRotationParameterBases() {
-        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+        FrameContext &frameCtx = frames.GetCurrentFrame();
 
         ID3D12Resource *dstResource = frameCtx.rotParamBasesBuffer.GetPointer();
-        ID3D12Resource *uploadBufferPtr = vdp2.uploadBuffer.GetBufferResource().GetPointer();
+        ID3D12Resource *uploadBufferPtr = uploadBuffer.GetBufferResource().GetPointer();
         const size_t size = sizeof(vdp2.cpuRotParamBases);
 
         UploadAllocation alloc{};
-        if (auto result = AllocateUploadBuffer(vdp2.uploadBuffer, size, 4, alloc); !result) {
+        if (auto result = AllocateUploadBuffer(uploadBuffer, size, 4, alloc); !result) {
             return util::ErrorMessage{fmt::format(
                 "Failed to allocate upload buffer for VDP2 rotation parameter bases: {}", result.Error().message)};
         }
         memcpy(alloc.data, &vdp2.cpuRotParamBases, size);
 
         // Emit barrier transition
-        vdp2.barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
-                                             D3D12_BARRIER_ACCESS_COPY_DEST);
-        vdp2.barrierTracker.Flush(vdp2.cmdList);
+        barrierTracker.TransitionBuffer(dstResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_BARRIER_SYNC_COPY,
+                                        D3D12_BARRIER_ACCESS_COPY_DEST);
+        barrierTracker.Flush(cmdList);
 
-        vdp2.cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
+        cmdList->CopyBufferRegion(dstResource, 0, uploadBufferPtr, alloc.offset, size);
 
         return {};
     }
@@ -4250,8 +4217,6 @@ struct Direct3D12VDPRenderer::Impl {
     }
 
     void VDP2BeginFrame() {
-        auto &cmdList = vdp2.cmdList;
-
         vdp2.nextLayerRenderLine = 0;
         vdp2.nextComposeLine = 0;
 
@@ -4267,9 +4232,7 @@ struct Direct3D12VDPRenderer::Impl {
             return;
         }
 
-        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
-
-        auto &cmdList = vdp2.cmdList;
+        FrameContext &frameCtx = frames.GetCurrentFrame();
 
         const bool deinterlace = enhancements.deinterlace && vdpState.regs2.TVMD.IsInterlaced();
         const uint32 yShift = deinterlace ? 1u : 0u;
@@ -4286,15 +4249,14 @@ struct Direct3D12VDPRenderer::Impl {
         // ---------------------------------------------------------------------
 
         // Transition resources for rendering layers
-        vdp2.barrierTracker.TransitionBuffer(frameCtx.layerRenderParamsBuffer.GetPointer(),
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-        vdp2.barrierTracker.TransitionBuffer(vdp2.vramBuffer.GetPointer(),
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-        vdp2.barrierTracker.TransitionBuffer(frameCtx.cramColorBuffer.GetPointer(),
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        barrierTracker.TransitionBuffer(frameCtx.layerRenderParamsBuffer.GetPointer(),
+                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        barrierTracker.TransitionBuffer(vdp2.vramBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        barrierTracker.TransitionBuffer(frameCtx.cramColorBuffer.GetPointer(),
+                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
 
         // Compute rotation parameters if any RBGs are enabled
         if (vdpState.regs2.bgEnabled[4] || vdpState.regs2.bgEnabled[5]) {
@@ -4305,19 +4267,17 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Transition resources for drawing the sprite layer
         if (vdp2.cpuCommonRenderParams.spriteParams.rotate) {
-            vdp2.barrierTracker.TransitionBuffer(
-                frameCtx.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+            barrierTracker.TransitionBuffer(frameCtx.rotParamBasesBuffer.GetPointer(),
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                            D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         }
-        vdp2.barrierTracker.TransitionTexture(frameCtx.layerOutTexture.GetPointer(),
-                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
-                                              D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
-                                              D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
-        vdp2.barrierTracker.TransitionTexture(frameCtx.spriteAttrsTexture.GetPointer(),
-                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
-                                              D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
-                                              D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
-        vdp2.barrierTracker.Flush(cmdList);
+        barrierTracker.TransitionTexture(frameCtx.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                         D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                                         D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
+        barrierTracker.TransitionTexture(frameCtx.spriteAttrsTexture.GetPointer(),
+                                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                         D3D12_BARRIER_ACCESS_UNORDERED_ACCESS, D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
+        barrierTracker.Flush(cmdList);
 
         // Draw sprite layer
         cmdList->SetPipelineState(frameCtx.drawSpritePSO.GetPointer());
@@ -4331,29 +4291,26 @@ struct Direct3D12VDPRenderer::Impl {
 
         // Transition resources for drawing background layers
         if (vdpState.regs2.bgEnabled[4] || vdpState.regs2.bgEnabled[5]) {
-            vdp2.barrierTracker.TransitionBuffer(
-                frameCtx.cramRotCoeffBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-            vdp2.barrierTracker.TransitionBuffer(
-                frameCtx.rotParamBasesBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+            barrierTracker.TransitionBuffer(frameCtx.cramRotCoeffBuffer.GetPointer(),
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                            D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+            barrierTracker.TransitionBuffer(frameCtx.rotParamBasesBuffer.GetPointer(),
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                            D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
         }
-        vdp2.barrierTracker.TransitionTexture(
+        barrierTracker.TransitionTexture(
             frameCtx.spriteAttrsTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
-        vdp2.barrierTracker.TransitionTexture(frameCtx.layerOutTexture.GetPointer(),
-                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
-                                              D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
-                                              D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
-        vdp2.barrierTracker.TransitionTexture(frameCtx.rbgLineColorOutTexture.GetPointer(),
-                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
-                                              D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
-                                              D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
-        vdp2.barrierTracker.TransitionTexture(frameCtx.colorCalcWindowTexture.GetPointer(),
-                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
-                                              D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
-                                              D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
-        vdp2.barrierTracker.Flush(cmdList);
+        barrierTracker.TransitionTexture(frameCtx.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                         D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                                         D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
+        barrierTracker.TransitionTexture(frameCtx.rbgLineColorOutTexture.GetPointer(),
+                                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                         D3D12_BARRIER_ACCESS_UNORDERED_ACCESS, D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
+        barrierTracker.TransitionTexture(frameCtx.colorCalcWindowTexture.GetPointer(),
+                                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                         D3D12_BARRIER_ACCESS_UNORDERED_ACCESS, D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
+        barrierTracker.Flush(cmdList);
 
         // Draw NBGs and RBGs
         cmdList->SetPipelineState(frameCtx.drawBGsPSO.GetPointer());
@@ -4370,9 +4327,7 @@ struct Direct3D12VDPRenderer::Impl {
             return;
         }
 
-        VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
-
-        auto &cmdList = vdp2.cmdList;
+        FrameContext &frameCtx = frames.GetCurrentFrame();
 
         vdp2.cpuCommonRenderParams.startY = vdp2.nextComposeLine;
         VDP2UploadLineColorBackScreens();
@@ -4384,26 +4339,25 @@ struct Direct3D12VDPRenderer::Impl {
         // ---------------------------------------------------------------------
 
         // Transition resources for compositing layers
-        vdp2.barrierTracker.TransitionBuffer(frameCtx.composeParamsBuffer.GetPointer(),
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-        vdp2.barrierTracker.TransitionTexture(
+        barrierTracker.TransitionBuffer(frameCtx.composeParamsBuffer.GetPointer(),
+                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        barrierTracker.TransitionTexture(
             frameCtx.layerOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
-        vdp2.barrierTracker.TransitionTexture(
+        barrierTracker.TransitionTexture(
             frameCtx.rbgLineColorOutTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
-        vdp2.barrierTracker.TransitionTexture(
+        barrierTracker.TransitionTexture(
             frameCtx.colorCalcWindowTexture.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_COMMON);
-        vdp2.barrierTracker.TransitionBuffer(frameCtx.lnclBackBuffer.GetPointer(),
-                                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                             D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-        vdp2.barrierTracker.TransitionTexture(vdp2.compositeOutTexture.GetPointer(),
-                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
-                                              D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
-                                              D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
-        vdp2.barrierTracker.Flush(cmdList);
+        barrierTracker.TransitionBuffer(frameCtx.lnclBackBuffer.GetPointer(),
+                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        barrierTracker.TransitionTexture(vdp2.compositeOutTexture.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                         D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+                                         D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS);
+        barrierTracker.Flush(cmdList);
 
         // Compose final image
         cmdList->SetPipelineState(frameCtx.composePSO.GetPointer());
@@ -4425,7 +4379,7 @@ struct Direct3D12VDPRenderer::Impl {
         // render lines up to Y-1 then sync the state, unless Y=0, in which case we just sync the state.
 
         if (y > 0) {
-            const VDP2FrameContext &frameCtx = vdp2.frames.GetCurrentFrame();
+            const FrameContext &frameCtx = frames.GetCurrentFrame();
             const bool cramDirty = vdp2.cramGeneration != frameCtx.cramGeneration;
             const bool layerRenderParamsDirty =
                 vdp2.layerRenderParamsGeneration != frameCtx.layerRenderParamsGeneration;
@@ -4449,18 +4403,16 @@ struct Direct3D12VDPRenderer::Impl {
         VDP2RenderLayerLines(vres - 1);
         VDP2ComposeLines(VRes - 1);
 
-        auto &cmdList = vdp2.cmdList;
-
         // Request a frame from the frontend
         // TODO: consider adding support for GPU waits
         ID3D12Resource *copyTarget =
-            hwCallbacks.FrameCopyRequest(computeFence.GetPointer(), vdp2.frames.GetNextFenceValue());
+            hwCallbacks.FrameCopyRequest(computeFence.GetPointer(), frames.GetNextFenceValue());
         if (copyTarget != nullptr) {
             // Transition composited output texture to copy source
-            vdp2.barrierTracker.TransitionTexture(vdp2.compositeOutTexture.GetPointer(),
-                                                  D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_BARRIER_SYNC_COPY,
-                                                  D3D12_BARRIER_ACCESS_COPY_SOURCE, D3D12_BARRIER_LAYOUT_COPY_SOURCE);
-            vdp2.barrierTracker.Flush(cmdList);
+            barrierTracker.TransitionTexture(vdp2.compositeOutTexture.GetPointer(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                                             D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_COPY_SOURCE,
+                                             D3D12_BARRIER_LAYOUT_COPY_SOURCE);
+            barrierTracker.Flush(cmdList);
 
             // Copy composited output texture to provided texture
             if constexpr (static_config::copyFullCompositeResource) {
@@ -4495,11 +4447,11 @@ struct Direct3D12VDPRenderer::Impl {
         cmdQueue->ExecuteCommandLists(1, cmdList.GetAddressOfBase());
 
         // Advance frame
-        vdp2.uploadBuffer.EndFrame(vdp2.frames.GetNextFenceValue());
-        vdp2.frames.MoveToNextFrame(computeFence, cmdQueue);
+        uploadBuffer.EndFrame(frames.GetNextFenceValue());
+        frames.MoveToNextFrame(computeFence, cmdQueue);
 
         // Setup command list
-        FrameContext &nextFrame = vdp2.frames.GetCurrentFrame();
+        FrameContext &nextFrame = frames.GetCurrentFrame();
         ID3D12DescriptorHeap *heaps[] = {resourceHeap.GetPointer()};
         cmdList->Reset(nextFrame.cmdAlloc.GetPointer(), nullptr);
         cmdList->SetDescriptorHeaps(std::size(heaps), heaps);
