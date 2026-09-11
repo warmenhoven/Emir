@@ -142,6 +142,10 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     // - Loop32
     // - Spinlock
 
-    internalSpriteOut[id.x] = id.x | (GetSpanIndex(id.x) << 16u);
+    const uint spanIndex = GetSpanIndex(id.x);
+    if (spanIndex == 0xFFFFFFFF) {
+        return;
+    }
 
+    internalSpriteOut[id.x] = id.x | (spanIndex << 16u);
 }
