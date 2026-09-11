@@ -908,7 +908,14 @@ struct Direct3D12VDPRenderer::Impl {
         HLSLbool flipH; // Horizontal flip
     };
 
+    /// @brief Maximum number of spans to send per batch.
     static constexpr size_t kMaxVDP1Spans = 1024;
+
+    // The polygon drawing shader uses the span index as a sequence number to enable parallel drawing.
+    // This sequence has to fit in the top 16 bits of the output value, limiting the number of span drawn per
+    // dispatch. We reserve zero as a special value indicating the previous dispatch's contents (or empty pixels).
+    // Therefore, the absolute maximum number of spans that can be submitted per dispatch is 65535.
+    static_assert(kMaxVDP1Spans <= 65535);
 
     /// @brief Per-frame VDP1 resources.
     struct VDP1FrameContext : public FrameContext {
@@ -1992,6 +1999,8 @@ struct Direct3D12VDPRenderer::Impl {
 
             // Span prefix sums buffer
             {
+                frameCtx.cpuSpanPrefixSums[0] = 0;
+
                 auto builder = frameCtx.spanPrefixSumsBuffer.BufferBuilder(sizeof(frameCtx.cpuSpanPrefixSums));
                 if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
                     return util::ErrorMessage{fmt::format(
@@ -3150,17 +3159,6 @@ struct Direct3D12VDPRenderer::Impl {
         if (skip >= length) {
             // Entire line was clipped
             return false;
-        }
-
-        // The polygon drawing shader uses the pixel index as a sequence number to enable parallel drawing.
-        // This sequence has to fit in the top 16 bits of the output value, limiting the number of pixels drawn per
-        // dispatch. We reserve zero as a special value indicating the previous dispatch's contents.
-        // TODO: if this becomes a bottleneck, change output format to 24-bit counter + 8-bit sprite data and splice
-        // 16-bit sprite data across two output values
-        static constexpr uint32 kMaxVDP1PixelsPerDispatch = (1u << 16u) - 1u;
-        assert(length - skip <= kMaxVDP1PixelsPerDispatch);
-        if (frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount] + length - skip > kMaxVDP1PixelsPerDispatch) {
-            VDP1SubmitSpans();
         }
 
         const auto [x0, y0] = coord0;

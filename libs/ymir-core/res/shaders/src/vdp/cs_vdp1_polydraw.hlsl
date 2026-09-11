@@ -25,7 +25,7 @@ cbuffer CommonRenderParamsBuffer : register(b0) {
     PolyDrawParams g_polyDrawParams;
 }
 
-StructuredBuffer<PolySpan> spans : register(t1);
+StructuredBuffer<PolySpan> spanParams : register(t1);
 Buffer<uint> spanPrefixSums : register(t2);
 
 RWBuffer<uint> internalSpriteOut : register(u0);
@@ -59,6 +59,39 @@ static const uint2 userClip1 = uint2(
     BitExtract(g_polyDrawParams.userClip1, 0, 16),
     BitExtract(g_polyDrawParams.userClip1, 16, 16)
 );
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Helpers
+
+// Searches for the span containing the given pixel index.
+// Returns 0xFFFFFFFF if out of range.
+uint GetSpanIndex(uint pixelIndex) {
+    if (pixelIndex >= spanPrefixSums[g_commonParams.numSpans]) {
+        return 0xFFFFFFFF;
+    }
+
+    // Binary search for smallest span index where pixelIndex >= prefixSum.
+    // The span prefix sums array always contains [0, ..., total length].
+    // If it contains [0, 3, 5], we want to return:
+    // - index 0 for pixelIndex in [0..2]
+    // - index 1 for pixelIndex in [3..4]
+    // - out of bounds for any other pixelIndex
+    uint lb = 0;
+    uint ub = g_commonParams.numSpans;
+    while (lb != ub) {
+        const uint midpoint = (lb + ub) >> 1u;
+        const uint value = spanPrefixSums[midpoint];
+        if (pixelIndex == value) {
+            return midpoint;
+        }
+        if (pixelIndex > value) {
+            lb = midpoint + 1u;
+        } else {
+            ub = midpoint;
+        }
+    }
+    return lb - 1u;
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Entrypoint
@@ -97,9 +130,8 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     // - run a second shader to combine that into the output FBRAM (2 or 4 pixels at a time to fit into 32-bit values)
 
     // Possible implementation for Replace and Half-Luminance (and maybe Shadow):
-    // - combine 8/16-bit sprite data output with the pixel index into a single 32-bit value to be written to the intermediate output buffer
-    //   - top bits contain the pixel sequence number (index into span array)
-    //   - start at 1; reserve 0 for the previous frame's contents
+    // - combine 8/16-bit sprite data output with the span index into a single 32-bit value to be written to the intermediate output buffer
+    //   - top bits contain the span sequence number (index into span array plus one)
     //   - FBRAM transfer shader will zero these counters out; apply UAV barriers between these dispatches
     // - use InterlockedMax to plot the latest pixel to the framebuffer
 
@@ -109,4 +141,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     // - Linked List
     // - Loop32
     // - Spinlock
+
+    internalSpriteOut[id.x] = id.x | (GetSpanIndex(id.x) << 16u);
+
 }
