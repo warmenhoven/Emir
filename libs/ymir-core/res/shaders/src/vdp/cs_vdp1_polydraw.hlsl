@@ -15,7 +15,7 @@
 #ifdef __INTELLISENSE__
 #define POLYSPEC_TEXTURED         0
 #define POLYSPEC_TRANSPARENT_MESH 0
-#define POLYSPEC_SHADING_GOURAUD  0
+#define POLYSPEC_SHADING_GOURAUD  1
 #define POLYSPEC_SHADING_HALF_SRC 0
 #define POLYSPEC_SHADING_HALF_DST 0
 #endif
@@ -94,6 +94,351 @@ uint GetSpanIndex(uint pixelIndex) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// DDA steppers
+
+// Steps over the texels of a texture.
+struct TextureStepper {
+    int num;
+    int den;
+    int accum;
+
+    int value;
+    int inc;
+
+    int baseAccum;
+    int baseValue;
+
+    void Setup(uint length, int start, int end, bool hss = false, int hssSelect = 0) {
+        if (hss) {
+            start >>= 1;
+            end >>= 1;
+        }
+        const int delta = end - start;
+        const uint absDelta = abs(delta);
+
+        value = start;
+        inc = delta >= 0 ? +1 : -1;
+        if (hss) {
+            value <<= 1;
+            value |= hssSelect;
+            inc <<= 1;
+        }
+
+        num = absDelta;
+        den = length;
+        if (length <= absDelta) {
+            ++num;
+            accum = absDelta - (length << 1);
+            if (delta >= 0) {
+                ++accum;
+            }
+        } else {
+            --den;
+            accum = length - (length << 1);
+            if (delta < 0) {
+                ++accum;
+            }
+        }
+        num <<= 1;
+        den <<= 1;
+        baseAccum = accum;
+        baseValue = value;
+    }
+
+    // Retrieves the current texture coordinate value.
+    uint Value() {
+        return value;
+    }
+
+    // Determines if the stepper is ready to step to the next texel.
+    bool ShouldStepTexel() {
+        return accum >= 0;
+    }
+
+    // Steps to the next texel.
+    void StepTexel() {
+        value += inc;
+        accum -= den;
+    }
+
+    // Resets the texel counter to the initial value.
+    void ResetTexel() {
+        value = baseValue;
+    }
+
+    void ResetAndStepTexel() {
+        value = baseValue;
+        if (accum >= 0) {
+            const int count = (accum / den) + 1;
+            value += inc * count;
+            accum -= den * count;
+        }
+    }
+
+    // Moves to the pixel at the specified step.
+    void SetPixel(uint step) {
+        accum = baseAccum + num * step;
+    }
+};
+
+// -----------------------------------------------------------------------------
+
+// Iterates over a gouraud gradient of a single color channel.
+struct GouraudChannelStepper {
+    int num;
+    int den;
+    int accum;
+
+    int value;
+    int intInc;
+    int fracInc;
+
+    int baseValue;
+    int baseAccum;
+
+    void Setup(uint length, int start, int end) {
+        const int delta = end - start;
+        const uint absDelta = abs(delta);
+
+        value = start;
+        intInc = 0;
+        fracInc = delta >= 0 ? +1 : -1;
+
+        num = absDelta;
+        den = length;
+        if (length <= absDelta) {
+            ++num;
+            accum = absDelta - (length << 1);
+            if (delta >= 0) {
+                ++accum;
+            }
+        } else {
+            --den;
+            accum = -int(length);
+            if (delta < 0) {
+                ++accum;
+            }
+        }
+        num <<= 1;
+        den <<= 1;
+
+        if (den != 0) {
+            while (accum >= 0) {
+                value += fracInc;
+                accum -= den;
+            }
+
+            while (num >= den) {
+                intInc += fracInc;
+                num -= den;
+            }
+        }
+        accum = ~accum;
+
+        baseValue = value;
+        baseAccum = accum;
+    }
+
+    void Reset() {
+        value = baseValue;
+        accum = baseAccum;
+    }
+
+    // Skips the specified number of pixels.
+    void Skip(int steps) {
+        value += intInc * steps;
+        accum -= num * steps;
+        if (den != 0) {
+            while (accum < 0) {
+                value += fracInc;
+                accum += den;
+            }
+        }
+    }
+
+    // Blends the given base color value with the current gouraud shading value.
+    // The color value must be a 5-bit value.
+    uint Blend(int color) {
+        return clamp(value + color - 16, 0, 31);
+    }
+};
+
+// -----------------------------------------------------------------------------
+
+struct GouraudStepper {
+    GouraudChannelStepper stepperR;
+    GouraudChannelStepper stepperG;
+    GouraudChannelStepper stepperB;
+
+    // Sets up gouraud shading with the given length and start and end colors.
+    void Setup(uint length, uint4 gouraudStart, uint4 gouraudEnd) {
+        stepperR.Setup(length, gouraudStart.r, gouraudEnd.r);
+        stepperG.Setup(length, gouraudStart.g, gouraudEnd.g);
+        stepperB.Setup(length, gouraudStart.b, gouraudEnd.b);
+    }
+
+    void Reset() {
+        stepperR.Reset();
+        stepperG.Reset();
+        stepperB.Reset();
+    }
+
+    // Skips the specified number of pixels.
+    void Skip(int steps) {
+        if (steps > 0) {
+            stepperR.Skip(steps);
+            stepperG.Skip(steps);
+            stepperB.Skip(steps);
+        }
+    }
+
+    // Blends the given base color with the current gouraud shading values.
+    uint4 Blend(uint4 baseColor) {
+        return uint4(
+            stepperR.Blend(baseColor.r),
+            stepperG.Blend(baseColor.g),
+            stepperB.Blend(baseColor.b),
+            baseColor.a
+        );
+    }
+};
+
+// -----------------------------------------------------------------------------
+
+struct LineStepper {
+    int num;
+    int den;
+    int accum;
+    int accumTarget;
+
+    int2 majInc;
+    int2 minInc;
+
+    int2 pos;
+    int2 start;
+
+    uint dmaj;
+    uint step;
+
+    int2 aaInc;
+
+    void Create(int2 coord1, int2 coord2, bool antiAlias = false) {
+        pos = coord1;
+        start = coord1;
+
+        int2 delta = coord2 - coord1;
+        int2 absDelta = abs(delta);
+        dmaj = max(absDelta.x, absDelta.y);
+        step = 0;
+
+        const bool xMajor = absDelta.x >= absDelta.y;
+        if (xMajor) {
+            majInc.x = delta.x >= 0 ? +1 : -1;
+            majInc.y = 0;
+            minInc.x = 0;
+            minInc.y = delta.y >= 0 ? +1 : -1;
+        } else {
+            majInc.x = 0;
+            majInc.y = delta.y >= 0 ? +1 : -1;
+            minInc.x = delta.x >= 0 ? +1 : -1;
+            minInc.y = 0;
+            delta.xy = delta.yx;
+            absDelta.xy = absDelta.yx;
+        }
+        num = absDelta.y << 1;
+        den = absDelta.x << 1;
+        accum = absDelta.x + 1;
+        accumTarget = 0;
+        if (!antiAlias && delta.x < 0) {
+            ++accumTarget;
+        }
+        accum += num;
+
+        pos -= majInc;
+
+        if (antiAlias) {
+            --accum;
+            --accumTarget;
+            const bool samesign = (coord1.x > coord2.x) == (coord1.y > coord2.y);
+            if (xMajor) {
+                aaInc.x = samesign ? 0 : -majInc.x;
+                aaInc.y = samesign ? -minInc.y : 0;
+            } else {
+                aaInc.x = samesign ? 0 : -minInc.x;
+                aaInc.y = samesign ? -majInc.y : 0;
+            }
+        }
+
+        // NOTE: Shifting counters by this amount forces them to have 13 bits without the need for masking
+        static const int kShift = 32 - 13;
+
+        num <<= kShift;
+        den <<= kShift;
+        accum <<= kShift;
+        accumTarget <<= kShift;
+    }
+
+    // Computes how many steps are needed from the start of the line to reach the target pixel.
+    // Aligns the major coordinate only.
+    uint StepsToTarget(uint2 targetPos, bool antiAlias) {
+        const int2 deltaPos = (targetPos - start - (antiAlias ? aaInc : 0)) * majInc;
+        const int delta = deltaPos.x + deltaPos.y;
+
+        if (delta < 0 || delta >= int(dmaj) + 1) {
+            return dmaj + 1;
+        }
+        return delta;
+    }
+
+    // Sets the slope step to the specified coordinate.
+    // Clamped to the length of the line.
+    void SetStep(uint targetStep) {
+        targetStep = min(targetStep, dmaj);
+
+        const int stepDelta = targetStep + 1 - step;
+        if (stepDelta == 0) {
+            return;
+        }
+
+        step = targetStep + 1;
+        pos += majInc * stepDelta;
+
+        // TODO: mask to 13 bits
+
+        accum -= num * stepDelta;
+        // NOTE: if stepDelta is ever negative, this will need adjustments.
+        // Luckily, the AA pixel is always offset by 0 or +1 from the normal pixel, never -1, and since
+        // the normal pixel is rendered before the AA pixel, the accumulator increases monotonically.
+        if (den != 0) {
+            const int count = (accumTarget - accum + den) / den;
+            accum += den * count;
+            pos += minInc * count;
+        }
+    }
+
+    // Determines if the current step needs antialiasing.
+    bool NeedsAA() {
+        return step > 1 && accum - den + num > accumTarget;
+    }
+
+    // Retrieves the current X and Y coordinates.
+    int2 Coord() {
+        return pos & 0x7FF;
+    }
+
+    // Returns the X and Y coordinates of the antialiased pixel.
+    int2 AACoord() {
+        return pos + aaInc;
+    }
+
+    // Retrieves the total number of steps in the slope, that is, the longest of the vertical and horizontal spans.
+    uint Length() {
+        return dmaj;
+    }
+};
+
+
+// ---------------------------------------------------------------------------------------------------------------------
 // Entrypoint
 
 [numthreads(64, 1, 1)]
@@ -147,5 +492,31 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         return;
     }
 
-    internalSpriteOut[id.x] = id.x | (spanIndex << 16u);
+    const PolySpan span = spanParams[spanIndex];
+    const uint spanStep = id.x - spanPrefixSums[spanIndex] + span.skip;
+
+    LineStepper lineStepper;
+    lineStepper.Create(span.coord0, span.coord1, span.antialias);
+    lineStepper.SetStep(spanStep);
+#if POLYSPEC_SHADING_GOURAUD
+    GouraudStepper gouraud;
+    gouraud.Setup(span.length, span.gouraud0, span.gouraud1);
+    gouraud.Skip(spanStep);
+#endif
+
+    const uint spriteData = id.x; // TODO: compute
+    const uint value = spriteData | (spanIndex << 16u);
+
+    // TODO: if SRC==1 && DST==1, use OIT algorithm instead
+    // TODO: handle MSB somehow
+    // - separate buffer with same InterlockedMax idea
+    // - output merger applies MSB bit if its sequence number > pixel's sequence number
+    const int2 coord = lineStepper.Coord();
+    const uint outOffset = coord.y * fbSize.x + coord.x;
+    InterlockedMax(internalSpriteOut[outOffset], value);
+    if (span.antialias) {
+        const int2 aaCoord = lineStepper.AACoord();
+        const uint aaOutOffset = coord.y * fbSize.x + coord.x;
+        InterlockedMax(internalSpriteOut[aaOutOffset], value);
+    }
 }
