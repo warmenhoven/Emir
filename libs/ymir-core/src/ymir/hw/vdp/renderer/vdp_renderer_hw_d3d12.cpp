@@ -748,8 +748,6 @@ struct Direct3D12VDPRenderer::Impl {
         } displayParams;
         static_assert(sizeof(DisplayParams) == sizeof(HLSLuint));
 
-        HLSLuint numSpans; // Number of spans in the list
-
         struct Enhancements {               //  bits  use
             HLSLuint deinterlace : 1;       //     0  Deinterlace
             HLSLuint transparentMeshes : 1; //     1  Render mesh sprites as transparent
@@ -781,6 +779,8 @@ struct Direct3D12VDPRenderer::Impl {
 
     /// @brief VDP1 polygon drawing parameters, appended to common rendering parameters in the polygon drawing shader.
     struct alignas(16) VDP1PolyDrawParams {
+        HLSLuint numSpans; // Number of spans in the list
+
         struct SysClip {     //  bits  use
             HLSLuint h : 16; //  0-15  System clipping area width
             HLSLuint v : 16; // 16-31  System clipping area height
@@ -835,9 +835,9 @@ struct Direct3D12VDPRenderer::Impl {
         // VDP1 VRAM is exposed as a ByteAddressBuffer to shaders as they often need to access raw bytes in 8-bit and
         // 16-bit formats.
 
-        /// @brief VRAM data buffer.
+        /// @brief VRAM buffer.
         D3D12Resource vramBuffer;
-        /// @brief VRAM data buffer SRV (offline).
+        /// @brief VRAM buffer SRV (offline).
         DescriptorRange vramSRV;
 
         /// @brief Bit shift for the granularity for VRAM dirty bitmap chunks.
@@ -857,6 +857,15 @@ struct Direct3D12VDPRenderer::Impl {
 
         /// @brief VRAM dirty bitmap.
         util::DirtyBitmap<kVRAMDirtyBitmapSize> vramDirty;
+
+        /// @brief FBRAM buffer.
+        D3D12Resource fbramBuffer;
+        /// @brief FBRAM buffer SRV (offline).
+        DescriptorRange fbramSRV;
+        /// @brief FBRAM buffer UAV (offline).
+        DescriptorRange fbramUAV;
+
+        // TODO: dirty tracking (read and write)
 
         // ---------------------------------------------------------------------
 
@@ -885,6 +894,11 @@ struct Direct3D12VDPRenderer::Impl {
         /// @brief Root signature for drawing polygons.
         /// Applies to all variants of the polygon drawing shader.
         D3D12RootSignature polyDrawRootSig;
+
+        /// @brief Compute shader for merging polygon outputs.
+        gpu::ComputeShader outputMergerShader;
+        /// @brief Root signature for merging polygon outputs.
+        D3D12RootSignature outputMergerRootSig;
 
         // ---------------------------------------------------------------------
         // Rendering state
@@ -1600,17 +1614,25 @@ struct Direct3D12VDPRenderer::Impl {
         /// @brief Number of spans allocated so far.
         size_t cpuSpanCount = 0;
 
-        /// @brief Internal sprite output buffer.
+        /// @brief Internal sprite data output buffer.
         D3D12Resource internalSpriteOutBuffer;
-        /// @brief Internal sprite output buffer SRV (offline).
-        DescriptorRange internalSpriteOutSRV;
-        /// @brief Internal sprite output buffer UAV (offline).
+        /// @brief Internal sprite data output buffer UAV (offline).
         DescriptorRange internalSpriteOutUAV;
+
+        /// @brief Internal sprite MSB output buffer.
+        D3D12Resource internalSpriteMSBBuffer;
+        /// @brief Internal sprite MSB output buffer UAV (offline).
+        DescriptorRange internalSpriteMSBUAV;
 
         /// @brief Descriptor range for drawing polygons.
         DescriptorRange polyDrawDescs;
         /// @brief Pipeline state objects for drawing polygons.
         std::array<D3D12PipelineState, 2 * 2 * 8> polyDrawPSOs;
+
+        /// @brief Descriptor range for the output merger.
+        DescriptorRange outputMergerDescs;
+        /// @brief Pipeline state object for the output merger.
+        D3D12PipelineState outputMergerPSO;
 
         // -------------------------------------------------------------------------------------------------------------
         // VDP2
@@ -1907,6 +1929,56 @@ struct Direct3D12VDPRenderer::Impl {
             device->CreateShaderResourceView(vdp1.vramBuffer.GetPointer(), &srvDesc, vdp1.vramSRV.cpuHandle);
         }
 
+        // VDP1 FBRAM buffer
+        {
+            auto builder = vdp1.fbramBuffer.BufferBuilder(kVDP1FBRAMSize * 2);
+            builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+            if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                return util::ErrorMessage{
+                    fmt::format("Could not create VDP1 FBRAM buffer, error code {:X}", (uint32)hr)};
+            }
+            vdp1.fbramBuffer->SetName(L"[Ymir-VDP1] FBRAM buffer");
+
+            barrierTracker.InitializeBuffer(vdp1.fbramBuffer.GetPointer(),
+                                            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                            D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+
+            if (!offlineHeapAlloc.Allocate(vdp1.fbramSRV)) {
+                return util::ErrorMessage{"Could not allocate VDP1 FBRAM buffer SRV"};
+            }
+            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
+                .Format = DXGI_FORMAT_R32_TYPELESS,
+                .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+                .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                .Buffer =
+                    {
+                        .FirstElement = 0,
+                        .NumElements = kVDP1FBRAMSize * 2 / sizeof(uint32),
+                        .StructureByteStride = 0,
+                        .Flags = D3D12_BUFFER_SRV_FLAG_RAW,
+                    },
+            };
+            device->CreateShaderResourceView(vdp1.fbramBuffer.GetPointer(), &srvDesc, vdp1.fbramSRV.cpuHandle);
+
+            if (!offlineHeapAlloc.Allocate(vdp1.fbramUAV)) {
+                return util::ErrorMessage{"Could not allocate VDP1 FBRAM buffer UAV"};
+            }
+            const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+                .Format = DXGI_FORMAT_R32_TYPELESS,
+                .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
+                .Buffer =
+                    {
+                        .FirstElement = 0,
+                        .NumElements = kVDP1FBRAMSize * 2 / sizeof(uint32),
+                        .StructureByteStride = 0,
+                        .CounterOffsetInBytes = 0,
+                        .Flags = D3D12_BUFFER_UAV_FLAG_RAW,
+                    },
+            };
+            device->CreateUnorderedAccessView(vdp1.fbramBuffer.GetPointer(), nullptr, &uavDesc,
+                                              vdp1.fbramUAV.cpuHandle);
+        }
+
         // -------------------------------------------------------------------------------------------------------------
         // Shaders and root signatures
 
@@ -1936,12 +2008,38 @@ struct Direct3D12VDPRenderer::Impl {
                                                     sizeof(uint32));
             rootSigBuilder.AddDescriptorTable()
                 .AddSRVs(2, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
-                .AddUAVs(1, 0);
+                .AddUAVs(2, 0);
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{
                     fmt::format("Could not build VDP1 polygon drawing root signature, error code {:X}", (uint32)hr)};
             }
             vdp1.polyDrawRootSig->SetName(L"[Ymir-VDP1] Polygon drawing root signature");
+        }
+
+        // Polygon output merger
+        {
+            auto shaderBlobResult = LoadShader("src/vdp/cs_vdp1_output_merger.cso");
+            if (!shaderBlobResult) {
+                return util::ErrorMessage{fmt::format("Could not load VDP1 output merger compute shader: {}",
+                                                      shaderBlobResult.Error().message)};
+            }
+            vdp1.outputMergerShader.format = gpu::ShaderBytecodeFormat::DXIL;
+            vdp1.outputMergerShader.bytecode = shaderBlobResult.Value();
+            vdp1.outputMergerShader.entrypoint = kCSEntrypoint;
+            auto result = gpu::ValidateShader(vdp1.outputMergerShader);
+            if (!result) {
+                return util::ErrorMessage{
+                    fmt::format("VDP1 output merger compute shader validation failed: {}", result.Error().message)};
+            }
+
+            auto rootSigBuilder = vdp1.outputMergerRootSig.Builder();
+            rootSigBuilder.Add32BitConstants(0, sizeof(VDP1CommonRenderParams) / sizeof(uint32));
+            rootSigBuilder.AddDescriptorTable().AddUAVs(3, 0);
+            if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
+                return util::ErrorMessage{
+                    fmt::format("Could not build VDP1 output merger root signature, error code {:X}", (uint32)hr)};
+            }
+            vdp1.polyDrawRootSig->SetName(L"[Ymir-VDP1] Output merger root signature");
         }
 
         // -------------------------------------------------------------------------------------------------------------
@@ -2018,46 +2116,28 @@ struct Direct3D12VDPRenderer::Impl {
                                                  frameCtx.spanPrefixSumsSRV.cpuHandle);
             }
 
-            // Internal sprite output buffer
+            // Internal sprite data output buffer
             {
                 // Each entry in this buffer represents a logical output pixel.
-                // Entries are 32-bit, holding the sprite data in the 8 or 16 LSBs and the pixel index in the 16 MSBs to
+                // Entries are 32-bit, holding the sprite data in the 8 or 16 LSBs and the span index in the 16 MSBs to
                 // enable parallel rendering with guaranteed pixel ordering.
-                auto builder = frameCtx.internalSpriteOutBuffer.BufferBuilder(kVDP1FBRAMSize * sizeof(HLSLuint));
+                auto builder = frameCtx.internalSpriteOutBuffer.BufferBuilder(kVDP1FBRAMSize * 2 * sizeof(HLSLuint));
                 builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
                 if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
-                    return util::ErrorMessage{fmt::format(
-                        "Could not create VDP1 internal sprite output buffer #{}, error code {:X}", i, (uint32)hr)};
+                    return util::ErrorMessage{
+                        fmt::format("Could not create VDP1 internal sprite data output buffer #{}, error code {:X}", i,
+                                    (uint32)hr)};
                 }
                 frameCtx.internalSpriteOutBuffer->SetName(
-                    fmt::format(L"[Ymir-VDP1] Internal sprite output buffer #{}", i).c_str());
+                    fmt::format(L"[Ymir-VDP1] Internal sprite data output buffer #{}", i).c_str());
 
                 barrierTracker.InitializeBuffer(
-                    frameCtx.internalSpriteOutBuffer.GetPointer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
-
-                if (!offlineHeapAlloc.Allocate(frameCtx.internalSpriteOutSRV)) {
-                    return util::ErrorMessage{
-                        fmt::format("Could not allocate VDP1 internal sprite output buffer SRV #{}", i)};
-                }
-                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{
-                    .Format = DXGI_FORMAT_UNKNOWN,
-                    .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
-                    .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-                    .Buffer =
-                        {
-                            .FirstElement = 0,
-                            .NumElements = kVDP1FBRAMSize,
-                            .StructureByteStride = sizeof(HLSLuint),
-                            .Flags = D3D12_BUFFER_SRV_FLAG_NONE,
-                        },
-                };
-                device->CreateShaderResourceView(frameCtx.internalSpriteOutBuffer.GetPointer(), &srvDesc,
-                                                 frameCtx.internalSpriteOutSRV.cpuHandle);
+                    frameCtx.internalSpriteOutBuffer.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
 
                 if (!offlineHeapAlloc.Allocate(frameCtx.internalSpriteOutUAV)) {
                     return util::ErrorMessage{
-                        fmt::format("Could not allocate VDP1 internal sprite output buffer UAV #{}", i)};
+                        fmt::format("Could not allocate VDP1 internal sprite data output buffer UAV #{}", i)};
                 }
                 const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
                     .Format = DXGI_FORMAT_UNKNOWN,
@@ -2065,7 +2145,7 @@ struct Direct3D12VDPRenderer::Impl {
                     .Buffer =
                         {
                             .FirstElement = 0,
-                            .NumElements = kVDP1FBRAMSize,
+                            .NumElements = kVDP1FBRAMSize * 2,
                             .StructureByteStride = sizeof(HLSLuint),
                             .CounterOffsetInBytes = 0,
                             .Flags = D3D12_BUFFER_UAV_FLAG_NONE,
@@ -2075,6 +2155,43 @@ struct Direct3D12VDPRenderer::Impl {
                                                   frameCtx.internalSpriteOutUAV.cpuHandle);
             }
 
+            // Internal sprite MSB output buffer
+            {
+                // Each entry in this buffer represents a logical output pixel.
+                // Entries hold the span index to enable parallel rendering with guaranteed pixel ordering.
+                auto builder = frameCtx.internalSpriteMSBBuffer.BufferBuilder(kVDP1FBRAMSize * 2 * sizeof(HLSLuint));
+                builder.Flags(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+                if (HRESULT hr = builder.BuildCommitted(device); FAILED(hr)) {
+                    return util::ErrorMessage{fmt::format(
+                        "Could not create VDP1 internal sprite MSB output buffer #{}, error code {:X}", i, (uint32)hr)};
+                }
+                frameCtx.internalSpriteMSBBuffer->SetName(
+                    fmt::format(L"[Ymir-VDP1] Internal sprite MSB output buffer #{}", i).c_str());
+
+                barrierTracker.InitializeBuffer(
+                    frameCtx.internalSpriteMSBBuffer.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+
+                if (!offlineHeapAlloc.Allocate(frameCtx.internalSpriteMSBUAV)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not allocate VDP1 internal sprite MSB output buffer UAV #{}", i)};
+                }
+                const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+                    .Format = DXGI_FORMAT_UNKNOWN,
+                    .ViewDimension = D3D12_UAV_DIMENSION_BUFFER,
+                    .Buffer =
+                        {
+                            .FirstElement = 0,
+                            .NumElements = kVDP1FBRAMSize * 2,
+                            .StructureByteStride = sizeof(HLSLuint),
+                            .CounterOffsetInBytes = 0,
+                            .Flags = D3D12_BUFFER_UAV_FLAG_NONE,
+                        },
+                };
+                device->CreateUnorderedAccessView(frameCtx.internalSpriteMSBBuffer.GetPointer(), nullptr, &uavDesc,
+                                                  frameCtx.internalSpriteMSBUAV.cpuHandle);
+            }
+
             // Polygon drawing
             for (size_t shaderIndex = 0; shaderIndex < vdp1.polyDrawShaders.size(); ++shaderIndex) {
                 const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
@@ -2082,9 +2199,9 @@ struct Direct3D12VDPRenderer::Impl {
                     .CS = ToShaderBytecode(vdp1.polyDrawShaders[shaderIndex]),
                 };
                 if (HRESULT hr = frameCtx.polyDrawPSOs[shaderIndex].CreateCompute(device, psoDesc); FAILED(hr)) {
-                    return util::ErrorMessage{
-                        fmt::format("Could not build VDP1 polygon drawing pipeline state object #{}, error code {:X}",
-                                    i, (uint32)hr)};
+                    return util::ErrorMessage{fmt::format(
+                        "Could not build VDP1 polygon drawing pipeline state object variant {} #{}, error code {:X}",
+                        shaderIndex, i, (uint32)hr)};
                 }
                 frameCtx.polyDrawPSOs[shaderIndex]->SetName(
                     fmt::format(L"[Ymir-VDP1] Polygon drawing pipeline state object variant {} #{}", shaderIndex, i)
@@ -2094,16 +2211,47 @@ struct Direct3D12VDPRenderer::Impl {
                     frameCtx.spanParamsSRV.cpuHandle,
                     frameCtx.spanPrefixSumsSRV.cpuHandle,
                     frameCtx.internalSpriteOutUAV.cpuHandle,
+                    frameCtx.internalSpriteMSBUAV.cpuHandle,
                 };
                 std::array<UINT, std::size(srcHandles)> srcSizes{};
                 srcSizes.fill(1);
 
                 if (!resourceHeapAlloc.Allocate(frameCtx.polyDrawDescs, std::size(srcHandles))) {
                     return util::ErrorMessage{
-                        fmt::format("Could not allocate VDP2 sprite layer rendering descriptors #{}", i)};
+                        fmt::format("Could not allocate VDP1 polygon drawing descriptors #{}", i)};
                 }
 
                 device->CopyDescriptors(1, &frameCtx.polyDrawDescs.cpuHandle, &frameCtx.polyDrawDescs.count,
+                                        std::size(srcHandles), srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
+            }
+
+            // Output merger
+            {
+                const D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc{
+                    .pRootSignature = vdp1.outputMergerRootSig.GetPointer(),
+                    .CS = ToShaderBytecode(vdp1.outputMergerShader),
+                };
+                if (HRESULT hr = frameCtx.outputMergerPSO.CreateCompute(device, psoDesc); FAILED(hr)) {
+                    return util::ErrorMessage{
+                        fmt::format("Could not build VDP1 output merger pipeline state object #{}, error code {:X}", i,
+                                    (uint32)hr)};
+                }
+                frameCtx.outputMergerPSO->SetName(
+                    fmt::format(L"[Ymir-VDP1] Output merger pipeline state object #{}", i).c_str());
+
+                const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
+                    vdp1.fbramUAV.cpuHandle,
+                    frameCtx.internalSpriteOutUAV.cpuHandle,
+                    frameCtx.internalSpriteMSBUAV.cpuHandle,
+                };
+                std::array<UINT, std::size(srcHandles)> srcSizes{};
+                srcSizes.fill(1);
+
+                if (!resourceHeapAlloc.Allocate(frameCtx.outputMergerDescs, std::size(srcHandles))) {
+                    return util::ErrorMessage{fmt::format("Could not allocate VDP1 output merger descriptors #{}", i)};
+                }
+
+                device->CopyDescriptors(1, &frameCtx.outputMergerDescs.cpuHandle, &frameCtx.outputMergerDescs.count,
                                         std::size(srcHandles), srcHandles, srcSizes.data(), resourceHeap.GetHeapType());
             }
         }
@@ -2200,7 +2348,7 @@ struct Direct3D12VDPRenderer::Impl {
             auto rootSigBuilder = vdp2.drawSpriteRootSig.Builder();
             rootSigBuilder.Add32BitConstants(0, sizeof(VDP2CommonRenderParams) / sizeof(uint32));
             rootSigBuilder.AddDescriptorTable()
-                .AddSRVs(4, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
+                .AddSRVs(5, 1) // NOTE: starting from 1 because SPIRV-Cross assumes buffers in t0 are constant
                 .AddUAVs(2, 0);
             if (HRESULT hr = rootSigBuilder.Build(device); FAILED(hr)) {
                 return util::ErrorMessage{fmt::format(
@@ -2735,11 +2883,8 @@ struct Direct3D12VDPRenderer::Impl {
                     fmt::format(L"[Ymir-VDP2] Sprite layer rendering pipeline state object #{}", i).c_str());
 
                 const D3D12_CPU_DESCRIPTOR_HANDLE srcHandles[] = {
-                    frameCtx.layerRenderParamsSRV.cpuHandle,
-                    vdp2.vramSRV.cpuHandle,
-                    frameCtx.cramColorSRV.cpuHandle,
-                    frameCtx.rotParamBasesSRV.cpuHandle,
-                    /* TODO: vdp1.spriteFBSRV.cpuHandle,*/ frameCtx.layerOutUAV.cpuHandle,
+                    frameCtx.layerRenderParamsSRV.cpuHandle, vdp2.vramSRV.cpuHandle,  frameCtx.cramColorSRV.cpuHandle,
+                    frameCtx.rotParamBasesSRV.cpuHandle,     vdp1.fbramSRV.cpuHandle, frameCtx.layerOutUAV.cpuHandle,
                     frameCtx.spriteAttrsUAV.cpuHandle,
                 };
                 std::array<UINT, std::size(srcHandles)> srcSizes{};
@@ -3043,11 +3188,18 @@ struct Direct3D12VDPRenderer::Impl {
         barrierTracker.TransitionBuffer(frameCtx.spanPrefixSumsBuffer.GetPointer(),
                                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                                         D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_SHADER_RESOURCE);
+        barrierTracker.TransitionBuffer(frameCtx.internalSpriteOutBuffer.GetPointer(),
+                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                        D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+        barrierTracker.TransitionBuffer(frameCtx.internalSpriteMSBBuffer.GetPointer(),
+                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
+                                        D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
         barrierTracker.Flush(cmdList);
 
         VDP1UpdateCommonRenderParams();
+        vdp1.cpuPolyDrawParams.numSpans = frameCtx.cpuSpanCount;
 
-        // Dispatch shader
+        // Dispatch polygon drawing shader
         cmdList->SetPipelineState(frameCtx.polyDrawPSOs[vdp1.currPolyDrawShaderIndex].GetPointer());
         cmdList->SetComputeRootSignature(vdp1.polyDrawRootSig.GetPointer());
         cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32),
@@ -3058,12 +3210,27 @@ struct Direct3D12VDPRenderer::Impl {
         cmdList->SetComputeRootDescriptorTable(1, frameCtx.polyDrawDescs.gpuHandle);
         cmdList->Dispatch((frameCtx.cpuSpanPrefixSums[frameCtx.cpuSpanCount] + 63) / 64, 1, 1);
 
+        barrierTracker.TransitionBuffer(vdp1.fbramBuffer.GetPointer(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                        D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS);
+        barrierTracker.Flush(cmdList);
+
+        // Dispatch output merger shader
+        const VDP1Regs &regs1 = vdpState.regs1;
+        const uint32 pixelsPerEntry = regs1.pixel8Bits ? 4u : 2u; // each entry is 32 bits
+        const uint32 mergeW = regs1.fbSizeH / pixelsPerEntry;
+        const uint32 mergeH = regs1.fbSizeV;
+        cmdList->SetPipelineState(frameCtx.outputMergerPSO.GetPointer());
+        cmdList->SetComputeRootSignature(vdp1.outputMergerRootSig.GetPointer());
+        cmdList->SetComputeRoot32BitConstants(0, sizeof(vdp1.cpuCommonRenderParams) / sizeof(uint32),
+                                              &vdp1.cpuCommonRenderParams, 0);
+        cmdList->SetComputeRootDescriptorTable(1, frameCtx.outputMergerDescs.gpuHandle);
+        cmdList->Dispatch((mergeW + 7) / 8, (mergeH + 7) / 8, 1);
+
         return {};
     }
 
     void VDP1UpdateCommonRenderParams() {
         VDP1CommonRenderParams &params = vdp1.cpuCommonRenderParams;
-        FrameContext &frameCtx = frames.GetCurrentFrame();
         const VDP1Regs &regs1 = vdpState.regs1;
         const VDP2Regs &regs2 = vdpState.regs2;
         const bool doubleDensity = regs2.TVMD.LSMDn == InterlaceMode::DoubleDensity;
@@ -3077,8 +3244,6 @@ struct Direct3D12VDPRenderer::Impl {
         displayParams.dblInterlaceDrawLine = regs1.dblInterlaceDrawLine;
         displayParams.evenOddCoordSelect = regs1.evenOddCoordSelect;
         displayParams.drawFB = vdpState.displayFB ^ 1u;
-
-        params.numSpans = frameCtx.cpuSpanCount;
 
         params.enhancements.deinterlace = enhancements.deinterlace;
         params.enhancements.transparentMeshes = enhancements.transparentMeshes;

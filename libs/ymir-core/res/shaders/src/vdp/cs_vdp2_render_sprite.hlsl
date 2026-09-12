@@ -15,7 +15,7 @@ StructuredBuffer<LayerRenderParams> layerRenderParams : register(t1);
 ByteAddressBuffer vram : register(t2);
 Buffer<uint4> cramColor : register(t3);
 StructuredBuffer<RotParamBase> rotParamBases : register(t4);
-// TODO: ByteAddressBuffer spriteFB : register(t5);
+ByteAddressBuffer spriteFB : register(t5);
 
 RWTexture2DArray<uint4> layerOut : register(u0);
 RWTexture2D<uint> spriteAttrsOut : register(u1);
@@ -54,13 +54,13 @@ static const uint kVDP1MeshFBOffset = kVDP1FBRAMSize * 2 * 2;
 
 uint ReadSprite8(uint address) {
     address += kSpriteFBBaseOffset;
-    // TODO: return BitExtract(spriteFB.Load(address & ~3), (address & 3) * 8, 8);
+    return BitExtract(spriteFB.Load(address & ~3), (address & 3) * 8, 8);
     return 0;
 }
 
 uint ReadSprite16(uint address) {
     address += kSpriteFBBaseOffset;
-    // TODO: return ByteSwap16(BitExtract(spriteFB.Load(address & ~3), (address & 2) * 8, 16));
+    return ByteSwap16(BitExtract(spriteFB.Load(address & ~3), (address & 2) * 8, 16));
     return 0;
 }
 

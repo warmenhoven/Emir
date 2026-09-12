@@ -5,7 +5,6 @@
 
 struct CommonRenderParams {
     uint displayParams;
-    uint numSpans;
     uint enhancements;
 };
 

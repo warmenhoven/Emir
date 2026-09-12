@@ -29,6 +29,7 @@ StructuredBuffer<PolySpan> spanParams : register(t1);
 Buffer<uint> spanPrefixSums : register(t2);
 
 RWBuffer<uint> internalSpriteOut : register(u0);
+RWBuffer<uint> internalSpriteMSB : register(u1);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Parameters
@@ -66,7 +67,7 @@ static const uint2 userClip1 = uint2(
 // Searches for the span containing the given pixel index.
 // Returns 0xFFFFFFFF if out of range.
 uint GetSpanIndex(uint pixelIndex) {
-    if (pixelIndex >= spanPrefixSums[g_commonParams.numSpans]) {
+    if (pixelIndex >= spanPrefixSums[g_polyDrawParams.numSpans]) {
         return 0xFFFFFFFF;
     }
 
@@ -77,7 +78,7 @@ uint GetSpanIndex(uint pixelIndex) {
     // - index 1 for pixelIndex in [3..4]
     // - out of bounds for any other pixelIndex
     uint lb = 0;
-    uint ub = g_commonParams.numSpans;
+    uint ub = g_polyDrawParams.numSpans;
     while (lb != ub) {
         const uint midpoint = (lb + ub) >> 1u;
         const uint value = spanPrefixSums[midpoint];
@@ -437,7 +438,6 @@ struct LineStepper {
     }
 };
 
-
 // ---------------------------------------------------------------------------------------------------------------------
 // Entrypoint
 
@@ -510,6 +510,8 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     // TODO: if SRC==1 && DST==1, use OIT algorithm instead
     // TODO: handle MSB somehow
     // - separate buffer with same InterlockedMax idea
+    //   - can use 16-bit values instead, for just the counter
+    //   - counter of zero = no MSB drawn
     // - output merger applies MSB bit if its sequence number > pixel's sequence number
     const int2 coord = lineStepper.Coord();
     const uint outOffset = coord.y * fbSize.x + coord.x;

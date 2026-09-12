@@ -400,13 +400,15 @@ set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 #   <variant> specifies an optional variant name for the shader
 #   <macro> defines macros for that variant
 set(COMPUTE_SHADER_SOURCES
+    res/shaders/src/vdp/cs_vdp1_output_merger.hlsl
+
     res/shaders/src/vdp/cs_vdp2_compose.hlsl
     res/shaders/src/vdp/cs_vdp2_render_bgs.hlsl
     res/shaders/src/vdp/cs_vdp2_render_sprite.hlsl
 )
 
-# Generate VDP1 shader specializations
-# Naming scheme: <shader_name>_<transparent-mesh>_<textured>_<gouraud>_<half-src>_<half-dst>
+# Generate VDP1 polygon drawing shader specializations
+# Naming scheme: cs_vdp1_polydraw_<transparent-mesh>_<textured>_<gouraud>_<half-src>_<half-dst>
 foreach (_transparent_mesh RANGE 1)
     foreach (_textured RANGE 1)
         foreach (_gouraud RANGE 1)

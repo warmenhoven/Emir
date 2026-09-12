@@ -4,6 +4,7 @@
 // See C++ code for documentation on the fields
 
 struct PolyDrawParams {
+    uint numSpans;
     uint sysClip;
     uint userClip0;
     uint userClip1;
