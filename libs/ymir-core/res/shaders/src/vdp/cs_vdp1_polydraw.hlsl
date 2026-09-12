@@ -323,7 +323,7 @@ struct LineStepper {
 
     int2 aaInc;
 
-    void Create(int2 coord1, int2 coord2, bool antiAlias = false) {
+    void Setup(int2 coord1, int2 coord2, bool antiAlias = false) {
         pos = coord1;
         start = coord1;
 
@@ -407,9 +407,6 @@ struct LineStepper {
         // TODO: mask to 13 bits
 
         accum -= num * stepDelta;
-        // NOTE: if stepDelta is ever negative, this will need adjustments.
-        // Luckily, the AA pixel is always offset by 0 or +1 from the normal pixel, never -1, and since
-        // the normal pixel is rendered before the AA pixel, the accumulator increases monotonically.
         if (den != 0) {
             const int count = (accumTarget - accum + den) / den;
             accum += den * count;
@@ -496,29 +493,46 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     const uint spanStep = id.x - spanPrefixSums[spanIndex] + span.skip;
 
     LineStepper lineStepper;
-    lineStepper.Create(span.coord0, span.coord1, span.antialias);
+    lineStepper.Setup(span.coord0, span.coord1, span.antialias);
     lineStepper.SetStep(spanStep);
-#if POLYSPEC_SHADING_GOURAUD
-    GouraudStepper gouraud;
-    gouraud.Setup(span.length, span.gouraud0, span.gouraud1);
-    gouraud.Skip(spanStep);
+
+    const bool msbOn = BitTest(span.cmdpmod, 15);
+    uint value;
+    if (!msbOn) {
+        uint spriteData;
+#if POLYSPEC_TEXTURED
+        // TODO: fetch texel
+        spriteData = 0xFFFF;
+#else
+        spriteData = BitExtract(span.cmdcolr, 0, pixel8Bits ? 8 : 16);
 #endif
 
-    const int2 coord = lineStepper.Coord();
-    //const uint spriteData = coord.x & 0xFFFF; // TODO: compute
-    const uint spriteData = 0xFFFF; // TODO: compute
-    const uint value = spriteData | (spanIndex << 16u);
+#if POLYSPEC_SHADING_GOURAUD
+        GouraudStepper gouraud;
+        gouraud.Setup(span.length, span.gouraud0, span.gouraud1);
+        gouraud.Skip(spanStep);
+#endif
+
+        value = spriteData | (spanIndex << 16u);
+    }
 
     // TODO: if SRC==1 && DST==1, use OIT algorithm instead
-    // TODO: handle MSB
-    // - separate buffer with same InterlockedMax idea
-    //   - can use 16-bit values instead, for just the counter
-    //   - counter of zero = no MSB drawn
+    const int2 coord = lineStepper.Coord();
     const uint outOffset = coord.y * fbSize.x + coord.x;
-    InterlockedMax(internalSpriteOut[outOffset], value);
+    if (msbOn) {
+        InterlockedMax(internalSpriteMSB[outOffset], spanIndex);
+    } else {
+        const uint outOffset = coord.y * fbSize.x + coord.x;
+        InterlockedMax(internalSpriteOut[outOffset], value);
+    }
+
     if (span.antialias) {
         const int2 aaCoord = lineStepper.AACoord();
         const uint aaOutOffset = coord.y * fbSize.x + coord.x;
-        InterlockedMax(internalSpriteOut[aaOutOffset], value);
+        if (msbOn) {
+            InterlockedMax(internalSpriteMSB[aaOutOffset], spanIndex);
+        } else {
+            InterlockedMax(internalSpriteOut[aaOutOffset], value);
+        }
     }
 }

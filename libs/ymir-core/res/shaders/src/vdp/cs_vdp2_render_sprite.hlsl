@@ -55,13 +55,11 @@ static const uint kVDP1MeshFBOffset = kVDP1FBRAMSize * 2 * 2;
 uint ReadSprite8(uint address) {
     address += kSpriteFBBaseOffset;
     return BitExtract(spriteFB.Load(address & ~3), (address & 3) * 8, 8);
-    return 0;
 }
 
 uint ReadSprite16(uint address) {
     address += kSpriteFBBaseOffset;
-    return ByteSwap16(BitExtract(spriteFB.Load(address & ~3), (address & 2) * 8, 16));
-    return 0;
+    return BitExtract(spriteFB.Load(address & ~3), (address & 2) * 8, 16);
 }
 
 uint ReadMesh8(uint address) {
