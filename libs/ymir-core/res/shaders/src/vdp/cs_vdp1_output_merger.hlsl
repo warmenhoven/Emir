@@ -24,13 +24,115 @@ static const bool dblInterlaceEnable = BitTest(g_commonParams.displayParams, 4);
 static const bool dblInterlaceDrawLine = BitTest(g_commonParams.displayParams, 5);
 static const uint drawFB = BitExtract(g_commonParams.displayParams, 7, 1);
 
+static const uint fbOffset = drawFB * kVDP1FBRAMSize;
+
 static const bool deinterlace = BitTest(g_commonParams.enhancements, 0);
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Mergers
+
+void Merge8(uint2 pos) {
+    const uint inOffset = pos.x * 4 + pos.y * fbSize.x;
+
+    // Read and clear internal outputs
+    const uint out0 = internalSpriteOut[inOffset + 0];
+    const uint out1 = internalSpriteOut[inOffset + 1];
+    const uint out2 = internalSpriteOut[inOffset + 2];
+    const uint out3 = internalSpriteOut[inOffset + 3];
+    const uint msb0 = internalSpriteMSB[inOffset + 0];
+    const uint msb1 = internalSpriteMSB[inOffset + 1];
+    const uint msb2 = internalSpriteMSB[inOffset + 2];
+    const uint msb3 = internalSpriteMSB[inOffset + 3];
+    internalSpriteOut[inOffset + 0] = 0;
+    internalSpriteOut[inOffset + 1] = 0;
+    internalSpriteOut[inOffset + 2] = 0;
+    internalSpriteOut[inOffset + 3] = 0;
+    internalSpriteMSB[inOffset + 0] = 0;
+    internalSpriteMSB[inOffset + 1] = 0;
+    internalSpriteMSB[inOffset + 2] = 0;
+    internalSpriteMSB[inOffset + 3] = 0;
+
+    const uint counter0 = BitExtract(out0, 16, 16);
+    const uint counter1 = BitExtract(out1, 16, 16);
+    const uint counter2 = BitExtract(out2, 16, 16);
+    const uint counter3 = BitExtract(out3, 16, 16);
+    if (counter0 == 0 && counter1 == 0 && counter2 == 0 && counter3 == 0 &&
+        msb0 == 0 && msb1 == 0 && msb2 == 0 && msb3 == 0) {
+        // Nothing written to these pixels
+        return;
+    }
+
+    const uint outOffset = inOffset * 4;
+    uint fbramValue = fbramOut.Load(outOffset + fbOffset);
+    if (counter0 != 0) {
+        fbramValue |= BitExtract(out0, 0, 8);
+    }
+    if (counter1 != 0) {
+        fbramValue |= BitExtract(out1, 0, 8) << 8u;
+    }
+    if (counter2 != 0) {
+        fbramValue |= BitExtract(out2, 0, 8) << 16u;
+    }
+    if (counter3 != 0) {
+        fbramValue |= BitExtract(out3, 0, 8) << 24u;
+    }
+    const uint msb01 = max(msb0, msb1);
+    if (msb01 > 0 && msb01 >= counter0) {
+        fbramValue |= 0x8000;
+    }
+    const uint msb23 = max(msb2, msb3);
+    if (msb23 > 0 && msb23 >= counter2) {
+        fbramValue |= 0x80000000;
+    }
+    fbramOut.Store(outOffset + fbOffset, fbramValue);
+}
+
+void Merge16(uint2 pos) {
+    const uint inOffset = pos.x * 2 + pos.y * fbSize.x;
+
+    // Read and clear internal outputs
+    const uint out0 = internalSpriteOut[inOffset + 0];
+    const uint out1 = internalSpriteOut[inOffset + 1];
+    const uint msb0 = internalSpriteMSB[inOffset + 0];
+    const uint msb1 = internalSpriteMSB[inOffset + 1];
+    internalSpriteOut[inOffset + 0] = 0;
+    internalSpriteOut[inOffset + 1] = 0;
+    internalSpriteMSB[inOffset + 0] = 0;
+    internalSpriteMSB[inOffset + 1] = 0;
+
+    const uint counter0 = BitExtract(out0, 16, 16);
+    const uint counter1 = BitExtract(out1, 16, 16);
+    if (counter0 == 0 && counter1 == 0 && msb0 == 0 && msb1 == 0) {
+        // Nothing written to these pixels
+        return;
+    }
+
+    const uint outOffset = inOffset * 2;
+    uint fbramValue = fbramOut.Load(outOffset + fbOffset);
+    if (counter0 != 0) {
+        fbramValue |= BitExtract(out0, 0, 16);
+    }
+    if (counter1 != 0) {
+        fbramValue |= BitExtract(out1, 0, 16) << 16u;
+    }
+    if (msb0 != 0 && msb0 >= counter0) {
+        fbramValue |= 0x8000;
+    }
+    if (msb0 != 0 && msb1 >= counter1) {
+        fbramValue |= 0x80000000;
+    }
+    fbramOut.Store(outOffset + fbOffset, fbramValue);
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Entrypoint
 
 [numthreads(8, 8, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID) {
-    // TODO: work on 32-bit units at a time
-    // fbramOut.Store(id.x * 4 + id.y * 1024 + drawFB * 262144, drawFB ? 0xBEEFDEAD : 0xDEADBEEF);
+    // Work on 32-bit units at a time
+    if (pixel8Bits) {
+        Merge8(id.xy);
+    } else {
+        Merge16(id.xy);
+    }
 }

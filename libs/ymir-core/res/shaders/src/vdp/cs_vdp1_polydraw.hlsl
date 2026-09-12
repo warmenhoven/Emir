@@ -504,16 +504,16 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     gouraud.Skip(spanStep);
 #endif
 
-    const uint spriteData = id.x; // TODO: compute
+    const int2 coord = lineStepper.Coord();
+    //const uint spriteData = coord.x & 0xFFFF; // TODO: compute
+    const uint spriteData = 0xFFFF; // TODO: compute
     const uint value = spriteData | (spanIndex << 16u);
 
     // TODO: if SRC==1 && DST==1, use OIT algorithm instead
-    // TODO: handle MSB somehow
+    // TODO: handle MSB
     // - separate buffer with same InterlockedMax idea
     //   - can use 16-bit values instead, for just the counter
     //   - counter of zero = no MSB drawn
-    // - output merger applies MSB bit if its sequence number > pixel's sequence number
-    const int2 coord = lineStepper.Coord();
     const uint outOffset = coord.y * fbSize.x + coord.x;
     InterlockedMax(internalSpriteOut[outOffset], value);
     if (span.antialias) {
