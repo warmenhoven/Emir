@@ -151,6 +151,7 @@ add_library(ymir-core
     include/ymir/media/cd_interface.hpp
     include/ymir/media/cd_utils.hpp
     include/ymir/media/disc.hpp
+    include/ymir/media/file_access.hpp
     include/ymir/media/filesystem.hpp
     include/ymir/media/frame_address.hpp
     include/ymir/media/host_cd.hpp
@@ -302,6 +303,7 @@ add_library(ymir-core
     src/ymir/media/cd_defs.cpp
     src/ymir/media/cd_interface.cpp
     src/ymir/media/cd_utils.cpp
+    src/ymir/media/file_access.cpp
     src/ymir/media/filesystem.cpp
     src/ymir/media/media_defs.cpp
     src/ymir/media/saturn_header.cpp

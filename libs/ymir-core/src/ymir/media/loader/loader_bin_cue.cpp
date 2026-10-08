@@ -1,6 +1,7 @@
 #include <ymir/media/loader/loader_bin_cue.hpp>
 
 #include <ymir/media/binary_reader/binary_reader_impl.hpp>
+#include <ymir/media/file_access.hpp>
 #include <ymir/media/frame_address.hpp>
 
 #include <ymir/util/scope_guard.hpp>
@@ -92,7 +93,7 @@ struct CueSheet {
 };
 
 static std::optional<CueSheet> LoadSheet(std::filesystem::path cuePath, CbLoaderMessage cbMsg) {
-    std::ifstream in{cuePath, std::ios::binary};
+    io::ifstream in{cuePath, std::ios::binary};
 
     auto invFmtMsg = [&](std::string message) { cbMsg(MessageType::InvalidFormat, message); };
     auto errorMsg = [&](std::string message) { cbMsg(MessageType::Error, message); };
@@ -202,11 +203,11 @@ static std::optional<CueSheet> LoadSheet(std::filesystem::path cuePath, CbLoader
             } else {
                 binPath = cuePath.parent_path() / filePath;
             }
-            if (!std::filesystem::is_regular_file(binPath)) {
+            if (!io::is_regular_file(binPath)) {
                 errorMsg(fmt::format("BIN/CUE: File not found: {} (line {})", binPath, lineNum));
                 return std::nullopt;
             }
-            const uintmax_t size = std::filesystem::file_size(binPath);
+            const uintmax_t size = io::file_size(binPath);
 
             debugMsg(fmt::format("BIN/CUE: File {} - {} bytes", filename, size));
 
@@ -373,7 +374,7 @@ bool Load(std::filesystem::path cuePath, Disc &disc, bool preloadToRAM, CbLoader
             if (preloadToRAM) {
                 reader = std::make_shared<MemoryBinaryReader>(file.path, err);
             } else {
-                reader = std::make_shared<MemoryMappedBinaryReader>(file.path, err);
+                reader = std::make_shared<io::FileReader>(file.path, err);
             }
             if (err) {
                 errorMsg(fmt::format("BIN/CUE: Failed to load {} - {}", file.path, err.message()));
@@ -392,7 +393,7 @@ bool Load(std::filesystem::path cuePath, Disc &disc, bool preloadToRAM, CbLoader
                     if (preloadToRAM) {
                         fileReader = std::make_shared<MemoryBinaryReader>(file.path, err);
                     } else {
-                        fileReader = std::make_shared<MemoryMappedBinaryReader>(file.path, err);
+                        fileReader = std::make_shared<io::FileReader>(file.path, err);
                     }
                 };
 
@@ -410,8 +411,9 @@ bool Load(std::filesystem::path cuePath, Disc &disc, bool preloadToRAM, CbLoader
                         // Read in and decode the MP3 data into raw PCM format
                         drmp3_config mp3Config{};
                         drmp3_uint64 mp3FrameCount = 0;
-                        drmp3_int16 *tempBuffer = drmp3_open_file_and_read_pcm_frames_s16(
-                            file.path.string().c_str(), &mp3Config, &mp3FrameCount, nullptr);
+                        const auto mp3Data = io::ReadFile(file.path);
+                        drmp3_int16 *tempBuffer = drmp3_open_memory_and_read_pcm_frames_s16(
+                            mp3Data.data(), mp3Data.size(), &mp3Config, &mp3FrameCount, nullptr);
                         if (tempBuffer == nullptr) {
                             errorMsg(fmt::format("BIN/CUE: Failed to load {}", file.path));
                             return false;
@@ -427,8 +429,9 @@ bool Load(std::filesystem::path cuePath, Disc &disc, bool preloadToRAM, CbLoader
                         int oggNumChannels;
                         int oggSampleRate;
                         short *tempBuffer = nullptr;
-                        int oggFrameCount = stb_vorbis_decode_filename(file.path.string().c_str(), &oggNumChannels,
-                                                                       &oggSampleRate, &tempBuffer);
+                        const auto oggData = io::ReadFile(file.path);
+                        int oggFrameCount = stb_vorbis_decode_memory(oggData.data(), static_cast<int>(oggData.size()),
+                                                                     &oggNumChannels, &oggSampleRate, &tempBuffer);
                         if (oggFrameCount == -1) {
                             errorMsg(fmt::format("BIN/CUE: Failed to load {}", file.path));
                             return false;

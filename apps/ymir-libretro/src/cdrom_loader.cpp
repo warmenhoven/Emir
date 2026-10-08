@@ -1,6 +1,7 @@
 #include "cdrom_loader.hpp"
 
 #include "libretro.h"
+#include "vfs.hpp"
 
 #include <ymir/media/binary_reader/binary_reader.hpp>
 #include <ymir/media/frame_address.hpp>
@@ -20,53 +21,6 @@
 namespace ymir_libretro {
 
 namespace {
-
-// IBinaryReader backed by a single RetroArch VFS file handle (one per track .bin).
-// The frontend VFS translates every byte offset on a "cdrom://...bin" path to a
-// real disc LBA, so reads land on the correct physical sectors automatically.
-class VfsBinaryReader final : public ymir::media::IBinaryReader {
-public:
-    VfsBinaryReader(const retro_vfs_interface *vfs, struct retro_vfs_file_handle *handle, uintmax_t size)
-        : m_vfs(vfs)
-        , m_handle(handle)
-        , m_size(size) {}
-
-    ~VfsBinaryReader() {
-        if (m_handle != nullptr) {
-            m_vfs->close(m_handle);
-        }
-    }
-
-    VfsBinaryReader(const VfsBinaryReader &) = delete;
-    VfsBinaryReader &operator=(const VfsBinaryReader &) = delete;
-
-    uintmax_t Size() const final {
-        return m_size;
-    }
-
-    // Mirrors FileBinaryReader::Read semantics: reads up to size bytes at offset,
-    // clamped to the file size and output buffer, returning the bytes actually read.
-    uintmax_t Read(uintmax_t offset, uintmax_t size, std::span<uint8> output) const final {
-        if (m_handle == nullptr || offset >= m_size) {
-            return 0;
-        }
-        size = std::min(size, m_size - offset);
-        size = std::min<uintmax_t>(size, output.size());
-        if (size == 0) {
-            return 0;
-        }
-        if (m_vfs->seek(m_handle, static_cast<int64_t>(offset), RETRO_VFS_SEEK_POSITION_START) < 0) {
-            return 0;
-        }
-        const int64_t got = m_vfs->read(m_handle, output.data(), size);
-        return got < 0 ? 0 : static_cast<uintmax_t>(got);
-    }
-
-private:
-    const retro_vfs_interface *m_vfs;
-    struct retro_vfs_file_handle *m_handle;
-    uintmax_t m_size;
-};
 
 struct ParsedIndex {
     uint32 number;
@@ -254,7 +208,8 @@ bool LoadCDROMDisc(const retro_vfs_interface *vfs, const std::string &cuePath, y
         track.startFrameAddress = fad;
         track.index01FrameAddress = fad;
         track.endFrameAddress = fad + sectors - 1;
-        track.binaryReader = std::make_unique<VfsBinaryReader>(vfs, binHandle, static_cast<uintmax_t>(binSize));
+        track.binaryReader =
+            std::make_unique<ymir_libretro::vfs::VfsBinaryReader>(vfs, binHandle, static_cast<uintmax_t>(binSize));
 
         // indices[0] = dummy INDEX 00; indices[1] = INDEX 01 spanning the whole track.
         track.indices.clear();

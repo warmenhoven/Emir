@@ -1,6 +1,7 @@
 #include <ymir/media/loader/loader_img_ccd_sub.hpp>
 
 #include <ymir/media/binary_reader/binary_reader_impl.hpp>
+#include <ymir/media/file_access.hpp>
 #include <ymir/media/frame_address.hpp>
 
 #include <ymir/util/scope_guard.hpp>
@@ -47,7 +48,7 @@ const std::set<std::string, CaseInsensitiveStringCompare> kValidSectionNames = {
                                                                                 "Session", "Entry", "TRACK"};
 
 bool Load(std::filesystem::path ccdPath, Disc &disc, bool preloadToRAM, CbLoaderMessage cbMsg) {
-    std::ifstream in{ccdPath, std::ios::binary};
+    io::ifstream in{ccdPath, std::ios::binary};
 
     util::ScopeGuard sgInvalidateDisc{[&] { disc.Invalidate(); }};
 
@@ -242,7 +243,7 @@ bool Load(std::filesystem::path ccdPath, Disc &disc, bool preloadToRAM, CbLoader
     if (preloadToRAM) {
         imgFile = std::make_shared<MemoryBinaryReader>(imgPath, err);
     } else {
-        imgFile = std::make_shared<MemoryMappedBinaryReader>(imgPath, err);
+        imgFile = std::make_shared<io::FileReader>(imgPath, err);
     }
     if (err) {
         errorMsg(fmt::format("IMG/CCD: Failed to load image file {}: {}", imgPath, err.message()));

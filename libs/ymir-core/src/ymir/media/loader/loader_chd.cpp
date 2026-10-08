@@ -1,6 +1,7 @@
 #include <ymir/media/loader/loader_chd.hpp>
 
 #include <ymir/media/binary_reader/binary_reader_subview.hpp>
+#include <ymir/media/file_access.hpp>
 #include <ymir/media/frame_address.hpp>
 
 #include <ymir/core/types.hpp>
@@ -186,7 +187,7 @@ bool Load(std::filesystem::path chdPath, Disc &disc, bool preloadToRAM, CbLoader
 
     chd_file *file = nullptr;
     try {
-        chd_error error = chd_open(chdPath.string().c_str(), CHD_OPEN_READ, nullptr, &file);
+        chd_error error = io::chd_open(chdPath, CHD_OPEN_READ, nullptr, &file);
         if (error != CHDERR_NONE) {
             if (error == CHDERR_INVALID_DATA) {
                 invFmtMsg(fmt::format("CHD: Failed to open file: {}", chd_error_string(error)));

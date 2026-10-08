@@ -1,5 +1,6 @@
 #include <ymir/media/loader/loader.hpp>
 
+#include <ymir/media/file_access.hpp>
 #include <ymir/media/loader/loader_bin_cue.hpp>
 #include <ymir/media/loader/loader_chd.hpp>
 #include <ymir/media/loader/loader_img_ccd_sub.hpp>
@@ -10,7 +11,7 @@ namespace ymir::media {
 
 bool LoadDisc(std::filesystem::path path, Disc &disc, bool preloadToRAM, CbLoaderMessage cbMsg) {
     // Sanity check: check that the file exists
-    if (!std::filesystem::is_regular_file(path)) {
+    if (!io::is_regular_file(path)) {
         cbMsg(MessageType::Error, "File not found");
         disc.Invalidate();
         return false;

@@ -1,6 +1,7 @@
 #include <ymir/media/loader/loader_iso.hpp>
 
 #include <ymir/media/binary_reader/binary_reader_impl.hpp>
+#include <ymir/media/file_access.hpp>
 
 #include <ymir/util/scope_guard.hpp>
 
@@ -31,7 +32,7 @@ bool Load(std::filesystem::path isoPath, Disc &disc, bool preloadToRAM, CbLoader
         return false;
     }
 
-    std::ifstream in{isoPath, std::ios::binary};
+    io::ifstream in{isoPath, std::ios::binary};
     if (!in) {
         errorMsg("ISO: Could not load ISO file");
         return false;
@@ -61,7 +62,7 @@ bool Load(std::filesystem::path isoPath, Disc &disc, bool preloadToRAM, CbLoader
     debugMsg(fmt::format("ISO: Sector size: {} bytes", sectorSize));
 
     // Sanity check: ensure file contains an exact multiple of the sector size
-    const uintmax_t fileSize = std::filesystem::file_size(isoPath);
+    const uintmax_t fileSize = io::file_size(isoPath);
     if (fileSize % sectorSize != 0) {
         invFmtMsg("ISO: Not a valid ISO file");
         return false;
@@ -94,7 +95,7 @@ bool Load(std::filesystem::path isoPath, Disc &disc, bool preloadToRAM, CbLoader
     if (preloadToRAM) {
         track.binaryReader = std::make_unique<MemoryBinaryReader>(isoPath, err);
     } else {
-        track.binaryReader = std::make_unique<MemoryMappedBinaryReader>(isoPath, err);
+        track.binaryReader = std::make_unique<io::FileReader>(isoPath, err);
     }
     if (err) {
         errorMsg(fmt::format("ISO: Could not create file reader: {}", err.message()));
