@@ -2,10 +2,12 @@
 
 #include "cmdline_opts.hpp"
 
+#include "imgui_data.hpp"
 #include "settings.hpp"
 #include "shared_context.hpp"
 
 #include "services/disc_service.hpp"
+#include "services/discord_rpc_service.hpp"
 #include "services/display_service.hpp"
 #include "services/file_dialog_service.hpp"
 #include "services/graphics_service.hpp"
@@ -35,6 +37,7 @@ public:
 private:
     CommandLineOptions m_options;
 
+    YmirImGuiData m_imguiData;
     SharedContext m_context;
     services::GraphicsService m_graphicsService;
     services::SaveStateService m_saveStateService;
@@ -42,6 +45,7 @@ private:
     services::ScreenshotService m_screenshotService;
     services::UpdateCheckerService m_updateCheckerService;
     Settings m_settings;
+    services::DiscordRPCService m_discordRPCService;
     services::MouseCaptureService m_mouseCaptureService;
     services::ROMService m_romService;
     services::DiscService m_discService;
@@ -58,6 +62,8 @@ private:
 
     void RunEmulator();
 
+    void StartEmulatorThread();
+    void StopEmulatorThread();
     void EmulatorThread();
 
     void EnableRewindBuffer(bool enable);

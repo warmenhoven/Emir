@@ -12,6 +12,8 @@
 #include <app/ui/widgets/common_widgets.hpp>
 #include <app/ui/widgets/debug_widgets.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
 
 #include <cstdint>
@@ -27,9 +29,11 @@ SH2DebugToolbarView::SH2DebugToolbarView(SharedContext &context, sh2::SH2 &sh2, 
     , m_disasmDumpView(context, sh2) {}
 
 void SH2DebugToolbarView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     ImGui::BeginGroup();
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
     const float framePadding = ImGui::GetStyle().FramePadding.x;
@@ -138,7 +142,7 @@ void SH2DebugToolbarView::Display() {
     if (ImGui::Checkbox("Suspended", &suspended)) {
         m_sh2.SetCPUSuspended(suspended);
     }
-    widgets::ExplanationTooltip("Disables the CPU while in debug mode.", m_context.displayScale);
+    widgets::ExplanationTooltip("Disables the CPU while in debug mode.");
     if (!debugTracing) {
         ImGui::EndDisabled();
     }
@@ -147,8 +151,7 @@ void SH2DebugToolbarView::Display() {
     if (ImGui::Checkbox("Asleep", &asleep)) {
         probe.SetSleepState(asleep);
     }
-    widgets::ExplanationTooltip("Whether the CPU is in standby or sleep mode due to executing the SLEEP instruction.",
-                                m_context.displayScale);
+    widgets::ExplanationTooltip("Whether the CPU is in standby or sleep mode due to executing the SLEEP instruction.");
 
     auto doJump = [&] {
         // Align to even addresses
@@ -178,7 +181,7 @@ void SH2DebugToolbarView::Display() {
     }
 
     ImGui::SameLine();
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     ImGui::SetNextItemWidth(regFieldWidth);
     ImGui::InputScalar("##goto_address", ImGuiDataType_U32, &m_model.jumpAddress, nullptr, nullptr, "%08X",
                        ImGuiInputTextFlags_CharsHexadecimal);
@@ -197,8 +200,7 @@ void SH2DebugToolbarView::Display() {
 
     ImGui::SameLine();
     ImGui::Checkbox("on events", &m_model.followPCOnEvents);
-    widgets::ExplanationTooltip("Causes the cursor to jump to PC when breakpoints and watchpoints are hit.",
-                                m_context.displayScale);
+    widgets::ExplanationTooltip("Causes the cursor to jump to PC when breakpoints and watchpoints are hit.");
 
     ImGui::EndGroup();
 }

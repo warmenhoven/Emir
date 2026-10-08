@@ -2,15 +2,17 @@
 
 #include <ymir/hw/scu/scu.hpp>
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
-SCUInterruptsView::SCUInterruptsView(SharedContext &context)
-    : m_context(context)
-    , m_scu(context.saturn.GetSCU()) {}
+SCUInterruptsView::SCUInterruptsView(ymir::scu::SCU &scu)
+    : m_scu(scu) {}
 
 void SCUInterruptsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     if (ImGui::BeginTable("main", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
-        ImGui::TableSetupColumn("##left", ImGuiTableColumnFlags_WidthFixed, 280 * m_context.displayScale);
+        ImGui::TableSetupColumn("##left", ImGuiTableColumnFlags_WidthFixed, 280 * imguiData->displayScale);
         ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableNextRow();
 
@@ -46,13 +48,14 @@ void SCUInterruptsView::Display() {
 }
 
 void SCUInterruptsView::DisplayInternalInterrupts() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &probe = m_scu.GetProbe();
     auto &intrStatus = probe.GetInterruptStatus();
     auto &intrMask = probe.GetInterruptMask();
 
     ImGui::Separator();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
     ImGui::TextUnformatted("Internal");
     ImGui::PopFont();
 
@@ -89,12 +92,12 @@ void SCUInterruptsView::DisplayInternalInterrupts() {
                 ImGui::TextUnformatted(name.data());
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%X", vector);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%X", level);
                 ImGui::PopFont();
             }
@@ -137,12 +140,12 @@ void SCUInterruptsView::DisplayInternalInterrupts() {
             ImGui::TextUnformatted("External interrupts");
         }
         if (ImGui::TableNextColumn()) {
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             ImGui::TextUnformatted("--");
             ImGui::PopFont();
         }
         if (ImGui::TableNextColumn()) {
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             ImGui::TextUnformatted("-");
             ImGui::PopFont();
         }
@@ -152,7 +155,8 @@ void SCUInterruptsView::DisplayInternalInterrupts() {
 }
 
 void SCUInterruptsView::DisplayExternalInterrupts() {
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
     ImGui::TextUnformatted("External (A-Bus)");
     ImGui::PopFont();
 
@@ -187,17 +191,17 @@ void SCUInterruptsView::DisplayExternalInterrupts() {
                 }
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%X", i);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%X", 0x50 + i);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%X", (i < 4) ? 7 : (i < 8) ? 4 : 1);
                 ImGui::PopFont();
             }

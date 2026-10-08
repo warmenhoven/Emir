@@ -1,18 +1,21 @@
 #include "sh2_dmac_trace_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 SH2DMAControllerTraceWindow::SH2DMAControllerTraceWindow(SharedContext &context, bool master)
     : SH2WindowBase(context, master)
-    , m_dmac0TraceView(context, 0, m_tracer)
-    , m_dmac1TraceView(context, 1, m_tracer) {
+    , m_dmac0TraceView(0, m_tracer)
+    , m_dmac1TraceView(1, m_tracer) {
 
     m_windowConfig.name = fmt::format("{}SH2 DMA controller trace", master ? 'M' : 'S');
 }
 
 void SH2DMAControllerTraceWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(900 * m_context.displayScale, 279 * m_context.displayScale),
-                                        ImVec2(1121 * m_context.displayScale, FLT_MAX));
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(900 * imguiData->displayScale, 279 * imguiData->displayScale),
+                                        ImVec2(1121 * imguiData->displayScale, FLT_MAX));
 }
 
 void SH2DMAControllerTraceWindow::DrawContents() {

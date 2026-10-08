@@ -6,9 +6,9 @@ namespace app::ui {
 
 SCURegistersWindow::SCURegistersWindow(SharedContext &context)
     : WindowBase(context)
-    , m_regsView(context)
-    , m_intrView(context)
-    , m_timersView(context) {
+    , m_regsView(context.saturn.GetSCU())
+    , m_intrView(context.saturn.GetSCU())
+    , m_timersView(context.saturn.GetSCU()) {
 
     m_windowConfig.name = "SCU registers";
     m_windowConfig.flags = ImGuiWindowFlags_AlwaysAutoResize;

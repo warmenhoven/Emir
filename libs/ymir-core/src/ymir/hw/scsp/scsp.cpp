@@ -151,7 +151,7 @@ void SCSP::MapMemoryDirect(sys::SH2Bus &bus) {
 void SCSP::MapMemoryThreaded(sys::SH2Bus &bus) {
     static constexpr auto cast = [](void *ctx) -> SCSP & { return *static_cast<SCSP *>(ctx); };
 
-    bus.MapBoth(
+    bus.MapNormal(
         0x5A0'0000, 0x5A7'FFFF, this,
         [](uint32 address, void *ctx) -> uint8 { return cast(ctx).ReadWRAMThreaded<uint8>(address); },
         [](uint32 address, void *ctx) -> uint16 { return cast(ctx).ReadWRAMThreaded<uint16>(address); },
@@ -159,7 +159,18 @@ void SCSP::MapMemoryThreaded(sys::SH2Bus &bus) {
             uint32 value = cast(ctx).ReadWRAMThreaded<uint16>(address + 0) << 16u;
             value |= cast(ctx).ReadWRAMThreaded<uint16>(address + 2) << 0u;
             return value;
-        },
+        });
+    bus.MapSideEffectFree(
+        0x5A0'0000, 0x5A7'FFFF, this,
+        [](uint32 address, void *ctx) -> uint8 { return cast(ctx).ReadWRAM<uint8>(address); },
+        [](uint32 address, void *ctx) -> uint16 { return cast(ctx).ReadWRAM<uint16>(address); },
+        [](uint32 address, void *ctx) -> uint32 {
+            uint32 value = cast(ctx).ReadWRAM<uint16>(address + 0) << 16u;
+            value |= cast(ctx).ReadWRAM<uint16>(address + 2) << 0u;
+            return value;
+        });
+    bus.MapBoth(
+        0x5A0'0000, 0x5A7'FFFF, this,
         [](uint32 address, uint8 value, void *ctx) { cast(ctx).WriteWRAMThreaded<uint8>(address, value); },
         [](uint32 address, uint16 value, void *ctx) { cast(ctx).WriteWRAMThreaded<uint16>(address, value); },
         [](uint32 address, uint32 value, void *ctx) {

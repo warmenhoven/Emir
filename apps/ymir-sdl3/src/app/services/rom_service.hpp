@@ -2,6 +2,7 @@
 
 #include <app/settings.hpp>
 #include <app/shared_context.hpp>
+
 #include <util/rom_loader.hpp>
 
 #include <filesystem>

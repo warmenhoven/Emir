@@ -13,11 +13,13 @@
     # so non-x86_64 jobs don't pick up x86-only flags.
     CORE_ARCH_ARGS: ""
     # Ymir_ENABLE_LIBRETRO forces Ymir_LIBRARY_ONLY, which already excludes the
-    # apps, tests and app-only vendored deps, so no further -DYmir_ENABLE_*=OFF
-    # flags are needed here.
+    # apps, tests and app-only vendored deps. Ymir_ENABLE_GPU_API=OFF drops the
+    # hardware renderers and their shader toolchain (DXC, spirv-cross, WIL),
+    # none of which the CI images provide.
     CORE_ARGS: >-
       -DYmir_ENABLE_LIBRETRO=ON
       -DYmir_DEV_BUILD=OFF
+      -DYmir_ENABLE_GPU_API=OFF
       $CORE_ARCH_ARGS
     GIT_SUBMODULE_STRATEGY: recursive
 

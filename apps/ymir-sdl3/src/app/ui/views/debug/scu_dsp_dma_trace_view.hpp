@@ -1,19 +1,16 @@
 #pragma once
 
-#include <app/shared_context.hpp>
-
 #include <app/debug/scu_tracer.hpp>
 
 namespace app::ui {
 
 class SCUDSPDMATraceView {
 public:
-    SCUDSPDMATraceView(SharedContext &context);
+    SCUDSPDMATraceView(SCUTracer &tracer);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     SCUTracer &m_tracer;
 };
 

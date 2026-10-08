@@ -2,6 +2,8 @@
 
 #include <ymir/hw/sh2/sh2.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <app/ui/widgets/common_widgets.hpp>
 
 using namespace ymir;
@@ -13,16 +15,17 @@ SH2PowerView::SH2PowerView(SharedContext &context, ymir::sh2::SH2 &sh2)
     , m_sh2(sh2) {}
 
 void SH2PowerView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &probe = m_sh2.GetProbe();
     auto &sbycr = probe.SBYCR();
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
     ImGui::BeginGroup();
     ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     ImGui::InputScalar("##sbycr", ImGuiDataType_U8, &sbycr.u8, nullptr, nullptr, "%02X",
                        ImGuiInputTextFlags_CharsHexadecimal);
     ImGui::PopFont();
@@ -38,31 +41,31 @@ void SH2PowerView::Display() {
     if (ImGui::Checkbox("Halt and reset SCI", &value)) {
         sbycr.MSTP0 = value;
     }
-    widgets::ExplanationTooltip("Serial Communication Interface", m_context.displayScale);
+    widgets::ExplanationTooltip("Serial Communication Interface");
 
     value = sbycr.MSTP1;
     if (ImGui::Checkbox("Halt and reset FRT", &value)) {
         sbycr.MSTP1 = value;
     }
-    widgets::ExplanationTooltip("Free-running timer", m_context.displayScale);
+    widgets::ExplanationTooltip("Free-running timer");
 
     value = sbycr.MSTP2;
     if (ImGui::Checkbox("Halt and reset DIVU", &value)) {
         sbycr.MSTP2 = value;
     }
-    widgets::ExplanationTooltip("Division unit", m_context.displayScale);
+    widgets::ExplanationTooltip("Division unit");
 
     value = sbycr.MSTP3;
     if (ImGui::Checkbox("Halt and reset MULT", &value)) {
         sbycr.MSTP3 = value;
     }
-    widgets::ExplanationTooltip("Multiplication unit", m_context.displayScale);
+    widgets::ExplanationTooltip("Multiplication unit");
 
     value = sbycr.MSTP4;
     if (ImGui::Checkbox("Halt and reset DMAC", &value)) {
         sbycr.MSTP4 = value;
     }
-    widgets::ExplanationTooltip("DMA controller", m_context.displayScale);
+    widgets::ExplanationTooltip("DMA controller");
 
     value = sbycr.HIZ;
     if (ImGui::Checkbox("Port high impedance", &value)) {
@@ -97,7 +100,7 @@ void SH2PowerView::Display() {
     if (ImGui::Checkbox("Suspended", &suspended)) {
         m_sh2.SetCPUSuspended(suspended);
     }
-    widgets::ExplanationTooltip("Disables the CPU while in debug mode.", m_context.displayScale);
+    widgets::ExplanationTooltip("Disables the CPU while in debug mode.");
     if (!m_context.saturn.IsDebugTracingEnabled()) {
         ImGui::EndDisabled();
     }
@@ -106,8 +109,7 @@ void SH2PowerView::Display() {
     if (ImGui::Checkbox("Asleep", &asleep)) {
         probe.SetSleepState(asleep);
     }
-    widgets::ExplanationTooltip("Whether the CPU is in standby or sleep mode due to executing the SLEEP instruction.",
-                                m_context.displayScale);
+    widgets::ExplanationTooltip("Whether the CPU is in standby or sleep mode due to executing the SLEEP instruction.");
 }
 
 } // namespace app::ui

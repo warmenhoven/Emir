@@ -8,7 +8,7 @@
 #include <ymir/sys/saturn.hpp>
 
 #include <ymir/util/dev_log.hpp>
-#include <ymir/util/inline.hpp>
+#include <ymir/util/fmt_ratio.hpp>
 
 #include <util/math.hpp>
 
@@ -36,10 +36,12 @@ concept arithmetic_type = std::integral<T> || std::floating_point<T>;
 // - Removed "Video.IncludeVDP1InRenderThread"
 // - Renamed "Video.ThreadedVDP" to "Video.ThreadedVDP2"
 // - Moved "Input.Gamepad*" to "Input.Gamepad.*"
-// v4:
+// v5:
 // - Moved "Video.ThreadedVDP1", "Video.ThreadedVD2" and "Video.ThreadedDeinterlacer" to "Video.SoftwareRenderer.*"
 // - Moved "Video.Deinterlace" and "Video.TransparentMeshes" to "Video.Enhancements.*"
-inline constexpr int kConfigVersion = 5;
+// v6:
+// - Changed "Video.ForcedAspect" from a double to a Ratio
+inline constexpr int kConfigVersion = 6;
 
 namespace grp {
 
@@ -61,7 +63,7 @@ namespace grp {
 // -------------------------------------------------------------------------------------------------
 // Enum parsers
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, db::SystemVariant &value) {
+static void Parse(toml::node_view<toml::node> &node, db::SystemVariant &value) {
     value = db::SystemVariant::Saturn;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "Saturn"s) {
@@ -74,7 +76,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, db::SystemVari
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, core::config::sys::Region &value) {
+static void Parse(toml::node_view<toml::node> &node, core::config::sys::Region &value) {
     value = core::config::sys::Region::Japan;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "Japan"s) {
@@ -97,7 +99,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, core::config::
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, core::config::sys::VideoStandard &value) {
+static void Parse(toml::node_view<toml::node> &node, core::config::sys::VideoStandard &value) {
     value = core::config::sys::VideoStandard::NTSC;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "NTSC"s) {
@@ -108,7 +110,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, core::config::
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, core::config::rtc::Mode &value) {
+static void Parse(toml::node_view<toml::node> &node, core::config::rtc::Mode &value) {
     value = core::config::rtc::Mode::Host;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "Host"s) {
@@ -119,7 +121,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, core::config::
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, core::config::rtc::HardResetStrategy &value) {
+static void Parse(toml::node_view<toml::node> &node, core::config::rtc::HardResetStrategy &value) {
     value = core::config::rtc::HardResetStrategy::Preserve;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "PreserveCurrentTime"s) {
@@ -132,7 +134,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, core::config::
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, peripheral::PeripheralType &value) {
+static void Parse(toml::node_view<toml::node> &node, peripheral::PeripheralType &value) {
     value = peripheral::PeripheralType::None;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "None"s) {
@@ -155,7 +157,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, peripheral::Pe
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, core::config::audio::SampleInterpolationMode &value) {
+static void Parse(toml::node_view<toml::node> &node, core::config::audio::SampleInterpolationMode &value) {
     value = core::config::audio::SampleInterpolationMode::NearestNeighbor;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "Nearest"s) {
@@ -166,7 +168,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, core::config::
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Input::Mouse::CaptureMode &value) {
+static void Parse(toml::node_view<toml::node> &node, Settings::Input::Mouse::CaptureMode &value) {
     value = Settings::Input::Mouse::CaptureMode::SystemCursor;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "SystemCursor"s) {
@@ -177,7 +179,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Inpu
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::GUI::FrameRateOSDPosition &value) {
+static void Parse(toml::node_view<toml::node> &node, Settings::GUI::FrameRateOSDPosition &value) {
     value = Settings::GUI::FrameRateOSDPosition::TopRight;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "TopLeft"s) {
@@ -192,36 +194,39 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::GUI:
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, gfx::Backend &value) {
-    value = gfx::Backend::Default;
+static void Parse(toml::node_view<toml::node> &node, gfx::Backend &value) {
+    value = gfx::kDefaultBackend;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "Default"s) {
-            value = gfx::Backend::Default;
-        } else if (*opt == "Default"s) {
-            value = gfx::Backend::Default;
-#ifdef YMIR_PLATFORM_HAS_DIRECT3D
+            value = gfx::kDefaultBackend;
+#if YMIR_PLATFORM_HAS_DIRECT3D
         } else if (*opt == "Direct3D11"s) {
             value = gfx::Backend::Direct3D11;
         } else if (*opt == "Direct3D12"s) {
             value = gfx::Backend::Direct3D12;
 #endif
-#ifdef YMIR_PLATFORM_HAS_METAL
+#if YMIR_PLATFORM_HAS_METAL
         } else if (*opt == "Metal"s) {
             value = gfx::Backend::Metal;
 #endif
-#ifdef YMIR_PLATFORM_HAS_VULKAN
+#if YMIR_PLATFORM_HAS_VULKAN
         } else if (*opt == "Vulkan"s) {
             value = gfx::Backend::Vulkan;
 #endif
-#ifdef YMIR_PLATFORM_HAS_OPENGL
-        } else if (*opt == "OpenGL"s) {
-            value = gfx::Backend::OpenGL;
-#endif
+        } else if (*opt == "SDLRenderer"s) {
+            value = gfx::Backend::SDLRenderer;
         }
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Video::DisplayRotation &value) {
+static void Parse(toml::node_view<toml::node> &node, std::optional<gfx::AdapterID> &value) {
+    value = std::nullopt;
+    if (auto opt = node.value<std::string>()) {
+        value = gfx::AdapterID::TryParse(*opt);
+    }
+}
+
+static void Parse(toml::node_view<toml::node> &node, Settings::Video::DisplayRotation &value) {
     value = Settings::Video::DisplayRotation::Normal;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "Normal"s) {
@@ -233,6 +238,50 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Vide
         } else if (*opt == "90CCW"s) {
             value = Settings::Video::DisplayRotation::_90CCW;
         }
+    }
+}
+
+static void Parse(toml::node_view<toml::node> &node, Ratio &value) {
+    if (auto opt = node.value<std::string_view>()) {
+        std::string_view sv = *opt;
+        auto skipSpaces = [&] {
+            while (!sv.empty() && (sv.front() == ' ' || sv.front() == '\t')) {
+                sv.remove_prefix(1);
+            }
+        };
+        auto readU32 = [&](uint32 &outValue) {
+            const auto [ptr, error] = std::from_chars(sv.data(), sv.data() + sv.size(), outValue);
+            if (error != std::errc{}) {
+                // No digits, a sign, or overflow
+                return false;
+            }
+            sv.remove_prefix(static_cast<size_t>(ptr - sv.data()));
+            return true;
+        };
+
+        uint32 num, den;
+        skipSpaces();
+        if (!readU32(num)) {
+            return;
+        }
+        skipSpaces();
+        if (sv.empty() || (sv.front() != ':' && sv.front() != '/')) {
+            return;
+        }
+        sv.remove_prefix(1);
+        skipSpaces();
+        if (!readU32(den)) {
+            return;
+        }
+        skipSpaces();
+        if (!sv.empty() || num == 0 || den == 0) {
+            // Trailing garbage or degenerate ratio
+            return;
+        }
+
+        value = Ratio{num, den};
+    } else if (auto opt = node.value<double>()) {
+        value = Ratio::FromDouble(*opt);
     }
 }
 
@@ -304,7 +353,7 @@ static const std::unordered_map<std::string_view, SDL_PixelFormat> kPixelFormats
     {"MJPG", SDL_PIXELFORMAT_MJPG},
 };
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, SDL_PixelFormat &value) {
+static void Parse(toml::node_view<toml::node> &node, SDL_PixelFormat &value) {
     value = SDL_PIXELFORMAT_UNKNOWN;
     if (auto opt = node.value<std::string>()) {
         if (kPixelFormats.contains(*opt)) {
@@ -313,7 +362,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, SDL_PixelForma
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Audio::MidiPort::Type &value) {
+static void Parse(toml::node_view<toml::node> &node, Settings::Audio::MidiPort::Type &value) {
     value = Settings::Audio::MidiPort::Type::None;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "None"s) {
@@ -326,7 +375,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Audi
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Cartridge::Type &value) {
+static void Parse(toml::node_view<toml::node> &node, Settings::Cartridge::Type &value) {
     value = Settings::Cartridge::Type::None;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "None"s) {
@@ -341,7 +390,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Cart
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Cartridge::BackupRAM::Capacity &value) {
+static void Parse(toml::node_view<toml::node> &node, Settings::Cartridge::BackupRAM::Capacity &value) {
     value = Settings::Cartridge::BackupRAM::Capacity::_32Mbit;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "32Mbit"s) {
@@ -356,7 +405,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Cart
     }
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Cartridge::DRAM::Capacity &value) {
+static void Parse(toml::node_view<toml::node> &node, Settings::Cartridge::DRAM::Capacity &value) {
     value = Settings::Cartridge::DRAM::Capacity::_32Mbit;
     if (auto opt = node.value<std::string>()) {
         if (*opt == "48Mbit"s) {
@@ -372,7 +421,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, Settings::Cart
 // -------------------------------------------------------------------------------------------------
 // Enum-to-string converters
 
-FORCE_INLINE static const char *ToTOML(const db::SystemVariant value) {
+static const char *ToTOML(const db::SystemVariant value) {
     switch (value) {
     default: [[fallthrough]];
     case db::SystemVariant::Saturn: return "Saturn";
@@ -381,7 +430,7 @@ FORCE_INLINE static const char *ToTOML(const db::SystemVariant value) {
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const core::config::sys::Region value) {
+static const char *ToTOML(const core::config::sys::Region value) {
     switch (value) {
     default: [[fallthrough]];
     case core::config::sys::Region::Japan: return "Japan";
@@ -396,7 +445,7 @@ FORCE_INLINE static const char *ToTOML(const core::config::sys::Region value) {
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const core::config::sys::VideoStandard value) {
+static const char *ToTOML(const core::config::sys::VideoStandard value) {
     switch (value) {
     default: [[fallthrough]];
     case core::config::sys::VideoStandard::NTSC: return "NTSC";
@@ -404,7 +453,7 @@ FORCE_INLINE static const char *ToTOML(const core::config::sys::VideoStandard va
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const core::config::rtc::Mode value) {
+static const char *ToTOML(const core::config::rtc::Mode value) {
     switch (value) {
     default: [[fallthrough]];
     case core::config::rtc::Mode::Host: return "Host";
@@ -412,7 +461,7 @@ FORCE_INLINE static const char *ToTOML(const core::config::rtc::Mode value) {
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const core::config::rtc::HardResetStrategy value) {
+static const char *ToTOML(const core::config::rtc::HardResetStrategy value) {
     switch (value) {
     default: [[fallthrough]];
     case core::config::rtc::HardResetStrategy::Preserve: return "Preserve";
@@ -421,7 +470,7 @@ FORCE_INLINE static const char *ToTOML(const core::config::rtc::HardResetStrateg
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const peripheral::PeripheralType value) {
+static const char *ToTOML(const peripheral::PeripheralType value) {
     switch (value) {
     default: [[fallthrough]];
     case peripheral::PeripheralType::None: return "None";
@@ -434,7 +483,7 @@ FORCE_INLINE static const char *ToTOML(const peripheral::PeripheralType value) {
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const core::config::audio::SampleInterpolationMode value) {
+static const char *ToTOML(const core::config::audio::SampleInterpolationMode value) {
     switch (value) {
     default: [[fallthrough]];
     case core::config::audio::SampleInterpolationMode::NearestNeighbor: return "Nearest";
@@ -442,7 +491,7 @@ FORCE_INLINE static const char *ToTOML(const core::config::audio::SampleInterpol
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const Settings::Input::Mouse::CaptureMode value) {
+static const char *ToTOML(const Settings::Input::Mouse::CaptureMode value) {
     switch (value) {
     default: [[fallthrough]];
     case Settings::Input::Mouse::CaptureMode::SystemCursor: return "SystemCursor";
@@ -450,7 +499,7 @@ FORCE_INLINE static const char *ToTOML(const Settings::Input::Mouse::CaptureMode
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const Settings::GUI::FrameRateOSDPosition value) {
+static const char *ToTOML(const Settings::GUI::FrameRateOSDPosition value) {
     switch (value) {
     case Settings::GUI::FrameRateOSDPosition::TopLeft: return "TopLeft";
     default: [[fallthrough]];
@@ -460,27 +509,31 @@ FORCE_INLINE static const char *ToTOML(const Settings::GUI::FrameRateOSDPosition
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const gfx::Backend value) {
+static const char *ToTOML(const gfx::Backend value) {
     switch (value) {
-    default: [[fallthrough]];
-    case gfx::Backend::Default: return "Default";
-#ifdef YMIR_PLATFORM_HAS_DIRECT3D
+    default: return "Default";
+#if YMIR_PLATFORM_HAS_DIRECT3D
     case gfx::Backend::Direct3D11: return "Direct3D11";
     case gfx::Backend::Direct3D12: return "Direct3D12";
 #endif
-#ifdef YMIR_PLATFORM_HAS_METAL
+#if YMIR_PLATFORM_HAS_METAL
     case gfx::Backend::Metal: return "Metal";
 #endif
-#ifdef YMIR_PLATFORM_HAS_VULKAN
+#if YMIR_PLATFORM_HAS_VULKAN
     case gfx::Backend::Vulkan: return "Vulkan";
 #endif
-#ifdef YMIR_PLATFORM_HAS_OPENGL
-    case gfx::Backend::OpenGL: return "OpenGL";
-#endif
+    case gfx::Backend::SDLRenderer: return "SDLRenderer";
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const Settings::Video::DisplayRotation value) {
+static std::string ToTOML(const std::optional<gfx::AdapterID> &value) {
+    if (!value) {
+        return "";
+    }
+    return value->ToString();
+}
+
+static const char *ToTOML(const Settings::Video::DisplayRotation value) {
     switch (value) {
     default: [[fallthrough]];
     case Settings::Video::DisplayRotation::Normal: return "Normal";
@@ -490,7 +543,7 @@ FORCE_INLINE static const char *ToTOML(const Settings::Video::DisplayRotation va
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const SDL_PixelFormat value) {
+static const char *ToTOML(const SDL_PixelFormat value) {
     switch (value) {
     default: [[fallthrough]];
     case SDL_PIXELFORMAT_UNKNOWN: return "None";
@@ -561,7 +614,7 @@ FORCE_INLINE static const char *ToTOML(const SDL_PixelFormat value) {
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const Settings::Audio::MidiPort::Type value) {
+static const char *ToTOML(const Settings::Audio::MidiPort::Type value) {
     switch (value) {
     default: [[fallthrough]];
     case Settings::Audio::MidiPort::Type::None: return "None";
@@ -570,7 +623,7 @@ FORCE_INLINE static const char *ToTOML(const Settings::Audio::MidiPort::Type val
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const Settings::Cartridge::Type value) {
+static const char *ToTOML(const Settings::Cartridge::Type value) {
     switch (value) {
     default: [[fallthrough]];
     case Settings::Cartridge::Type::None: return "None";
@@ -580,7 +633,7 @@ FORCE_INLINE static const char *ToTOML(const Settings::Cartridge::Type value) {
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const Settings::Cartridge::BackupRAM::Capacity value) {
+static const char *ToTOML(const Settings::Cartridge::BackupRAM::Capacity value) {
     switch (value) {
     default: [[fallthrough]];
     case Settings::Cartridge::BackupRAM::Capacity::_32Mbit: return "32Mbit";
@@ -590,7 +643,7 @@ FORCE_INLINE static const char *ToTOML(const Settings::Cartridge::BackupRAM::Cap
     }
 }
 
-FORCE_INLINE static const char *ToTOML(const Settings::Cartridge::DRAM::Capacity value) {
+static const char *ToTOML(const Settings::Cartridge::DRAM::Capacity value) {
     switch (value) {
     default: [[fallthrough]];
     case Settings::Cartridge::DRAM::Capacity::_48Mbit: return "48Mbit";
@@ -603,35 +656,35 @@ FORCE_INLINE static const char *ToTOML(const Settings::Cartridge::DRAM::Capacity
 // Parsers
 
 template <typename T>
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, T &value) {
+static void Parse(toml::node_view<toml::node> &node, T &value) {
     if (auto opt = node.value<T>()) {
         value = *opt;
     }
 }
 
 template <typename T>
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *name, T &value) {
+static void Parse(toml::node_view<toml::node> &node, const char *name, T &value) {
     toml::node_view view{node[name]};
     Parse(view, value);
 }
 
 template <arithmetic_type T>
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *name, T &value, T defaultValue,
-                               T minValue, T maxValue) {
+static void Parse(toml::node_view<toml::node> &node, const char *name, T &value, T defaultValue, T minValue,
+                  T maxValue) {
     toml::node_view view{node[name]};
     value = defaultValue;
     Parse(view, value);
     value = std::clamp<T>(value, minValue, maxValue);
 }
 
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *name, std::filesystem::path &value) {
+static void Parse(toml::node_view<toml::node> &node, const char *name, std::filesystem::path &value) {
     if (auto opt = node[name].value<std::filesystem::path::string_type>()) {
         value = *opt;
     }
 }
 
 template <typename T, size_t N>
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *name, std::array<T, N> &value) {
+static void Parse(toml::node_view<toml::node> &node, const char *name, std::array<T, N> &value) {
     if (toml::array *arr = node[name].as_array()) {
         value.fill({});
         for (size_t i = 0; toml::node &node : *arr) {
@@ -646,7 +699,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *na
 }
 
 template <typename T>
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *name, std::vector<T> &value) {
+static void Parse(toml::node_view<toml::node> &node, const char *name, std::vector<T> &value) {
     if (toml::array *arr = node[name].as_array()) {
         value.clear();
         for (toml::node &node : *arr) {
@@ -657,22 +710,22 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *na
 }
 
 template <typename T>
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *name, util::Observable<T> &value) {
+static void Parse(toml::node_view<toml::node> &node, const char *name, util::Observable<T> &value) {
     T wrappedValue = value.Get();
     Parse(node, name, wrappedValue);
     value = wrappedValue;
 }
 
 template <arithmetic_type T>
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *name, util::Observable<T> &value,
-                               T defaultValue, T minValue, T maxValue) {
+static void Parse(toml::node_view<toml::node> &node, const char *name, util::Observable<T> &value, T defaultValue,
+                  T minValue, T maxValue) {
     T wrappedValue = value.Get();
     Parse(node, name, wrappedValue, defaultValue, minValue, maxValue);
     value = wrappedValue;
 }
 
 // Reads until the InputElementArray is full or runs out of entries, skipping all invalid and "None" entries.
-FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *name, input::InputBind &value) {
+static void Parse(toml::node_view<toml::node> &node, const char *name, input::InputBind &value) {
     if (toml::array *arr = node[name].as_array()) {
         value.elements.fill({});
         const size_t count = arr->size();
@@ -693,12 +746,16 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *na
 // Value-to-string converters
 
 template <arithmetic_type T>
-FORCE_INLINE static T ToTOML(T value) {
+static T ToTOML(T value) {
     return value;
 }
 
+static std::string ToTOML(const Ratio &value) {
+    return fmt::format("{}", value);
+}
+
 // Creates a TOML array with valid entries (skips Nones).
-FORCE_INLINE static toml::array ToTOML(const input::InputBind &value) {
+static toml::array ToTOML(const input::InputBind &value) {
     toml::array out{};
     for (auto &element : value.elements) {
         if (element.type != input::InputElement::Type::None) {
@@ -709,7 +766,7 @@ FORCE_INLINE static toml::array ToTOML(const input::InputBind &value) {
 }
 
 template <typename T, size_t N>
-FORCE_INLINE static toml::array ToTOML(const std::array<T, N> &value) {
+static toml::array ToTOML(const std::array<T, N> &value) {
     toml::array out{};
     for (auto &item : value) {
         out.push_back(ToTOML(item));
@@ -718,7 +775,7 @@ FORCE_INLINE static toml::array ToTOML(const std::array<T, N> &value) {
 }
 
 template <typename T>
-FORCE_INLINE static toml::array ToTOML(const std::vector<T> &value) {
+static toml::array ToTOML(const std::vector<T> &value) {
     toml::array out{};
     for (auto &item : value) {
         out.push_back(ToTOML(item));
@@ -975,6 +1032,7 @@ void Settings::ResetToDefaults() {
 
     general.checkForUpdates = false;
     general.includeNightlyBuilds = false;
+    general.enableDiscordPresence = false;
 
     gui.overrideUIScale = false;
     gui.uiScale = 1.0;
@@ -1050,10 +1108,11 @@ void Settings::ResetToDefaults() {
     input.gamepad.rsDeadzone = 0.15f;
     input.gamepad.analogToDigitalSensitivity = 0.20f;
 
-    video.graphicsBackend = gfx::Backend::Default;
+    video.graphicsBackend = gfx::kDefaultBackend;
+    video.graphicsAdapter = std::nullopt;
     video.forceIntegerScaling = false;
     video.forceAspectRatio = true;
-    video.forcedAspect = 4.0 / 3.0;
+    video.forcedAspect = {4, 3};
     video.rotation = Video::DisplayRotation::Normal;
     video.autoResizeWindow = false;
     video.displayVideoOutputInWindow = false;
@@ -1072,6 +1131,7 @@ void Settings::ResetToDefaults() {
     video.fullScreenMode.pixelFormat = SDL_PIXELFORMAT_UNKNOWN;
     video.fullScreenMode.refreshRate = 0.0f;
     video.fullScreenMode.pixelDensity = 0.0f;
+    video.useHardwareAcceleration = false;
     video.swRenderer.threadedVDP1 = true;
     video.swRenderer.threadedVDP2 = true;
     video.swRenderer.threadedDeinterlacer = true;
@@ -1114,9 +1174,9 @@ void Settings::BindConfiguration(ymir::core::Configuration &config) {
     system.rtc.virtHardResetStrategy.Observe([&](auto value) { config.rtc.virtHardResetStrategy = value; });
     system.rtc.virtHardResetTimestamp.Observe([&](auto value) { config.rtc.virtHardResetTimestamp = value; });
 
-    video.swRenderer.threadedVDP1.Observe([&](auto value) { config.video.threadedVDP1 = value; });
-    video.swRenderer.threadedVDP2.Observe([&](auto value) { config.video.threadedVDP2 = value; });
-    video.swRenderer.threadedDeinterlacer.Observe([&](auto value) { config.video.threadedDeinterlacer = value; });
+    video.swRenderer.threadedVDP1.Observe([&](auto value) { config.swRenderer.threadedVDP1 = value; });
+    video.swRenderer.threadedVDP2.Observe([&](auto value) { config.swRenderer.threadedVDP2 = value; });
+    video.swRenderer.threadedDeinterlacer.Observe([&](auto value) { config.swRenderer.threadedDeinterlacer = value; });
 
     audio.interpolation.Observe([&](auto value) { config.audio.interpolation = value; });
     audio.threadedSCSP.Observe([&](auto value) { config.audio.threadedSCSP = value; });
@@ -1177,6 +1237,7 @@ SettingsLoadResult Settings::Load(const std::filesystem::path &path) {
         Parse(tblGeneral, "StartPaused", general.startPaused);
         Parse(tblGeneral, "CheckForUpdates", general.checkForUpdates);
         Parse(tblGeneral, "IncludeNightlyBuilds", general.includeNightlyBuilds);
+        Parse(tblGeneral, "EnableDiscordPresence", general.enableDiscordPresence);
 
         general.screenshotScale = std::clamp(general.screenshotScale, 1, 4);
 
@@ -1543,7 +1604,8 @@ SettingsLoadResult Settings::Load(const std::filesystem::path &path) {
     }
 
     if (auto tblVideo = data["Video"]) {
-        // Parse(tblVideo, "GraphicsBackend", video.graphicsBackend);
+        Parse(tblVideo, "GraphicsBackend", video.graphicsBackend);
+        Parse(tblVideo, "GraphicsAdapter", video.graphicsAdapter);
         Parse(tblVideo, "ForceIntegerScaling", video.forceIntegerScaling);
         Parse(tblVideo, "ForceAspectRatio", video.forceAspectRatio);
         Parse(tblVideo, "ForcedAspect", video.forcedAspect);
@@ -1577,6 +1639,7 @@ SettingsLoadResult Settings::Load(const std::filesystem::path &path) {
                 Parse(tblSwRenderer, "ThreadedVDP2", video.swRenderer.threadedVDP2);
                 Parse(tblSwRenderer, "ThreadedDeinterlacer", video.swRenderer.threadedDeinterlacer);
             }
+            Parse(tblVideo, "UseHardwareAcceleration", video.useHardwareAcceleration);
         } else {
             if (configVersion >= 4) {
                 Parse(tblVideo, "ThreadedVDP1", video.swRenderer.threadedVDP1);
@@ -1823,6 +1886,7 @@ SettingsSaveResult Settings::Save() {
             {"StartPaused", general.startPaused},
             {"CheckForUpdates", general.checkForUpdates},
             {"IncludeNightlyBuilds", general.includeNightlyBuilds},
+            {"EnableDiscordPresence", general.enableDiscordPresence},
 
             {"PathOverrides", toml::table{{
                 {"IPLROMImages", m_context.profile.GetPathOverride(ProfilePath::IPLROMImages).native()},
@@ -1972,10 +2036,11 @@ SettingsSaveResult Settings::Save() {
         }}},
 
         {"Video", toml::table{{
-            //{"GraphicsBackend", ToTOML(video.graphicsBackend)},
+            {"GraphicsBackend", ToTOML(video.graphicsBackend)},
+            {"GraphicsAdapter", ToTOML(video.graphicsAdapter)},
             {"ForceIntegerScaling", video.forceIntegerScaling},
             {"ForceAspectRatio", video.forceAspectRatio},
-            {"ForcedAspect", video.forcedAspect},
+            {"ForcedAspect", ToTOML(video.forcedAspect)},
             {"Rotation", ToTOML(video.rotation)},
             {"AutoResizeWindow", video.autoResizeWindow},
             {"DisplayVideoOutputInWindow", video.displayVideoOutputInWindow},
@@ -2003,6 +2068,7 @@ SettingsSaveResult Settings::Save() {
                 {"ThreadedVDP2", video.swRenderer.threadedVDP2.Get()},
                 {"ThreadedDeinterlacer", video.swRenderer.threadedDeinterlacer.Get()},
             }}},
+            {"UseHardwareAcceleration", video.useHardwareAcceleration.Get()},
             {"Enhancements", toml::table{{
                 {"Deinterlace", video.enhancements.deinterlace.Get()},
                 {"TransparentMeshes", video.enhancements.transparentMeshes.Get()},

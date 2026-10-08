@@ -122,6 +122,8 @@ static_assert(std::is_trivial_v<CoordU32> && std::is_standard_layout_v<CoordU32>
 struct Dimensions {
     uint32 width;
     uint32 height;
+
+    constexpr bool operator==(const Dimensions &) const = default;
 };
 
 } // namespace ymir::vdp

@@ -6,7 +6,7 @@ namespace app::ui {
 
 CDBlockFiltersWindow::CDBlockFiltersWindow(SharedContext &context)
     : CDBlockWindowBase(context)
-    , m_filtersView(context) {
+    , m_filtersView(context.saturn.GetCDBlock()) {
 
     m_windowConfig.name = "CD Block filters";
     m_windowConfig.flags = ImGuiWindowFlags_AlwaysAutoResize;

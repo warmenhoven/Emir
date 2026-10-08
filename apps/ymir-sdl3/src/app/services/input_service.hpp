@@ -2,10 +2,13 @@
 
 #include <app/settings.hpp>
 #include <app/shared_context.hpp>
-#include <functional>
-#include <imgui.h>
-#include <utility>
+
 #include <ymir/hw/smpc/peripheral/peripheral_report.hpp>
+
+#include <imgui.h>
+
+#include <functional>
+#include <utility>
 
 namespace app::services {
 

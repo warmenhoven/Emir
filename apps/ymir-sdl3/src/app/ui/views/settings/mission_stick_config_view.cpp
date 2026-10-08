@@ -1,5 +1,7 @@
 #include "mission_stick_config_view.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 MissionStickConfigView::MissionStickConfigView(SharedContext &context)
@@ -8,6 +10,7 @@ MissionStickConfigView::MissionStickConfigView(SharedContext &context)
     , m_unboundActionsWidget(context) {}
 
 void MissionStickConfigView::Display(Settings::Input::Port::MissionStick &controllerSettings, uint32 portIndex) {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings();
     auto &binds = controllerSettings.binds;
 
@@ -36,7 +39,7 @@ void MissionStickConfigView::Display(Settings::Input::Port::MissionStick &contro
     m_unboundActionsWidget.Display();
     if (ImGui::BeginTable("hotkeys", 1 + input::kNumBindsPerInput,
                           ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY)) {
-        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed, 120.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed, 120.0f * imguiData->displayScale);
         for (size_t i = 0; i < input::kNumBindsPerInput; i++) {
             ImGui::TableSetupColumn(fmt::format("Hotkey {}", i + 1).c_str(), ImGuiTableColumnFlags_WidthStretch, 1.0f);
         }

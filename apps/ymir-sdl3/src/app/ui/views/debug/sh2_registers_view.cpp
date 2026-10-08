@@ -2,6 +2,8 @@
 
 #include <ymir/hw/sh2/sh2.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
 
 using namespace ymir;
@@ -14,6 +16,8 @@ SH2RegistersView::SH2RegistersView(SharedContext &context, sh2::SH2 &sh2, SH2Deb
     , m_model(model) {}
 
 void SH2RegistersView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     ImGui::BeginGroup();
 
     const bool master = m_sh2.IsMaster();
@@ -28,10 +32,10 @@ void SH2RegistersView::Display() {
     const bool tallLayout = noStackViews && ImGui::GetContentRegionAvail().y >= ImGui::GetFrameHeightWithSpacing() * 25;
 
     // Compute several layout sizes
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
-    const float flagsSpacing = 4.0f * m_context.displayScale;
+    const float flagsSpacing = 4.0f * imguiData->displayScale;
     const float itemSpacing = ImGui::GetStyle().ItemSpacing.x;
     const float framePadding = ImGui::GetStyle().FramePadding.x;
     const float frameHeight = ImGui::GetFrameHeight();
@@ -50,7 +54,7 @@ void SH2RegistersView::Display() {
         auto endX = ImGui::GetCursorPosX();
         ImGui::SameLine(0, regLabelWidth - endX + startX);
 
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::SetNextItemWidth(regFieldWidth);
         ImGui::InputScalar(fmt::format("##input_{}", name).c_str(), ImGuiDataType_U32, &value, nullptr, nullptr, "%08X",
                            ImGuiInputTextFlags_CharsHexadecimal);
@@ -109,7 +113,7 @@ void SH2RegistersView::Display() {
         ImGui::SameLine();
 
         ImGui::BeginGroup();
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 1);
         uint8 ILevel = sr.ILevel;
         if (ImGui::InputScalar("##input_SR_ILevel", ImGuiDataType_U8, &ILevel, nullptr, nullptr, "%X",
@@ -199,14 +203,15 @@ void SH2RegistersView::Display() {
 }
 
 float SH2RegistersView::GetViewWidth() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const bool noStackViews = !m_model.settings.displayDataStack && !m_model.settings.displayCallStack;
     const bool tallLayout = noStackViews && ImGui::GetContentRegionAvail().y - ImGui::GetStyle().CellPadding.y * 2 >=
                                                 ImGui::GetFrameHeightWithSpacing() * 25;
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
-    const float flagsSpacing = 4.0f * m_context.displayScale;
+    const float flagsSpacing = 4.0f * imguiData->displayScale;
     const float framePadding = ImGui::GetStyle().FramePadding.x;
     const float frameHeight = ImGui::GetFrameHeight();
     const float flagsWidth = (frameHeight + flagsSpacing) * 4 + framePadding * 2 + hexCharWidth * 1;

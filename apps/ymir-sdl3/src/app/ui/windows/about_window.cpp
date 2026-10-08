@@ -4,6 +4,7 @@
 
 #include <util/std_lib.hpp>
 #include <ymir/util/compiler_info.hpp>
+#include <ymir/util/string.hpp>
 
 #include <ymir/hw/vdp/vdp.hpp>
 
@@ -12,12 +13,18 @@
 
 #include <app/ui/fonts/IconsMaterialSymbols.h>
 
+#include <app/imgui_data.hpp>
+
+#include <cmrc/cmrc.hpp>
+CMRC_DECLARE(Ymir_sdl3_rc);
+
 #include <SDL3/SDL_clipboard.h>
 
 // Includes for versions only
 #include <SDL3/SDL.h>
 #include <curl/curlver.h>
 #include <cxxopts.hpp>
+#include <dr_libs/dr_mp3.h>
 #include <fmt/format.h>
 #include <lz4.h>
 #include <nghttp2/nghttp2ver.h>
@@ -56,6 +63,7 @@
 #define SEMVER_VERSION _SEMVER_STR(SEMVER_VERSION_MAJOR, SEMVER_VERSION_MINOR, SEMVER_VERSION_PATCH)
 #define STB_IMAGE_VERSION "2.30"       // Not exported
 #define STB_IMAGE_WRITE_VERSION "1.16" // Not exported
+#define STB_VORBIS_VERSION "1.22"      // Not exported
 #define MC_CONCQUEUE_VERSION "1.0.4"   // Not exported
 #define TOMLPP_VERSION _SEMVER_STR(TOML_LIB_MAJOR, TOML_LIB_MINOR, TOML_LIB_PATCH)
 #define XXHASH_VERSION _SEMVER_STR(XXH_VERSION_MAJOR, XXH_VERSION_MINOR, XXH_VERSION_RELEASE)
@@ -76,7 +84,7 @@ struct FontInfo {
 };
 
 struct FontDesc {
-    using FontFn = FontInfo (*)(SharedContext &ctx);
+    using FontFn = FontInfo (*)();
 
     const char *name;
     const License &license;
@@ -115,6 +123,7 @@ static const struct {
     {.name = "cxxopts",                       .version = CXXOPTS_VERSION,            .license = licenseMIT,           .repoURL = "https://github.com/jarro2783/cxxopts",           .licenseURL = "https://github.com/jarro2783/cxxopts/blob/master/LICENSE"},
     {.name = "date",                          .version = DATE_VERSION,               .license = licenseMIT,           .repoURL = "https://github.com/HowardHinnant/date",          .licenseURL = "https://github.com/HowardHinnant/date/blob/master/LICENSE.txt"},
     {.name = "Dear ImGui",                    .version = IMGUI_VERSION_FULL,         .license = licenseMIT,           .repoURL = "https://github.com/ocornut/imgui",               .licenseURL = "https://github.com/ocornut/imgui/blob/master/LICENSE.txt"},
+    {.name = "dr_mp3",                        .version = DRMP3_VERSION_STRING,       .license = licenseMIT,           .repoURL = "https://github.com/mackron/dr_libs",             .licenseURL = "https://github.com/mackron/dr_libs/blob/master/LICENSE"},
     {.name = "{fmt}",                         .version = fmtVersion.c_str(),         .license = licenseMIT,           .repoURL = "https://github.com/fmtlib/fmt",                  .licenseURL = "https://github.com/fmtlib/fmt/blob/master/LICENSE",                      .homeURL = "https://fmt.dev/latest/index.html"},
     {.name = "ImGui Club",                                                           .license = licenseMIT,           .repoURL = "https://github.com/ocornut/imgui_club",          .licenseURL = "https://github.com/ocornut/imgui_club/blob/main/LICENSE.txt"},
     {.name = "libchdr",                       .version = LIBCHDR_VERSION,            .license = licenseBSD3,          .repoURL = "https://github.com/rtissera/libchdr",            .licenseURL = "https://github.com/rtissera/libchdr/blob/master/LICENSE.txt"},
@@ -134,6 +143,7 @@ static const struct {
     {.name = "SDL_GameControllerDB",                                                 .license = licenseZlib,          .repoURL = "https://github.com/mdqinc/SDL_GameControllerDB", .licenseURL = "https://github.com/mdqinc/SDL_GameControllerDB/blob/master/LICENSE"},
     {.name = "stb_image",                     .version = STB_IMAGE_VERSION,          .license = licenseMIT,           .repoURL = "https://github.com/nothings/stb",                .licenseURL = "https://github.com/nothings/stb/blob/master/LICENSE"},
     {.name = "stb_image_write",               .version = STB_IMAGE_WRITE_VERSION,    .license = licenseMIT,           .repoURL = "https://github.com/nothings/stb",                .licenseURL = "https://github.com/nothings/stb/blob/master/LICENSE"},
+    {.name = "stb_vorbis",                    .version = STB_VORBIS_VERSION,         .license = licenseMIT,           .repoURL = "https://github.com/nothings/stb",                .licenseURL = "https://github.com/nothings/stb/blob/master/LICENSE"},
     {.name = "toml++",                        .version = TOMLPP_VERSION,             .license = licenseMIT,           .repoURL = "https://github.com/marzer/tomlplusplus" ,        .licenseURL = "https://github.com/marzer/tomlplusplus/blob/master/LICENSE",             .homeURL = "https://marzer.github.io/tomlplusplus/"},
     {.name = "xxHash",                        .version = XXHASH_VERSION,             .license = licenseBSD2,          .repoURL = "https://github.com/Cyan4973/xxHash",             .licenseURL = "https://github.com/Cyan4973/xxHash/blob/dev/LICENSE",                    .homeURL = "https://xxhash.com/"},
     {.name = "zlib",                          .version = ZLIB_VERSION,               .license = licenseZlib,          .repoURL = "https://github.com/madler/zlib",                 .licenseURL = "https://github.com/madler/zlib/blob/develop/LICENSE",                    .homeURL = "https://zlib.net/"},
@@ -169,25 +179,13 @@ static const char *demoTextMaterialSymbols =
     ICON_MS_CONTENT_COPY  ICON_MS_CONTENT_CUT  ICON_MS_CONTENT_PASTE  ICON_MS_VIDEOGAME_ASSET  ICON_MS_JOYSTICK      ICON_MS_GAMEPAD      ICON_MS_MOUSE        ICON_MS_KEYBOARD;
 
 static const FontDesc fontDescs[] = {
-    { .name = "Material Symbols", .license = licenseApache2_0, .url = "https://fonts.google.com/icons",               .fontFn = [](SharedContext &ctx) -> FontInfo { return {ctx.fonts.sansSerif.regular, 24.0f}; }, .demoText = demoTextMaterialSymbols },
-    { .name = "Spline Sans",      .license = licenseOFL,       .url = "https://github.com/SorkinType/SplineSans",     .fontFn = [](SharedContext &ctx) -> FontInfo { return {ctx.fonts.sansSerif.regular, 16.0f}; }, .demoText = demoTextStandard },
-    { .name = "Spline Sans Mono", .license = licenseOFL,       .url = "https://github.com/SorkinType/SplineSansMono", .fontFn = [](SharedContext &ctx) -> FontInfo { return {ctx.fonts.monospace.regular, 16.0f}; }, .demoText = demoTextStandard },
-    { .name = "M PLUS U",         .license = licenseOFL,       .url = "https://github.com/coz-m/MPLUS_FONTS",         .fontFn = [](SharedContext &ctx) -> FontInfo { return {ctx.fonts.sansSerif.regular, 16.0f}; }, .demoText = demoTextStandardJP },
-    { .name = "Zen Dots",         .license = licenseOFL,       .url = "https://github.com/googlefonts/zen-dots",      .fontFn = [](SharedContext &ctx) -> FontInfo { return {ctx.fonts.display,           24.0f}; }, .demoText = demoTextStandard },
+    { .name = "Material Symbols", .license = licenseApache2_0, .url = "https://fonts.google.com/icons",               .fontFn = []() -> FontInfo { return {GetYmirImGuiData()->fonts.sansSerif.regular, 24.0f}; }, .demoText = demoTextMaterialSymbols },
+    { .name = "Spline Sans",      .license = licenseOFL,       .url = "https://github.com/SorkinType/SplineSans",     .fontFn = []() -> FontInfo { return {GetYmirImGuiData()->fonts.sansSerif.regular, 16.0f}; }, .demoText = demoTextStandard },
+    { .name = "Spline Sans Mono", .license = licenseOFL,       .url = "https://github.com/SorkinType/SplineSansMono", .fontFn = []() -> FontInfo { return {GetYmirImGuiData()->fonts.monospace.regular, 16.0f}; }, .demoText = demoTextStandard },
+    { .name = "M PLUS U",         .license = licenseOFL,       .url = "https://github.com/coz-m/MPLUS_FONTS",         .fontFn = []() -> FontInfo { return {GetYmirImGuiData()->fonts.sansSerif.regular, 16.0f}; }, .demoText = demoTextStandardJP },
+    { .name = "Zen Dots",         .license = licenseOFL,       .url = "https://github.com/googlefonts/zen-dots",      .fontFn = []() -> FontInfo { return {GetYmirImGuiData()->fonts.display,           24.0f}; }, .demoText = demoTextStandard },
 };
 // clang-format on
-
-static const std::unordered_map<std::string_view, const char *> kRenderers = {
-    {"vulkan", "Vulkan"}, {"direct3d", "Direct3D 9"}, {"direct3d11", "Direct3D 11"}, {"direct3d12", "Direct3D 12"},
-    {"metal", "Metal"},   {"opengl", "OpenGL"},       {"opengles2", "OpenGL ES 2"},
-};
-
-const char *RendererToHumanReadableString(std::string_view driver) {
-    if (kRenderers.contains(driver)) {
-        return kRenderers.at(driver);
-    }
-    return driver.data();
-}
 
 // If only SDL3 exposed the nice desc field they already have in the SDL_AudioDriver struct...
 // Also note that just because certain systems are listed here, it doesn't mean Ymir actually supports them.
@@ -230,13 +228,14 @@ AboutWindow::AboutWindow(SharedContext &context)
 }
 
 void AboutWindow::PrepareWindow() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto *vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(660 * m_context.displayScale, 800 * m_context.displayScale),
+    ImGui::SetNextWindowSize(ImVec2(660 * imguiData->displayScale, 800 * imguiData->displayScale),
                              ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(400 * m_context.displayScale, 240 * m_context.displayScale),
-                                        ImVec2(1000 * m_context.displayScale, 900 * m_context.displayScale));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(480 * imguiData->displayScale, 320 * imguiData->displayScale),
+                                        ImVec2(1000 * imguiData->displayScale, 900 * imguiData->displayScale));
 }
 
 void AboutWindow::DrawContents() {
@@ -269,28 +268,28 @@ void AboutWindow::DrawContents() {
 }
 
 void AboutWindow::DrawAboutTab() {
-    ImGui::PushTextWrapPos(ImGui::GetWindowContentRegionMax().x);
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
 
     const auto &midiService = m_context.serviceLocator.GetRequired<services::MIDIService>();
     const auto &graphicsService = m_context.serviceLocator.GetRequired<services::GraphicsService>();
-    SDL_Texture *texture = graphicsService.GetSDLTexture(m_context.images.ymirLogo.texture);
-    ImGui::Image((ImTextureID)texture, ImVec2(m_context.images.ymirLogo.size.x * m_context.displayScale,
-                                              m_context.images.ymirLogo.size.y * m_context.displayScale));
+    const ImTextureID texture = graphicsService.GetImGuiTextureID(m_context.images.ymirLogo.texture);
+    ImGui::Image(texture, ImVec2(m_context.images.ymirLogo.size.x * imguiData->displayScale,
+                                 m_context.images.ymirLogo.size.y * imguiData->displayScale));
 
-    ImGui::PushFont(m_context.fonts.display, m_context.fontSizes.display);
+    ImGui::PushFont(imguiData->fonts.display, imguiData->fontSizes.display);
     ImGui::TextUnformatted("Ymir");
     ImGui::PopFont();
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.xlarge);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.xlarge);
     ImGui::TextUnformatted("Version " Ymir_VERSION);
     ImGui::PopFont();
 #if Ymir_DEV_BUILD
-    ImGui::SameLine();
-    ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.xlarge);
+    ImGui::PushFont(imguiData->fonts.sansSerif.regular, imguiData->fontSizes.large);
     ImGui::TextUnformatted("(development build)");
     ImGui::PopFont();
 #endif
 
-    ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.regular, imguiData->fontSizes.large);
     ImGui::TextUnformatted("A Sega Saturn emulator");
     ImGui::PopFont();
 
@@ -324,21 +323,7 @@ void AboutWindow::DrawAboutTab() {
     ImGui::Text("Using NEON instruction set.");
 #endif
 
-    SDL_PropertiesID rendererProps = SDL_GetRendererProperties(graphicsService.GetRenderer());
-    std::string_view rendererName = SDL_GetStringProperty(rendererProps, SDL_PROP_RENDERER_NAME_STRING, "unknown");
-    const char *graphicsBackendName = "unknown";
-    if (rendererName == "gpu") {
-        auto *gpuDevice = static_cast<SDL_GPUDevice *>(
-            SDL_GetPointerProperty(rendererProps, SDL_PROP_RENDERER_GPU_DEVICE_POINTER, nullptr));
-        if (gpuDevice) {
-            const char *gpuDriver = SDL_GetGPUDeviceDriver(gpuDevice);
-            graphicsBackendName = RendererToHumanReadableString(gpuDriver);
-        } else {
-            graphicsBackendName = "SDL GPU";
-        }
-    } else {
-        graphicsBackendName = RendererToHumanReadableString(rendererName);
-    }
+    const char *graphicsBackendName = gfx::GraphicsBackendName(graphicsService.GetGraphicsContextBackend());
     ImGui::Text("Using %s graphics backend for GUI rendering.", graphicsBackendName);
     const auto &vdp = m_context.saturn.GetVDP();
     {
@@ -357,7 +342,7 @@ void AboutWindow::DrawAboutTab() {
 
     ImGui::TextUnformatted("The source code can be found at ");
     ImGui::SameLine(0, 0);
-    ImGui::TextLinkOpenURL("https://github.com/StrikerX3/Ymir");
+    ImGui::TextLinkOpenURL("https://github.com/ymir-emu/Ymir");
 
     ImGui::NewLine();
     ImGui::TextUnformatted("Join the official ");
@@ -374,9 +359,11 @@ void AboutWindow::DrawAboutTab() {
 void AboutWindow::DrawDependenciesTab() {
     static constexpr ImGuiTableFlags kTableFlags = ImGuiTableFlags_SizingFixedFit;
 
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     // -----------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::TextUnformatted("Libraries");
     ImGui::PopFont();
 
@@ -391,7 +378,7 @@ void AboutWindow::DrawDependenciesTab() {
             ImGui::TableNextRow();
 
             ImGui::TableSetColumnIndex(0);
-            ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
             ImGui::TextUnformatted(dep.name);
             ImGui::PopFont();
             if (dep.version != nullptr) {
@@ -435,7 +422,7 @@ void AboutWindow::DrawDependenciesTab() {
 
     ImGui::Separator();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::TextUnformatted("Fonts");
     ImGui::PopFont();
 
@@ -457,7 +444,7 @@ void AboutWindow::DrawDependenciesTab() {
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemHovered() && (ImGui::TableGetColumnFlags(0) & ImGuiTableColumnFlags_IsHovered)) {
                 ImGui::BeginTooltip();
-                auto [fontPtr, fontSize] = font.fontFn(m_context);
+                auto [fontPtr, fontSize] = font.fontFn();
                 ImGui::PushFont(fontPtr, fontSize);
                 ImGui::TextUnformatted(font.demoText);
                 ImGui::PopFont();
@@ -465,7 +452,7 @@ void AboutWindow::DrawDependenciesTab() {
             }
             ImGui::SetCursorPos(cursor);
 
-            ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
             ImGui::TextUnformatted(font.name);
             ImGui::PopFont();
 
@@ -482,26 +469,28 @@ void AboutWindow::DrawDependenciesTab() {
 }
 
 void AboutWindow::DrawAcknowledgementsTab() {
-    ImGui::PushTextWrapPos(ImGui::GetWindowContentRegionMax().x);
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::TextUnformatted("Ymir was made possible by");
     ImGui::PopFont();
 
     auto ack = [&](const char *name, const char *url) {
-        ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
         ImGui::TextLinkOpenURL(name, url);
         ImGui::PopFont();
     };
 
     auto ackWithAuthor = [&](const char *name, const char *author, const char *url) {
-        ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
         ImGui::TextLinkOpenURL(name, url);
         ImGui::PopFont();
 
         ImGui::SameLine();
 
-        ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.sansSerif.regular, imguiData->fontSizes.medium);
         ImGui::Text("by %s", author);
         ImGui::PopFont();
     };
@@ -534,7 +523,7 @@ void AboutWindow::DrawAcknowledgementsTab() {
                       "AICA/DOCS/myaica.txt");
         ImGui::Unindent();
     }
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
     ImGui::TextUnformatted("CD block research");
     ImGui::PopFont();
     {
@@ -560,7 +549,7 @@ void AboutWindow::DrawAcknowledgementsTab() {
 
     ImGui::NewLine();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::TextUnformatted("Helpful tools and test suites");
     ImGui::PopFont();
 
@@ -578,7 +567,7 @@ void AboutWindow::DrawAcknowledgementsTab() {
 
     ImGui::NewLine();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::TextUnformatted("Other emulators that inspired Ymir");
     ImGui::PopFont();
 
@@ -608,9 +597,29 @@ void AboutWindow::DrawAcknowledgementsTab() {
 
     // -----------------------------------------------------------------------------
 
+    auto embedfs = cmrc::Ymir_sdl3_rc::get_filesystem();
+
+    auto getList = [&](const std::string &filename) {
+        cmrc::file file = embedfs.open(filename);
+        std::istringstream in({file.begin(), file.end()});
+        fmt::memory_buffer buf{};
+        auto out = std::back_inserter(buf);
+        std::string line{};
+        std::string sep = "";
+        while (std::getline(in, line)) {
+            line = util::TrimWhitespace(line);
+            if (!line.empty()) {
+                fmt::format_to(out, "{}{}", sep, line);
+                sep = ", ";
+            }
+        }
+        fmt::format_to(out, ".");
+        return fmt::to_string(buf);
+    };
+
     ImGui::NewLine();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::TextUnformatted("Special thanks");
     ImGui::PopFont();
 
@@ -624,32 +633,22 @@ void AboutWindow::DrawAcknowledgementsTab() {
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(".");
 
+    std::string contribs = getList("about/contributors.txt");
+
     ImGui::TextUnformatted("To the ");
     ImGui::SameLine(0, 0);
-    ImGui::TextLinkOpenURL("project contributors", "https://github.com/StrikerX3/Ymir/graphs/contributors");
+    ImGui::TextLinkOpenURL("project contributors", "https://github.com/ymir-emu/Ymir/graphs/contributors");
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(" and users ");
     ImGui::SameLine(0, 0);
-    ImGui::TextLinkOpenURL("reporting issues and feature requests", "https://github.com/StrikerX3/Ymir/issues");
+    ImGui::TextLinkOpenURL("reporting issues and feature requests", "https://github.com/ymir-emu/Ymir/issues");
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(", including:");
     ImGui::Indent();
-    ImGui::TextUnformatted("4re, "
-                           "BlueInterlude, "
-                           "bsdcode, "
-                           "Citrodata, "
-                           "floreal, "
-                           "Fueziwa, "
-                           "GlaireDaggers, "
-                           "lvsweat, "
-                           "mmkzer0, "
-                           "PringleElUno, "
-                           "ronan22, "
-                           "SternXD, "
-                           "tegaidogun, "
-                           "tordona, "
-                           "Wunkolo.");
+    ImGui::TextUnformatted(contribs.c_str());
     ImGui::Unindent();
+
+    std::string friends = getList("about/friends.txt");
 
     ImGui::TextUnformatted("To the friends in the ");
     ImGui::SameLine(0, 0);
@@ -657,25 +656,10 @@ void AboutWindow::DrawAcknowledgementsTab() {
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(", especially:");
     ImGui::Indent();
-    ImGui::TextUnformatted("Aydan Watkins, "
-                           "celeriyacon, "
-                           "Charles / thelastangryman1907, "
-                           "Damian Gracz, "
-                           "fathamburger, "
-                           "GoodWall_533, "
-                           "Jano, "
-                           "Katanchiro, "
-                           "Lordus, "
-                           "Reaven, "
-                           "sasori95 / Immersion95, "
-                           "secreto7, "
-                           "Silanda, "
-                           "Sorer, "
-                           "SternXD, "
-                           "TheCoolPup, "
-                           "waspennator, "
-                           "Zet-sensei.");
+    ImGui::TextUnformatted(friends.c_str());
     ImGui::Unindent();
+
+    std::string patreonSupporters = getList("about/patreon.txt");
 
     ImGui::TextUnformatted("To the current and former ");
     ImGui::SameLine(0, 0);
@@ -683,35 +667,10 @@ void AboutWindow::DrawAcknowledgementsTab() {
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(":");
     ImGui::Indent();
-    ImGui::TextUnformatted("Aitor Guevara, "
-                           "Armonte, "
-                           "Aydan Watkins, "
-                           "Chase Heathcliff, "
-                           "Derek Fagan, "
-                           "Diego Bartolom\u00E9, "
-                           "Elcorsico 28, "
-                           "Giovani Avelar, "
-                           "Israel Jacquez, "
-                           "James Wood, "
-                           "Jeff Greulich, "
-                           "Joek, "
-                           "Julien P, "
-                           "KC, "
-                           "khalifax10, "
-                           "Mario Fonseca, "
-                           "Mored4u, "
-                           "Munch, "
-                           "Oliver Stadler, "
-                           "Phillip O'Toole, "
-                           "rifter, "
-                           "Rustle, "
-                           "Some Guy, "
-                           "TheCoolPup, "
-                           "Zrat, "
-                           "アレ・.");
+    ImGui::TextUnformatted(patreonSupporters.c_str());
     ImGui::Unindent();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::TextUnformatted("And YOU!");
     ImGui::PopFont();
 

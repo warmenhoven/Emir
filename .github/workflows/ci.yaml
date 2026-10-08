@@ -2,23 +2,18 @@ name: CI build
 
 on:
   push:
-    branches:
-      - main
-    paths-ignore: &ignored-paths
+    paths-ignore:
       - '**/*.md'
       - 'docs/**'
-  pull_request:
-    paths-ignore: *ignored-paths
 
 permissions:
   packages: write
   contents: read
 
 env:
-  USERNAME: StrikerX3
+  USERNAME: ymir-emu
   VCPKG_EXE: ${{ github.workspace }}/vcpkg/vcpkg
-  FEED_URL: https://nuget.pkg.github.com/StrikerX3/index.json
-  VCPKG_BINARY_SOURCES: "clear;nuget,https://nuget.pkg.github.com/StrikerX3/index.json,readwrite"
+  VULKAN_SDK_VERSION: "1.4.357.0"
 
 jobs:
   build-windows:
@@ -44,8 +39,15 @@ jobs:
 
     steps:
       # Set up MASM for lzma
-      - uses: glslang/setup-masm@24a9c9d6949cb1d8fedd35c9bd3c974fde2b81b8
+      - name: Set up MASM
+        uses: glslang/setup-masm@bd171b9b0a619ff6237c164fab5fb920cc579889
         if: ${{ matrix.arch.name == 'x64' }}
+
+      - name: Set up Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@37effcfa045411f8bfbbda26df2fd1b3bf3436fa
+        with:
+          vulkan_version: ${{ env.VULKAN_SDK_VERSION }}
+          cache: true
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -62,24 +64,18 @@ jobs:
         shell: pwsh
         run: ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.bat
 
-      - name: Add NuGet sources to vcpkg
+      - name: Cache vcpkg
         if: ${{ matrix.build-set.library-only == 'no' }}
-        shell: pwsh
-        run: |
-          .$(${{ env.VCPKG_EXE }} fetch nuget) `
-            sources add `
-            -Source "${{ env.FEED_URL }}" `
-            -StorePasswordInClearText `
-            -Name GitHubPackages `
-            -UserName "${{ env.USERNAME }}" `
-            -Password "${{ secrets.GITHUB_TOKEN }}"
-          .$(${{ env.VCPKG_EXE }} fetch nuget) `
-            setapikey "${{ secrets.GITHUB_TOKEN }}" `
-            -Source "${{ env.FEED_URL }}"
+        id: cache-vcpkg
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: windows-${{ matrix.arch.name }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-triplets/**') }}
 
       - name: Configure CMake
         shell: pwsh
         env:
+          VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
           CXX: clang++
           CC: clang
         run: |
@@ -130,8 +126,10 @@ jobs:
         arch:
           - name: x64
             runner: ubuntu-24.04
+            vulkan_arch: x86_64
           - name: a64
             runner: ubuntu-24.04-arm
+            vulkan_arch: aarch64
         build-set:
           - name: full
             library-only: "no"
@@ -139,6 +137,29 @@ jobs:
             library-only: "yes"
 
     steps:
+      - name: Cache Vulkan SDK with DXC build (AArch64)
+        if: matrix.arch.name == 'a64'
+        id: cache-dxc
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/vulkan-sdk/${{ env.VULKAN_SDK_VERSION }}
+          key: dxc-aarch64-${{ runner.os }}-${{ env.VULKAN_SDK_VERSION }}
+
+      - name: Set up Vulkan SDK
+        id: vulkan-sdk
+        if: steps.cache-dxc.outputs.cache-hit != 'true'
+        uses: jakoch/install-vulkan-sdk-action@37effcfa045411f8bfbbda26df2fd1b3bf3436fa
+        with:
+          vulkan_version: ${{ env.VULKAN_SDK_VERSION }}
+          cache: true
+
+      - name: Build DXC for Vulkan SDK (AArch64)
+        if: matrix.arch.name == 'a64'  && steps.cache-dxc.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cd $VULKAN_SDK/..
+          ./vulkansdk --skip-deps --maxjobs dxc
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           submodules: recursive
@@ -172,7 +193,7 @@ jobs:
       - name: Cache vcpkg
         if: ${{ matrix.build-set.library-only == 'no' }}
         id: cache-vcpkg
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ github.workspace }}/vcpkg_cache
           key: linux-${{ matrix.arch.name }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-triplets/**') }}
@@ -180,8 +201,9 @@ jobs:
       - name: Configure CMake
         env:
           VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
+          VULKAN_SDK: '/home/runner/vulkan-sdk/${{ env.VULKAN_SDK_VERSION }}/${{ matrix.arch.vulkan_arch }}'
         run: |
-          if [ ${{ matrix.build-set.library-only}} = 'no' ]; then
+          if [ ${{ matrix.build-set.library-only }} = 'no' ]; then
             cmake -B ${{ steps.strings.outputs.build-output-dir }} \
               -DCMAKE_CXX_COMPILER=clang++-18 \
               -DCMAKE_C_COMPILER=clang-18 \
@@ -216,6 +238,9 @@ jobs:
   build-freebsd:
     name: freebsd-${{ matrix.arch.name }}-${{ matrix.build-set.name }}
     runs-on: ${{ matrix.arch.runner }}
+    defaults:
+      run:
+        shell: cpa.sh {0}
 
     strategy:
       fail-fast: false
@@ -243,51 +268,69 @@ jobs:
         run: |
           echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
 
-      # TODO: configure vcpkg cache
-
-      - uses: cross-platform-actions/action@492b0c80085400348c599edace11141a4ee73524
-        env:
-          CXX: clang++21
-          CC: clang21
+      - name: Start FreeBSD VM
+        uses: cross-platform-actions/action@e0b9770014ba65d5e0815f15b74031c3a635f641
         with:
           operating_system: freebsd
           architecture: ${{ matrix.arch.name }}
-          version: '15.0'
-          environment_variables: CXX CC
-          run: |
-            sudo pkg upgrade -y
-            sudo pkg install -y cmake evdev-proto git gmake libX11 libXcursor libXext \
-              libXfixes libXi libXrandr libXrender libXScrnSaver libXtst libglvnd \
-              libinotify llvm21 ninja patchelf pkgconf python3 vulkan-loader zip
+          version: '15.1'
 
-            if [ ${{ matrix.build-set.library-only}} = 'no' ]; then
-              ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.sh
+      - name: Install dependencies
+        run: |
+          sudo pkg upgrade -y
+          sudo pkg install -y cmake evdev-proto git gmake libX11 libXcursor libXext \
+            libXfixes libXi libXrandr libXrender libXScrnSaver libXtst libglvnd \
+            libinotify ninja patchelf pkgconf python3 unzip vulkan-loader zip
 
-              cmake -B ${{ steps.strings.outputs.build-output-dir }} \
-                -DCMAKE_BUILD_TYPE=Debug \
-                -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
-                -DBUILD_SHARED_LIBS=OFF \
-                -DYmir_ENABLE_DEVLOG=OFF \
-                -DYmir_ENABLE_IMGUI_DEMO=OFF \
-                -DYmir_ENABLE_UPDATE_CHECKS=ON \
-                -DYmir_ENABLE_SANDBOX=OFF \
-                -DYmir_ENABLE_YMDASM=ON \
-                -DYmir_ENABLE_IPO=OFF \
-                -DYmir_LIBRARY_ONLY=OFF \
-                -S ${{ github.workspace }} \
-                -G Ninja
-            else
-              cmake -B ${{ steps.strings.outputs.build-output-dir }} \
-                -DCMAKE_BUILD_TYPE=Debug \
-                -DBUILD_SHARED_LIBS=OFF \
-                -DYmir_ENABLE_DEVLOG=OFF \
-                -DYmir_ENABLE_IPO=OFF \
-                -DYmir_LIBRARY_ONLY=ON \
-                -S ${{ github.workspace }} \
-                -G Ninja
-            fi
+      - name: Cache vcpkg
+        if: ${{ matrix.build-set.library-only == 'no' }}
+        id: cache-vcpkg
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg/vcpkg
+            ${{ github.workspace }}/vcpkg_cache
+          key: freebsd-${{ matrix.arch.name }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-triplets/**') }}
 
-            cmake --build ${{ steps.strings.outputs.build-output-dir }} --parallel
+      - name: Bootstrap vcpkg
+        if: ${{ matrix.build-set.library-only == 'no' && steps.cache-vcpkg.outputs.cache-hit != 'true' }}
+        run: ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.sh
+
+      - name: Configure CMake
+        env:
+          VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
+        shell: cpa.sh {0} --environment-variables VCPKG_BINARY_SOURCES
+        run: |
+          if [ ${{ matrix.build-set.library-only }} = 'no' ]; then
+            # /usr/bin/unzip is incompatible with unzipping the cache contents,
+            # so prioritize /usr/local/bin/unzip instead.
+            PATH=/usr/local/bin:${PATH} \
+            cmake -B ${{ steps.strings.outputs.build-output-dir }} \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DYmir_ENABLE_DEVLOG=OFF \
+              -DYmir_ENABLE_IMGUI_DEMO=OFF \
+              -DYmir_ENABLE_UPDATE_CHECKS=ON \
+              -DYmir_ENABLE_SANDBOX=OFF \
+              -DYmir_ENABLE_YMDASM=ON \
+              -DYmir_ENABLE_IPO=OFF \
+              -DYmir_LIBRARY_ONLY=OFF \
+              -S ${{ github.workspace }} \
+              -G Ninja
+          else
+            cmake -B ${{ steps.strings.outputs.build-output-dir }} \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DYmir_ENABLE_DEVLOG=OFF \
+              -DYmir_ENABLE_IPO=OFF \
+              -DYmir_LIBRARY_ONLY=ON \
+              -S ${{ github.workspace }} \
+              -G Ninja
+          fi
+
+      - name: Build
+        run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --parallel
 
   build-macos:
     name: macos-${{ matrix.arch.name }}-${{ matrix.build-set.name }}
@@ -315,6 +358,13 @@ jobs:
             library-only: "yes"
 
     steps:
+      - name: Set up Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@37effcfa045411f8bfbbda26df2fd1b3bf3436fa
+        with:
+          vulkan_version: ${{ env.VULKAN_SDK_VERSION }}
+          cache: true
+          stripdown: true
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           submodules: recursive
@@ -325,34 +375,30 @@ jobs:
         run: |
           echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
 
-      - name: Install tools
-        shell: bash
-        run: brew install mono nuget
-
       - name: Bootstrap vcpkg
         if: ${{ matrix.build-set.library-only == 'no' }}
         shell: bash
         run: ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.sh
 
-      - name: Add NuGet sources to vcpkg
+      - name: Cache vcpkg
         if: ${{ matrix.build-set.library-only == 'no' }}
-        shell: bash
-        run: |
-          nuget sources add \
-            -Source "${{ env.FEED_URL }}" \
-            -StorePasswordInClearText \
-            -Name GitHubPackages \
-            -UserName "${{ env.USERNAME }}" \
-            -Password "${{ secrets.GITHUB_TOKEN }}"
-          nuget setapikey "${{ secrets.GITHUB_TOKEN }}" \
-            -Source "${{ env.FEED_URL }}"
+        id: cache-vcpkg
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: macos-${{ matrix.arch.name }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-triplets/**') }}
 
       - name: Configure CMake
+        env:
+          VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
         run: |
-          if [ ${{ matrix.build-set.library-only}} = 'no' ]; then
+          if [ ${{ matrix.build-set.library-only }} = 'no' ]; then
             cmake -B ${{ steps.strings.outputs.build-output-dir }} \
+              -DVCPKG_TARGET_TRIPLET=${{ matrix.arch.triplet_arch }}-osx12 \
               -DCMAKE_BUILD_TYPE=Debug \
               -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
+              -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch.isa_name }} \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
               -DBUILD_SHARED_LIBS=OFF \
               -DYmir_ENABLE_DEVLOG=OFF \
               -DYmir_ENABLE_IMGUI_DEMO=OFF \
@@ -366,6 +412,8 @@ jobs:
           else
             cmake -B ${{ steps.strings.outputs.build-output-dir }} \
               -DCMAKE_BUILD_TYPE=Debug \
+              -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch.isa_name }} \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
               -DBUILD_SHARED_LIBS=OFF \
               -DYmir_ENABLE_DEVLOG=OFF \
               -DYmir_ENABLE_IPO=OFF \

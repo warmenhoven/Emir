@@ -4,6 +4,8 @@
 
 #include <ymir/hw/vdp/vdp.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
 
 #include <SDL3/SDL_clipboard.h>
@@ -12,24 +14,24 @@ using namespace ymir;
 
 namespace app::ui {
 
-VDP2VRAMAccessPatternsView::VDP2VRAMAccessPatternsView(SharedContext &context, vdp::VDP &vdp)
-    : m_context(context)
-    , m_vdp(vdp) {}
+VDP2VRAMAccessPatternsView::VDP2VRAMAccessPatternsView(vdp::VDP &vdp)
+    : m_vdp(vdp) {}
 
 void VDP2VRAMAccessPatternsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &probe = m_vdp.GetProbe();
     const auto &regs2 = probe.GetVDP2Regs();
     const auto &state2 = probe.GetVDP2State();
     const auto &nbgLayerStates = state2.nbgLayerStates;
 
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
     const float spaceWidth = ImGui::CalcTextSize(" ").x;
 
-    const auto colorGood = m_context.colors.good;
-    const auto colorBad = m_context.colors.warn;
+    const auto colorGood = imguiData->colors.good;
+    const auto colorBad = imguiData->colors.warn;
 
     auto checkbox = [](const char *label, bool value, bool sameLine = false) {
         if (sameLine) {
@@ -197,27 +199,27 @@ void VDP2VRAMAccessPatternsView::Display() {
                 }
 
                 if (valid) {
-                    ImGui::TextColored(m_context.colors.green, "%s", name);
+                    ImGui::TextColored(imguiData->colors.green, "%s", name);
                 } else {
-                    ImGui::TextColored(m_context.colors.red, "%s", name);
+                    ImGui::TextColored(imguiData->colors.red, "%s", name);
                 }
             };
 
             for (uint32 i = 0; i < max; ++i) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TableNextColumn();
                 switch (timings[i]) {
-                case vdp::CyclePatterns::PatNameNBG0: ImGui::TextColored(m_context.colors.yellow, "PN0"); break;
-                case vdp::CyclePatterns::PatNameNBG1: ImGui::TextColored(m_context.colors.yellow, "PN1"); break;
-                case vdp::CyclePatterns::PatNameNBG2: ImGui::TextColored(m_context.colors.yellow, "PN2"); break;
-                case vdp::CyclePatterns::PatNameNBG3: ImGui::TextColored(m_context.colors.yellow, "PN3"); break;
+                case vdp::CyclePatterns::PatNameNBG0: ImGui::TextColored(imguiData->colors.yellow, "PN0"); break;
+                case vdp::CyclePatterns::PatNameNBG1: ImGui::TextColored(imguiData->colors.yellow, "PN1"); break;
+                case vdp::CyclePatterns::PatNameNBG2: ImGui::TextColored(imguiData->colors.yellow, "PN2"); break;
+                case vdp::CyclePatterns::PatNameNBG3: ImGui::TextColored(imguiData->colors.yellow, "PN3"); break;
                 case vdp::CyclePatterns::CharPatNBG0: cp("CP0", 0, i); break;
                 case vdp::CyclePatterns::CharPatNBG1: cp("CP1", 1, i); break;
                 case vdp::CyclePatterns::CharPatNBG2: cp("CP2", 2, i); break;
                 case vdp::CyclePatterns::CharPatNBG3: cp("CP3", 3, i); break;
-                case vdp::CyclePatterns::VCellScrollNBG0: ImGui::TextColored(m_context.colors.purple, "VC0"); break;
-                case vdp::CyclePatterns::VCellScrollNBG1: ImGui::TextColored(m_context.colors.purple, "VC1"); break;
-                case vdp::CyclePatterns::CPU: ImGui::TextColored(m_context.colors.cyan, "SH2"); break;
+                case vdp::CyclePatterns::VCellScrollNBG0: ImGui::TextColored(imguiData->colors.purple, "VC0"); break;
+                case vdp::CyclePatterns::VCellScrollNBG1: ImGui::TextColored(imguiData->colors.purple, "VC1"); break;
+                case vdp::CyclePatterns::CPU: ImGui::TextColored(imguiData->colors.cyan, "SH2"); break;
                 case vdp::CyclePatterns::NoAccess: ImGui::TextUnformatted("-"); break;
                 default: ImGui::Text("(%X)", timings[i]); break;
                 }
@@ -243,12 +245,12 @@ void VDP2VRAMAccessPatternsView::Display() {
 
     if (ImGui::BeginTable("layers", 7, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("");
-        ImGui::TableSetupColumn("NBG0", ImGuiTableColumnFlags_WidthFixed, 60.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("NBG1", ImGuiTableColumnFlags_WidthFixed, 60.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("NBG2", ImGuiTableColumnFlags_WidthFixed, 60.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("NBG3", ImGuiTableColumnFlags_WidthFixed, 60.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("RBG0", ImGuiTableColumnFlags_WidthFixed, 60.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("RBG1", ImGuiTableColumnFlags_WidthFixed, 60.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("NBG0", ImGuiTableColumnFlags_WidthFixed, 60.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("NBG1", ImGuiTableColumnFlags_WidthFixed, 60.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("NBG2", ImGuiTableColumnFlags_WidthFixed, 60.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("NBG3", ImGuiTableColumnFlags_WidthFixed, 60.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("RBG0", ImGuiTableColumnFlags_WidthFixed, 60.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("RBG1", ImGuiTableColumnFlags_WidthFixed, 60.0f * imguiData->displayScale);
         ImGui::TableHeadersRow();
 
         ImGui::TableNextRow();
@@ -744,7 +746,7 @@ void VDP2VRAMAccessPatternsView::Display() {
         "```cpp\n"
         "<Ctrl+V>\n"
         "```",
-        m_context.displayScale);
+        imguiData->displayScale);
 }
 
 } // namespace app::ui

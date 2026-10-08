@@ -1,0 +1,41 @@
+====================
+Rarely used features
+====================
+
+VDP2 CRAM used as rotation coefficients table
+[VDP2 RAMCTL CRKTE=1]
+---------------------------------------------
+  FIFA - Road to World Cup 98
+
+
+VDP2 color calculation window
+[VDP2 WCTLD CCxxE=1]
+-----------------------------
+  Bottom of the 9th
+    ~W0
+    FMVs only, no real effect
+
+  Sega Sample Game (GAM1)
+    W0 & W1
+    Window Sample > Normal Box Window
+    Hole in magenta gradient at the intersection of windows 0 and 1.
+
+VDP1 FBRAM reads/writes
+-----------------------
+  Grandia
+    Combat scenes
+
+    The event timeline is as follows:
+    ==== frame 1 ====
+    1. SCU DMA 224 lines of 0x160 bytes from 0x60ECA80 (fixed) to VDP1 FBRAM, zeroing out contents
+    2. SCU DMA VDP1 command table from 0x6082878 to VDP1 VRAM
+    3. VDP1 drawing triggered with PTM=1. This will be copied to VDP2 NBG1 on frame 2 below
+    4. SCU DMA 224 lines of 0x160 bytes from VDP1 FBRAM to 0x60ECC00 onwards, copying first rendered VDP1 frame
+    5. SCU DMA 224 lines of 0x160 bytes from 0x60ECA80 (fixed) to VDP1 FBRAM, zeroing out contents
+    6. SCU DMA VDP1 command table from 0x607E878 to VDP1 VRAM
+    7. VDP1 drawing triggered with PTM=1. This will be used as the sprite layer by VDP2 on next swap
+    ==== frame 2 ====
+    8. SCU DMA 0x13400 bytes from 0x60ECC00 to 0x5E20000 (VDP2 VRAM), copying the first VDP1 frame to VDP2 NBG1
+    ==== repeat ====
+
+    VDP1 framebuffer swap occurs on frame 1, displaying the previous pair of VDP1 frames.

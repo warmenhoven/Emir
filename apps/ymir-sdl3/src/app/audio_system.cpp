@@ -76,16 +76,30 @@ bool AudioSystem::GetAudioStreamFormat(int *sampleRate, SDL_AudioFormat *format,
 void AudioSystem::ReceiveSample(sint16 left, sint16 right) {
     // If we're doing audio sync, wait until the buffer is no longer full.
     // Otherwise, simply overrun the buffer.
-    if (m_sync && !m_silent) {
+    while (m_sync && !m_silent) {
+        const uint32 readPos = m_readPos.load(std::memory_order_acquire);
+        const uint32 writePos = m_writePos.load(std::memory_order_relaxed);
+        const uint32 count = (writePos >= readPos) ? (writePos - readPos) : (m_buffer.size() - (readPos - writePos));
+        if (count < m_buffer.size() - 1) {
+            break;
+        }
+
+        m_bufferNotFullEvent.Reset();
+
+        const uint32 recheckReadPos = m_readPos.load(std::memory_order_acquire);
+        const uint32 recheckCount = (writePos >= recheckReadPos) ? (writePos - recheckReadPos)
+                                                                 : (m_buffer.size() - (recheckReadPos - writePos));
+        if (recheckCount < m_buffer.size() - 1) {
+            m_bufferNotFullEvent.Set();
+            break;
+        }
+
         m_bufferNotFullEvent.Wait();
     }
 
-    m_buffer[m_writePos] = {left, right};
-
-    m_writePos = (m_writePos + 1) % m_buffer.size();
-    if (m_writePos == m_readPos) {
-        m_bufferNotFullEvent.Reset();
-    }
+    const uint32 writePos = m_writePos.load(std::memory_order_relaxed);
+    m_buffer[writePos] = {left, right};
+    m_writePos.store((writePos + 1) % m_buffer.size(), std::memory_order_release);
 }
 
 void AudioSystem::UpdateGain() {
@@ -93,16 +107,19 @@ void AudioSystem::UpdateGain() {
 }
 
 void AudioSystem::ProcessAudioCallback(SDL_AudioStream *stream, int additional_amount, int total_amount) {
-    int sampleCount = additional_amount / sizeof(Sample);
+    const int sampleCount = additional_amount / sizeof(Sample);
     if (m_silent) {
         const sint16 zero = 0;
         for (int i = 0; i < sampleCount; i++) {
             SDL_PutAudioStreamData(stream, &zero, sizeof(zero));
         }
     } else {
+        // Copy the requested amount of samples into the buffer, even if there aren't that many samples available.
+        // This effectively implements a crude form of audio stretching that sounds acceptable when the emulator is not
+        // running at 100% speed.
         const uint32 readPos = m_readPos.load(std::memory_order_acquire);
-        int len1 = std::min<int>(sampleCount, m_buffer.size() - readPos);
-        int len2 = std::min<int>(sampleCount - len1, readPos);
+        const int len1 = std::min<int>(sampleCount, m_buffer.size() - readPos);
+        const int len2 = std::min<int>(sampleCount - len1, readPos);
         SDL_PutAudioStreamData(stream, &m_buffer[readPos], len1 * sizeof(Sample));
         SDL_PutAudioStreamData(stream, &m_buffer[0], len2 * sizeof(Sample));
 

@@ -1,5 +1,7 @@
 #include "settings_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 using namespace ymir;
 
 namespace app::ui {
@@ -32,10 +34,10 @@ void SettingsWindow::PrepareWindow() {
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
 
-    const ImVec2 minSize(500 * m_context.displayScale, 300 * m_context.displayScale);
-    const ImVec2 maxSize(1000 * m_context.displayScale, 900 * m_context.displayScale);
-    ImGui::SetNextWindowSizeConstraints(minSize, ImVec2(std::clamp(maxSize.x, minSize.x, vp->Size.x * 0.95f),
-                                                        std::clamp(maxSize.y, minSize.y, vp->Size.y * 0.95f)));
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    const ImVec2 minSize(500 * imguiData->displayScale, 300 * imguiData->displayScale);
+    const ImVec2 maxSize(1000 * imguiData->displayScale, 900 * imguiData->displayScale);
+    ImGui::SetNextWindowSizeConstraints(minSize, maxSize);
 }
 
 void SettingsWindow::DrawContents() {

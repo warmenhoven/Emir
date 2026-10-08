@@ -1,5 +1,6 @@
 #include "cdblock_cmd_trace_view.hpp"
 
+#include <app/imgui_data.hpp>
 #include <app/settings.hpp>
 
 namespace app::ui {
@@ -18,10 +19,11 @@ CDBlockCommandTraceView::CDBlockCommandTraceView(SharedContext &context)
     , m_tracer(context.tracers.CDBlock) {}
 
 void CDBlockCommandTraceView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const auto &settings = m_context.serviceLocator.GetRequired<Settings>();
 
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -39,8 +41,8 @@ void CDBlockCommandTraceView::Display() {
         m_tracer.ClearCommands();
     }
     if (settings.cdblock.useLLE) {
-        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
-        ImGui::TextColored(m_context.colors.notice,
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+        ImGui::TextColored(imguiData->colors.notice,
                            "CD Block LLE is enabled. Commands will be traced to the YGR command trace window instead.");
         ImGui::PopTextWrapPos();
     }
@@ -67,13 +69,13 @@ void CDBlockCommandTraceView::Display() {
 
             ImGui::TableNextRow();
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%u", trace.index);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 const uint8 cmd = trace.request[0] >> 8u;
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(MakeColorFromU8(cmd), "%04X %04X %04X %04X", trace.request[0], trace.request[1],
                                    trace.request[2], trace.request[3]);
                 ImGui::PopFont();
@@ -81,7 +83,7 @@ void CDBlockCommandTraceView::Display() {
             if (ImGui::TableNextColumn()) {
                 if (trace.processed) {
                     const uint8 status = trace.response[0] >> 8u;
-                    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                     ImGui::TextColored(MakeColorFromU8(status), "%04X %04X %04X %04X", trace.response[0],
                                        trace.response[1], trace.response[2], trace.response[3]);
                     ImGui::PopFont();

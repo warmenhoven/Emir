@@ -1,17 +1,16 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+#include <app/debug/scsp_tracer.hpp>
 
 namespace app::ui {
 
 class SCSPKeyOnExecuteTraceView {
 public:
-    SCSPKeyOnExecuteTraceView(SharedContext &context);
+    SCSPKeyOnExecuteTraceView(SCSPTracer &tracer);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     SCSPTracer &m_tracer;
 };
 

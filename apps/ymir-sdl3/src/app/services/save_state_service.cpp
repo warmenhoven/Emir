@@ -6,24 +6,28 @@
 
 #include <app/events/emu_event_factory.hpp>
 #include <app/services/window_manager_service.hpp>
+
+#include <app/profile.hpp>
+
 #include <ymir/sys/saturn.hpp>
 #include <ymir/ymir.hpp>
+
+#include <ymir/util/bitmask_enum.hpp>
+#include <ymir/util/dev_log.hpp>
 
 #include <cereal/archives/binary.hpp>
 #include <cereal/archives/portable_binary.hpp>
 #include <serdes/cereal_savestate.hpp>
 
 #include <SDL3/SDL.h>
-#include <cassert>
-#include <filesystem>
+
 #include <fmt/format.h>
 #include <fmt/std.h>
+
+#include <cassert>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
-
-#include <app/profile.hpp>
-#include <ymir/util/bitmask_enum.hpp>
-#include <ymir/util/dev_log.hpp>
 
 using namespace app::savestates;
 using clk = std::chrono::steady_clock;

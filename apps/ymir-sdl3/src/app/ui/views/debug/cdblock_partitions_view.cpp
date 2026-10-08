@@ -4,6 +4,8 @@
 
 #include <app/ui/widgets/debug_widgets.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <ymir/hw/cdblock/cdblock.hpp>
 
 using namespace ymir;
@@ -16,8 +18,9 @@ CDBlockPartitionsView::CDBlockPartitionsView(SharedContext &context)
     , m_tracer(context.tracers.CDBlock) {}
 
 void CDBlockPartitionsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
     const float msCharWidth = ImGui::CalcTextSize(ICON_MS_ALBUM).x;
@@ -34,7 +37,7 @@ void CDBlockPartitionsView::Display() {
         buffers += partition.size();
     }
 
-    ImGui::ProgressBar((float)buffers / cdblock::kNumBuffers, ImVec2(350.0f * m_context.displayScale, 0.0f));
+    ImGui::ProgressBar((float)buffers / cdblock::kNumBuffers, ImVec2(350.0f * imguiData->displayScale, 0.0f));
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
     ImGui::Text("Buffer usage: %u of %u", buffers, cdblock::kNumBuffers);
@@ -61,7 +64,7 @@ void CDBlockPartitionsView::Display() {
             ImGui::Text("%u", i);
 
             ImGui::TableNextColumn();
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             const auto &buffers = m_tracer.partitions[i];
             for (size_t j = 0; j < buffers.size(); ++j) {
                 const auto &buffer = buffers[j];

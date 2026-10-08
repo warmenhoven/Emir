@@ -1,5 +1,7 @@
 #include "unbound_actions_widget.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui::widgets {
 
 UnboundActionsWidget::UnboundActionsWidget(SharedContext &context)
@@ -11,8 +13,10 @@ void UnboundActionsWidget::Display() {
         return;
     }
 
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     const bool plural = m_unboundActions.size() > 1;
-    ImGui::TextColored(m_context.colors.warn, "%zu %s", m_unboundActions.size(),
+    ImGui::TextColored(imguiData->colors.warn, "%zu %s", m_unboundActions.size(),
                        (plural ? "actions were unbound" : "action was unbound"));
     ImGui::SameLine();
     if (ImGui::SmallButton("View")) {

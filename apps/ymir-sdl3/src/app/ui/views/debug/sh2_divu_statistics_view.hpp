@@ -1,19 +1,16 @@
 #pragma once
 
-#include <app/shared_context.hpp>
-
 #include <app/debug/sh2_tracer.hpp>
 
 namespace app::ui {
 
 class SH2DivisionUnitStatisticsView {
 public:
-    SH2DivisionUnitStatisticsView(SharedContext &context, SH2Tracer &tracer);
+    SH2DivisionUnitStatisticsView(SH2Tracer &tracer);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     SH2Tracer &m_tracer;
 };
 

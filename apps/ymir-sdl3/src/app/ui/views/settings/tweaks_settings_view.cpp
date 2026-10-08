@@ -4,6 +4,8 @@
 
 #include <app/events/emu_event_factory.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <misc/cpp/imgui_stdlib.h>
 
 #include <SDL3/SDL_clipboard.h>
@@ -14,7 +16,8 @@ TweaksSettingsView::TweaksSettingsView(SharedContext &context)
     : SettingsViewBase(context) {}
 
 void TweaksSettingsView::Display() {
-    const float availWidth = ImGui::GetContentRegionAvail().x;
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    const float availWidth = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
 
     ImGui::PushTextWrapPos(availWidth);
     ImGui::TextUnformatted("The options listed in this tab affect emulation accuracy.\n"
@@ -35,6 +38,16 @@ void TweaksSettingsView::Display() {
 
         fmt::memory_buffer buf{};
         auto inserter = std::back_inserter(buf);
+
+        // =============================================================================================================
+
+        fmt::format_to(inserter, "## General settings\n");
+
+        // -------------------------------------------------------------------------------------------------------------
+        // Video
+
+        fmt::format_to(inserter, "### Video\n");
+        fmt::format_to(inserter, "- Graphics backend: {}\n", gfx::GraphicsBackendName(settings.video.graphicsBackend));
 
         // =============================================================================================================
 
@@ -95,6 +108,8 @@ void TweaksSettingsView::Display() {
         fmt::format_to(
             inserter, "  - {}\n",
             checkbox("Use dedicated thread for deinterlaced rendering", swRenderer.threadedDeinterlacer.Get()));
+        fmt::format_to(inserter, "- {}\n",
+                       checkbox("Hardware VDP rendering", settings.video.useHardwareAcceleration.Get()));
 
         // -------------------------------------------------------------------------------------------------------------
         // Audio
@@ -107,7 +122,7 @@ void TweaksSettingsView::Display() {
         tweaksList = fmt::to_string(buf);
     }
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     ImGui::InputTextMultiline("##tweaks_list", &tweaksList, ImVec2(availWidth, 0),
                               ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_AutoSelectAll);
     ImGui::PopFont();
@@ -121,9 +136,10 @@ void TweaksSettingsView::Display() {
 }
 
 void TweaksSettingsView::DisplayEnhancements() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.xlarge);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.xlarge);
     ImGui::SeparatorText("Enhancements");
     ImGui::PopFont();
 
@@ -162,7 +178,7 @@ void TweaksSettingsView::DisplayEnhancements() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Video");
     ImGui::PopFont();
 
@@ -171,9 +187,10 @@ void TweaksSettingsView::DisplayEnhancements() {
 }
 
 void TweaksSettingsView::DisplayAccuracyOptions() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.xlarge);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.xlarge);
     ImGui::SeparatorText("Accuracy");
     ImGui::PopFont();
 
@@ -244,7 +261,7 @@ void TweaksSettingsView::DisplayAccuracyOptions() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("SH-2");
     ImGui::PopFont();
 
@@ -253,7 +270,7 @@ void TweaksSettingsView::DisplayAccuracyOptions() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Audio");
     ImGui::PopFont();
 
@@ -262,7 +279,7 @@ void TweaksSettingsView::DisplayAccuracyOptions() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("CD Block");
     ImGui::PopFont();
 
@@ -271,9 +288,10 @@ void TweaksSettingsView::DisplayAccuracyOptions() {
 }
 
 void TweaksSettingsView::DisplayPerformanceOptions() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.xlarge);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.xlarge);
     ImGui::SeparatorText("Performance");
     ImGui::PopFont();
 
@@ -284,7 +302,7 @@ void TweaksSettingsView::DisplayPerformanceOptions() {
         m_context.EnqueueEvent(events::emu::EnableThreadedVDP1(true));
         m_context.EnqueueEvent(events::emu::EnableThreadedVDP2(true));
         m_context.EnqueueEvent(events::emu::EnableThreadedDeinterlacer(true));
-        m_context.EnqueueEvent(events::emu::EnableThreadedSCSP(false));
+        m_context.EnqueueEvent(events::emu::EnableThreadedSCSP(true));
     }
     if (ImGui::BeginItemTooltip()) {
         ImGui::TextUnformatted("Strikes a good balance between compatibility and performance.");
@@ -318,21 +336,25 @@ void TweaksSettingsView::DisplayPerformanceOptions() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Video");
     ImGui::PopFont();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
     ImGui::SeparatorText("Software renderer");
     ImGui::PopFont();
 
     widgets::settings::video::swrenderer::ThreadedVDP(m_context);
 
-    // TODO: hardware renderer options
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
+    ImGui::SeparatorText("Hardware renderer");
+    ImGui::PopFont();
+
+    widgets::settings::video::UseHardwareAcceleration(m_context);
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Audio");
     ImGui::PopFont();
 

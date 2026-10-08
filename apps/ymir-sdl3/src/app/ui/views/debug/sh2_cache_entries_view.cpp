@@ -2,19 +2,21 @@
 
 #include <ymir/hw/sh2/sh2.hpp>
 
+#include <app/imgui_data.hpp>
+
 using namespace ymir;
 
 namespace app::ui {
 
-SH2CacheEntriesView::SH2CacheEntriesView(SharedContext &context, sh2::SH2 &sh2)
-    : m_context(context)
-    , m_sh2(sh2) {}
+SH2CacheEntriesView::SH2CacheEntriesView(sh2::SH2 &sh2)
+    : m_sh2(sh2) {}
 
 void SH2CacheEntriesView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &probe = m_sh2.GetProbe();
     auto &cache = probe.GetCache();
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -44,7 +46,7 @@ void SH2CacheEntriesView::Display() {
                 const char dataWayCh = sh2::IsValidCacheWay(dataWay) ? '0' + dataWay : '-';
 
                 ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 if (ImGui::InputScalar(fmt::format("##lru_{}", i).c_str(), ImGuiDataType_U8, &lru, nullptr, nullptr,
                                        "%02X", ImGuiInputTextFlags_CharsHexadecimal)) {
                     lru = std::min<uint8>(lru, 0b111111);
@@ -68,7 +70,7 @@ void SH2CacheEntriesView::Display() {
 
                     uint32 tagAddress = entry.tag[way].tagAddress << 10u;
                     ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 8);
-                    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                     if (ImGui::InputScalar(fmt::format("##entry_{}_way_{}_tag_addr", i, way).c_str(), ImGuiDataType_U32,
                                            &tagAddress, nullptr, nullptr, "%08X",
                                            ImGuiInputTextFlags_CharsHexadecimal)) {

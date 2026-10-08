@@ -1,5 +1,7 @@
 #include "cdblock_cmd_trace_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 CDBlockCommandTraceWindow::CDBlockCommandTraceWindow(SharedContext &context)
@@ -10,7 +12,8 @@ CDBlockCommandTraceWindow::CDBlockCommandTraceWindow(SharedContext &context)
 }
 
 void CDBlockCommandTraceWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(450 * m_context.displayScale, 180 * m_context.displayScale),
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(450 * imguiData->displayScale, 180 * imguiData->displayScale),
                                         ImVec2(FLT_MAX, FLT_MAX));
 }
 

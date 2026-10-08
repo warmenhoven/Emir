@@ -1,8 +1,8 @@
 #include "sh2_watchpoints_view.hpp"
 
-#include <ymir/hw/sh2/sh2.hpp>
-
 #include <app/events/emu_event_factory.hpp>
+
+#include <app/imgui_data.hpp>
 
 #include <app/ui/fonts/IconsMaterialSymbols.h>
 
@@ -17,17 +17,18 @@ SH2WatchpointsView::SH2WatchpointsView(SharedContext &context, SH2WatchpointsMan
     , m_wtptManager(wtptManager) {}
 
 void SH2WatchpointsView::Display() {
-    const float fontSize = m_context.fontSizes.medium;
-    ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    const float fontSize = imguiData->fontSizes.medium;
+    ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
     const float frameHeight = ImGui::GetFrameHeight();
     const float framePadding = ImGui::GetStyle().FramePadding.x;
-    const float flagsSpacing = 4.0f * m_context.displayScale;
+    const float flagsSpacing = 4.0f * imguiData->displayScale;
     const float hexFieldWidth = hexCharWidth * 8 + framePadding * 2;
 
     auto drawHex32 = [&](auto id, uint32 &value) {
-        ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
         ImGui::SetNextItemWidth(hexFieldWidth);
         ImGui::InputScalar(fmt::format("##input_{}", id).c_str(), ImGuiDataType_U32, &value, nullptr, nullptr, "%08X",
                            ImGuiInputTextFlags_CharsHexadecimal);
@@ -38,8 +39,8 @@ void SH2WatchpointsView::Display() {
     ImGui::BeginGroup();
 
     if (!m_context.saturn.IsDebugTracingEnabled()) {
-        ImGui::TextColored(m_context.colors.warn, "Debug tracing is disabled.");
-        ImGui::TextColored(m_context.colors.warn, "Watchpoints will not work.");
+        ImGui::TextColored(imguiData->colors.warn, "Debug tracing is disabled.");
+        ImGui::TextColored(imguiData->colors.warn, "Watchpoints will not work.");
         ImGui::SameLine();
         if (ImGui::SmallButton("Enable##debug_tracing")) {
             m_context.EnqueueEvent(events::emu::SetDebugTrace(true));
@@ -104,7 +105,7 @@ void SH2WatchpointsView::Display() {
         ImGui::EndTooltip();
     }
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
     ImGui::SeparatorText("Active watchpoints");
     ImGui::PopFont();
 

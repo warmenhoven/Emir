@@ -6,8 +6,8 @@ namespace app::ui {
 
 SH2TimersWindow::SH2TimersWindow(SharedContext &context, bool master)
     : SH2WindowBase(context, master)
-    , m_frtView(context, m_sh2)
-    , m_wdtView(context, m_sh2) {
+    , m_frtView(m_sh2)
+    , m_wdtView(m_sh2) {
 
     m_windowConfig.name = fmt::format("{}SH2 timers", master ? 'M' : 'S');
     m_windowConfig.flags = ImGuiWindowFlags_AlwaysAutoResize;

@@ -1,10 +1,12 @@
 #pragma once
 
-#include <SDL3/SDL_dialog.h>
-#include <SDL3/SDL_properties.h>
 #include <app/events/gui_event.hpp>
+
 #include <app/settings.hpp>
 #include <app/shared_context.hpp>
+
+#include <SDL3/SDL_dialog.h>
+#include <SDL3/SDL_properties.h>
 
 namespace app::services {
 

@@ -2,6 +2,8 @@
 
 #include <app/ui/state/debug/memory_viewer_state.hpp>
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 uint32 MemoryViewerWindow::s_index = 0;
@@ -27,15 +29,17 @@ void MemoryViewerWindow::PrepareWindow() {
     MemoryEditor::Sizes sizes{};
     m_memViewState->memoryEditor.CalcSizes(sizes, 0x8000000, 0x0);
 
-    ImGui::SetNextWindowSizeConstraints(ImVec2(sizes.WindowWidth, 245 * m_context.displayScale),
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(sizes.WindowWidth, 245 * imguiData->displayScale),
                                         ImVec2(sizes.WindowWidth, FLT_MAX));
 }
 
 void MemoryViewerWindow::DrawContents() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const mem_view::Region *nextRegion = m_memViewState->selectedRegion;
     auto &currRegion = *nextRegion;
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     if (ImGui::BeginCombo("##region", currRegion.ToString().c_str(),
                           ImGuiComboFlags_HeightLarge | ImGuiComboFlags_WidthFitPreview)) {
         for (auto &group : mem_view::regions::kRegionGroups) {
@@ -66,13 +70,13 @@ void MemoryViewerWindow::DrawContents() {
         currRegion.paramsFn(m_memViewState.get());
     }
     ImGui::Separator();
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     m_memViewState->memoryEditor.DrawContents(this, currRegion.size, currRegion.baseAddress);
     ImGui::PopFont();
     if (m_memViewState->memoryEditor.MouseHovered) {
         const uint32 address = currRegion.baseAddress + m_memViewState->memoryEditor.MouseHoveredAddr;
         if (ImGui::BeginTooltip()) {
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             ImGui::Text("%08X", address);
             ImGui::PopFont();
             ImGui::EndTooltip();

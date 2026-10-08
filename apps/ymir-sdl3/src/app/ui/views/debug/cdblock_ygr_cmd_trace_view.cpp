@@ -1,8 +1,13 @@
 #include "cdblock_ygr_cmd_trace_view.hpp"
 
+#include <app/imgui_data.hpp>
 #include <app/settings.hpp>
 
+#include <app/ui/widgets/common_widgets.hpp>
+
 #include <ymir/util/bit_ops.hpp>
+
+#include <fmt/format.h>
 
 namespace app::ui {
 
@@ -20,30 +25,28 @@ YGRCommandTraceView::YGRCommandTraceView(SharedContext &context)
     , m_tracer(context.tracers.YGR) {}
 
 void YGRCommandTraceView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const auto &settings = m_context.serviceLocator.GetRequired<Settings>();
 
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
     ImGui::BeginGroup();
 
     ImGui::Checkbox("Enable", &m_tracer.traceCommands);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::BeginItemTooltip()) {
-        ImGui::TextUnformatted("You must also enable tracing in Debug > Enable tracing (F11)");
-        ImGui::EndTooltip();
-    }
+    widgets::ExplanationTooltip(fmt::format("You must also enable tracing in Debug > Enable tracing ({})",
+                                            input::ToShortcut(m_context.inputContext, actions::dbg::ToggleDebugTrace))
+                                    .c_str());
     ImGui::SameLine();
     if (ImGui::Button("Clear")) {
         m_tracer.ClearCommands();
     }
     if (!settings.cdblock.useLLE) {
-        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
         ImGui::TextColored(
-            m_context.colors.notice,
+            imguiData->colors.notice,
             "CD Block LLE is disabled. Commands will be traced to the CD Block command trace window instead.");
         ImGui::PopTextWrapPos();
     }
@@ -70,12 +73,12 @@ void YGRCommandTraceView::Display() {
 
             ImGui::TableNextRow();
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%u", trace.index);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 if (trace.reqValid) {
                     const uint8 cmd = trace.request[0] >> 8u;
                     ImGui::TextColored(MakeColorFromU8(cmd), "%04X %04X %04X %04X", trace.request[0], trace.request[1],
@@ -88,7 +91,7 @@ void YGRCommandTraceView::Display() {
             if (ImGui::TableNextColumn()) {
                 if (trace.resValid) {
                     const uint8 status = trace.response[0] >> 8u;
-                    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                     ImGui::TextColored(MakeColorFromU8(status), "%04X %04X %04X %04X", trace.response[0],
                                        trace.response[1], trace.response[2], trace.response[3]);
                     ImGui::PopFont();

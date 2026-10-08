@@ -2,11 +2,10 @@
 
 #include <ymir/hw/sh2/sh2.hpp>
 
-#include <app/events/emu_debug_event_factory.hpp>
 #include <app/events/emu_event_factory.hpp>
 #include <app/events/gui_event_factory.hpp>
 
-#include <fstream>
+#include <app/imgui_data.hpp>
 
 using namespace ymir;
 
@@ -36,11 +35,13 @@ void SH2DebuggerWindow::RequestOpen(bool triggeredByEvent, bool requestFocus) {
 }
 
 void SH2DebuggerWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(740 * m_context.displayScale, 370 * m_context.displayScale),
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(740 * imguiData->displayScale, 370 * imguiData->displayScale),
                                         ImVec2(FLT_MAX, FLT_MAX));
 }
 
 void SH2DebuggerWindow::DrawContents() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     if (ImGui::BeginTable("disasm_main", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_NoSavedSettings)) {
         ImGui::TableSetupColumn("##left", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthFixed, m_regsView.GetViewWidth());
@@ -56,7 +57,7 @@ void SH2DebuggerWindow::DrawContents() {
             // ImGui::SeparatorText("Registers");
             m_regsView.Display();
 
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
             const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
             ImGui::PopFont();
 

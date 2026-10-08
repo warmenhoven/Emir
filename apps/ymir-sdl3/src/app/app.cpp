@@ -94,6 +94,11 @@
 #include <app/events/emu_event_factory.hpp>
 #include <app/events/gui_event_factory.hpp>
 
+#ifdef _WIN32
+    #include <app/services/gfx/gfx_d3d_utils.hpp>
+#endif
+#include <app/services/gfx/gfx_adapters.hpp>
+
 #include <app/input/input_backend_sdl3.hpp>
 #include <app/input/input_utils.hpp>
 
@@ -104,6 +109,7 @@
 #include <app/ui/widgets/settings_widgets.hpp>
 #include <app/ui/widgets/system_widgets.hpp>
 
+#include <util/os_exception_handler.hpp>
 #include <util/os_features.hpp>
 #include <util/std_lib.hpp>
 
@@ -113,7 +119,6 @@
 #include <SDL3/SDL_misc.h>
 
 #include <backends/imgui_impl_sdl3.h>
-#include <backends/imgui_impl_sdlrenderer3.h>
 
 #include <imgui.h>
 
@@ -134,7 +139,6 @@
 CMRC_DECLARE(Ymir_sdl3_rc);
 
 using clk = std::chrono::steady_clock;
-using MidiPortType = app::Settings::Audio::MidiPort::Type;
 
 namespace app {
 
@@ -146,9 +150,11 @@ static void ShowStartupFailure(fmt::format_string<TArgs...> fmt, TArgs &&...args
 }
 
 App::App()
-    : m_saveStateService(m_context, m_settings)
+    : m_graphicsService(m_settings)
+    , m_saveStateService(m_context, m_settings)
     , m_midiService(m_context.serviceLocator)
     , m_settings(m_context)
+    , m_discordRPCService(m_context, m_settings)
     , m_mouseCaptureService(m_context, m_settings)
     , m_romService(m_context, m_settings,
                    [this](std::string title, std::function<void()> fnContents) {
@@ -202,6 +208,18 @@ int App::Run(const CommandLineOptions &options) {
     // TODO: adjust this to the user's preferred locale (with ".UTF8" suffix) when i18n is implemented
     setlocale(LC_ALL, "en_us.UTF8");
 
+#ifdef _WIN32
+    gfx::EnumerateDXGIGraphicsAdapters();
+    devlog::info<grp::base>("DXGI adapters:");
+    for (const gfx::DXGIGraphicsAdapter &adapter : gfx::GetDXGIGraphicsAdapters()) {
+        devlog::info<grp::base>("  [{}] {} (mem: {:.2f} GiB VRAM, {:.2f} GiB sys, {:.2f} GiB shared)",
+                                adapter.id.ToString(), util::WStringToString(adapter.description),
+                                adapter.memory.dedicatedVideo / 1024.0 / 1024.0 / 1024.0,
+                                adapter.memory.dedicatedSystem / 1024.0 / 1024.0 / 1024.0,
+                                adapter.memory.sharedSystem / 1024.0 / 1024.0 / 1024.0);
+    }
+#endif
+
     m_options = options;
 
     auto &settings = m_settings;
@@ -245,8 +263,10 @@ int App::Run(const CommandLineOptions &options) {
     {
         auto &audioSettings = settings.audio;
 
+        using MidiPortType = app::Settings::Audio::MidiPort::Type;
+
         audioSettings.midiInputPort.Observe([&](app::Settings::Audio::MidiPort value) {
-            auto *input = m_midiService.GetInput();
+            auto input = m_midiService.GetInput();
             input->closePort();
 
             switch (value.type) {
@@ -278,7 +298,7 @@ int App::Run(const CommandLineOptions &options) {
         });
 
         audioSettings.midiOutputPort.Observe([&](app::Settings::Audio::MidiPort value) {
-            auto *output = m_midiService.GetOutput();
+            auto output = m_midiService.GetOutput();
             output->closePort();
 
             switch (value.type) {
@@ -437,9 +457,13 @@ int App::Run(const CommandLineOptions &options) {
 
     // Apply settings
     m_context.saturn.instance->UsePreferredRegion();
+    m_context.saturn.instance->configuration.cdblock.useLLE = settings.cdblock.useLLE;
     m_context.EnqueueEvent(events::emu::LoadInternalBackupMemory());
     EnableRewindBuffer(settings.general.enableRewindBuffer);
     util::BoostCurrentProcessPriority(settings.general.boostProcessPriority);
+    if (settings.video.useHardwareAcceleration) {
+        m_context.EnqueueEvent(events::emu::SwitchVDPRenderer(false));
+    }
 
 #if Ymir_FF_HOST_CD_DRIVES
     ymir::media::host::EnumerateHostCDDrives();
@@ -547,6 +571,8 @@ void App::RunEmulator() {
     m_updateCheckerService.Start(m_context, m_settings, [&] { m_windowManagerService.UpdateWindow().Open = true; });
     ScopeGuard sgStopUpdateCheckerThread{[&] { m_updateCheckerService.Stop(); }};
 
+    ScopeGuard sgStopDiscordRPC{[&] { m_discordRPCService.Stop(); }};
+
     // Get embedded file system
     auto embedfs = cmrc::Ymir_sdl3_rc::get_filesystem();
 
@@ -591,12 +617,13 @@ void App::RunEmulator() {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable; // Enable Docking
     io.KeyRepeatDelay = 0.350f;
     io.KeyRepeatRate = 0.030f;
+    io.UserData = &m_imguiData;
 
     m_displayService.LoadFonts();
 
     // RescaleUI also loads the style and fonts
     bool rescaleUIPending = false;
-    m_displayService.RescaleUI(SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()));
+    m_displayService.RescaleUI();
     {
         auto &guiSettings = settings.gui;
 
@@ -670,17 +697,40 @@ void App::RunEmulator() {
             in >> windowX >> windowY >> windowWidth >> windowHeight;
             if (in) {
                 initGeometry = false;
+
+                int numDisplays = 0;
+                SDL_DisplayID *displayIDs = SDL_GetDisplays(&numDisplays);
+                if (displayIDs != nullptr) {
+                    util::ScopeGuard sgFreeDisplayIDs{[&] { SDL_free(displayIDs); }};
+
+                    // If the window geometry happens to exactly match a display's bounds, reset it
+                    SDL_Rect displayRect{};
+                    for (int i = 0; i < numDisplays; ++i) {
+                        if (SDL_GetDisplayBounds(displayIDs[i], &displayRect)) {
+                            if (windowX == displayRect.x && windowY == displayRect.y && windowWidth == displayRect.w &&
+                                windowHeight == displayRect.h) {
+                                const char *displayName = SDL_GetDisplayName(displayIDs[i]);
+                                devlog::info<grp::base>(
+                                    "Window geometry matches the bounds of display {} and will be reset", displayName);
+                                devlog::info<grp::base>("{} bounds: {}x{} - {}x{}", displayName, displayRect.x,
+                                                        displayRect.y, displayRect.w, displayRect.h);
+                                initGeometry = true;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
         // Compute initial window size if not loaded from persistent state
         if (initGeometry) {
             // This is equivalent to ImGui::GetFrameHeight() without requiring a window
-            const float menuBarHeight = (16.0f + style.FramePadding.y * 2.0f) * m_context.displayScale;
+            const float menuBarHeight = (16.0f + style.FramePadding.y * 2.0f) * m_imguiData.displayScale;
 
             const auto &videoSettings = settings.video;
             const bool forceAspectRatio = videoSettings.forceAspectRatio;
-            const double forcedAspect = videoSettings.forcedAspect;
+            const Ratio forcedAspect = videoSettings.forcedAspect;
             const bool horzDisplay = videoSettings.rotation == Settings::Video::DisplayRotation::Normal ||
                                      videoSettings.rotation == Settings::Video::DisplayRotation::_180;
 
@@ -708,8 +758,8 @@ void App::RunEmulator() {
                 scale = std::floor(scale);
             }
 
-            double baseWidth = forceAspectRatio ? std::ceil(screen.height * screen.scaleY * forcedAspect)
-                                                : screen.width * screen.scaleX;
+            double baseWidth =
+                forceAspectRatio ? forcedAspect.MulCeil(screen.height * screen.scaleY) : screen.width * screen.scaleX;
             double baseHeight = screen.height * screen.scaleY;
             if (!horzDisplay) {
                 std::swap(baseWidth, baseHeight);
@@ -746,6 +796,7 @@ void App::RunEmulator() {
         m_saveStateService.SaveDebuggerState();
     }};
     util::os::ConfigureWindowDecorations(screen.window);
+    m_displayService.RescaleUI();
 
     settings.video.fullScreen.Observe([&](bool fullScreen) {
         devlog::info<grp::base>("{} full screen mode", (fullScreen ? "Entering" : "Leaving"));
@@ -754,27 +805,66 @@ void App::RunEmulator() {
     });
 
     // ---------------------------------
-    // Create renderer
+    // Create graphics backend
 
-    int vsync = 1;
+    gfx::PresentMode presentMode = gfx::PresentMode::VSync;
     {
-        gfx::Backend &graphicsBackend = settings.video.graphicsBackend;
-        SDL_Renderer *renderer = m_graphicsService.CreateRenderer(graphicsBackend, screen.window, vsync);
-        if (renderer == nullptr) {
-            // If not using the default renderer option, try the default and reset configuration
-            if (graphicsBackend != gfx::Backend::Default) {
-                m_context.DisplayMessage(fmt::format("Could not create {} renderer. Reverting to default API.",
-                                                     gfx::GraphicsBackendName(graphicsBackend)));
-                graphicsBackend = gfx::Backend::Default;
-                settings.MakeDirty();
+        const gfx::Backend backend = settings.video.graphicsBackend;
+        const std::optional<gfx::AdapterID> adapter = settings.video.graphicsAdapter;
+        std::vector<std::string> failures{};
 
-                renderer = m_graphicsService.CreateRenderer(gfx::Backend::Default, screen.window, vsync);
+        services::GraphicsContextSpec spec{
+            .backend = backend,
+            .adapter = adapter,
+            .window = screen.window,
+        };
+        auto result = m_graphicsService.InitGraphicsContext(spec, presentMode);
+        if (!result) {
+            std::string &failureMsg = failures.emplace_back();
+            failureMsg = fmt::format("Could not create {} graphics context: {}", gfx::GraphicsBackendName(backend),
+                                     result.Error().message);
+            m_context.DisplayMessage(failureMsg);
+
+            auto fallback = [&](gfx::Backend fallbackBackend) {
+                if (backend == fallbackBackend) {
+                    return false;
+                }
+
+                spec.backend = fallbackBackend;
+                auto result = m_graphicsService.InitGraphicsContext(spec, presentMode);
+                if (result) {
+                    m_context.DisplayMessage(fmt::format("Reverted to {}", gfx::GraphicsBackendName(fallbackBackend)));
+                    settings.video.graphicsBackend = fallbackBackend;
+                    settings.MakeDirty();
+                    return true;
+                }
+
+                std::string &failureMsg = failures.emplace_back();
+                failureMsg = fmt::format("Fallback to {} failed: {}", gfx::GraphicsBackendName(fallbackBackend),
+                                         result.Error().message);
+                m_context.DisplayMessage(failureMsg);
+                return false;
+            };
+
+            // Try fallback options
+            if (!fallback(gfx::kDefaultBackend) && !fallback(gfx::Backend::SDLRenderer)) {
+                // Nothing worked; bail out
+                fmt::memory_buffer buf{};
+                auto out = std::back_inserter(buf);
+                fmt::format_to(out, "Failed to initialize graphics.");
+                for (auto &failureMsg : failures) {
+                    fmt::format_to(out, "\n{}", failureMsg);
+                }
+                ShowStartupFailure("{}", fmt::to_string(buf));
+                return;
             }
         }
-        if (renderer == nullptr) {
-            ShowStartupFailure("Failed to create renderer: {}", SDL_GetError());
-            return;
-        }
+    }
+
+    {
+        const gfx::Backend backend = m_graphicsService.GetGraphicsContextBackend();
+        const char *backendName = gfx::GraphicsBackendName(backend);
+        devlog::info<grp::base>("{} graphics context initialized successfully", backendName);
     }
 
     settings.video.fullScreen.ObserveAndNotify([&](bool fullScreen) {
@@ -799,70 +889,93 @@ void App::RunEmulator() {
     // interpolation.
 
     // Software framebuffer texture
-    const gfx::TextureHandle swFbTexture =
-        m_graphicsService.CreateTexture(SDL_PIXELFORMAT_XBGR8888, SDL_TEXTUREACCESS_STREAMING, vdp::kMaxResH,
-                                        vdp::kMaxResV, [&](SDL_Texture *tex, bool recreated) {
-                                            SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
-                                            if (recreated) {
-                                                screen.CopyFramebufferToTexture(tex);
-                                            }
-                                        });
-    if (swFbTexture == gfx::kInvalidTextureHandle) {
-        ShowStartupFailure("Failed to create software framebuffer texture: {}", SDL_GetError());
+    auto swFbTextureResult = m_graphicsService.CreateTexture(
+        {
+            .width = vdp::kMaxResH,
+            .height = vdp::kMaxResV,
+            .format = gfx::PixelFormat::R8G8B8X8_UNORM,
+            .access = gfx::TextureAccess::Streaming,
+            .filterMode = gfx::TextureFilterMode::Nearest,
+            .name = "[Ymir] Software framebuffer",
+        },
+        [&](gfx::GUITextureHandle handle, bool recreated, void *data, size_t pitch) {
+            if (recreated) {
+                screen.CopyFramebufferToTexture(data, pitch);
+            }
+        });
+
+    if (!swFbTextureResult) {
+        ShowStartupFailure(
+            "Failed to create software framebuffer texture: {}.\nThe graphics backend will reset on next launch.",
+            swFbTextureResult.Error().message);
+        m_graphicsService.RevertGraphicsBackend();
         return;
     };
+    const gfx::GUITextureHandle swFbTexture = swFbTextureResult.Value();
 
     // Display texture, containing the scaled framebuffer to be displayed on the screen
-    const gfx::TextureHandle dispTexture = m_graphicsService.CreateTexture(
-        SDL_PIXELFORMAT_XBGR8888, SDL_TEXTUREACCESS_TARGET, vdp::kMaxResH * screen.fbScale,
-        vdp::kMaxResV * screen.fbScale,
-        [](SDL_Texture *tex, bool) { SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR); });
-    if (dispTexture == gfx::kInvalidTextureHandle) {
-        ShowStartupFailure("Failed to create display texture: {}", SDL_GetError());
+    auto dispTextureResult = m_graphicsService.CreateTexture({
+        .width = vdp::kMaxResH * screen.fbScale,
+        .height = vdp::kMaxResV * screen.fbScale,
+        .format = gfx::PixelFormat::R8G8B8X8_UNORM,
+        .access = gfx::TextureAccess::RenderTarget,
+        .filterMode = gfx::TextureFilterMode::Linear,
+        .name = "[Ymir] Scaled display",
+    });
+    if (!dispTextureResult) {
+        ShowStartupFailure("Failed to create display texture: {}.\nThe graphics backend will reset on next launch.",
+                           dispTextureResult.Error().message);
+        m_graphicsService.RevertGraphicsBackend();
         return;
     }
+    const gfx::GUITextureHandle dispTexture = dispTextureResult.Value();
 
     auto renderDispTexture = [&](double targetWidth, double targetHeight) {
         auto &videoSettings = settings.video;
         const bool forceAspectRatio = videoSettings.forceAspectRatio;
-        const double forcedAspect = videoSettings.forcedAspect;
-        const double dispWidth = (forceAspectRatio ? screen.height * forcedAspect : screen.width) / screen.scaleY;
+        const Ratio forcedAspect = videoSettings.forcedAspect;
+        const double dispWidth =
+            (forceAspectRatio ? forcedAspect.MulCeil(screen.height) : screen.width) / screen.scaleY;
         const double dispHeight = (double)screen.height / screen.scaleX;
         const double dispScaleX = (double)targetWidth / dispWidth;
         const double dispScaleY = (double)targetHeight / dispHeight;
         const double dispScale = std::min(dispScaleX, dispScaleY);
         const uint32 scale = std::max(1.0, ceil(dispScale));
 
-        SDL_Renderer *renderer = m_graphicsService.GetRenderer();
-
         assert(m_graphicsService.IsTextureHandleValid(dispTexture));
         assert(m_graphicsService.IsTextureHandleValid(swFbTexture));
-        assert(renderer != nullptr);
 
         // Recreate render target texture if scale changed
         if (scale != screen.fbScale) {
             screen.fbScale = scale;
-            if (!m_graphicsService.ResizeTexture(dispTexture, vdp::kMaxResH * screen.fbScale,
-                                                 vdp::kMaxResV * screen.fbScale)) {
-                devlog::warn<grp::base>("Failed to resize framebuffer texture: {}", SDL_GetError());
+            auto result = m_graphicsService.ResizeTexture(dispTexture, vdp::kMaxResH * screen.fbScale,
+                                                          vdp::kMaxResV * screen.fbScale);
+            if (!result) {
+                devlog::warn<grp::base>("Failed to resize framebuffer texture: {}", result.Error().message);
             }
         }
 
-        // Remember previous render target to be restored later
-        SDL_Texture *prevRenderTarget = SDL_GetRenderTarget(renderer);
-
         // Render scaled framebuffer into display texture
-        SDL_FRect srcRect{.x = 0.0f, .y = 0.0f, .w = (float)screen.width, .h = (float)screen.height};
-        SDL_FRect dstRect{.x = 0.0f,
-                          .y = 0.0f,
-                          .w = (float)screen.width * screen.fbScale,
-                          .h = (float)screen.height * screen.fbScale};
+        gfx::FRect dstRect{.x = 0.0f,
+                           .y = 0.0f,
+                           .w = (float)screen.width * screen.fbScale,
+                           .h = (float)screen.height * screen.fbScale};
 
-        SDL_SetRenderTarget(renderer, m_graphicsService.GetSDLTexture(dispTexture));
-        SDL_RenderTexture(renderer, m_graphicsService.GetSDLTexture(swFbTexture), &srcRect, &dstRect);
+        if (videoSettings.useHardwareAcceleration) {
+            gfx::IGraphicsContext &gfxCtx = m_graphicsService.GetGraphicsContext();
+            const std::optional<gfx::DisplayTextureSpec> hwFbTexture = gfxCtx.AcquireCurrentDisplayOutputTexture();
+            if (hwFbTexture) {
+                screen.SetResolution(hwFbTexture->width, hwFbTexture->height);
 
-        // Restore render target
-        SDL_SetRenderTarget(renderer, prevRenderTarget);
+                const gfx::TextureID dispTextureID = m_graphicsService.GetTextureID(dispTexture);
+                gfx::FRect srcRect{.x = 0.0f, .y = 0.0f, .w = (float)screen.width, .h = (float)screen.height};
+                gfxCtx.RenderToTexture(hwFbTexture->id, dispTextureID, srcRect, dstRect);
+                gfxCtx.ReleaseCurrentDisplayOutputTexture();
+            }
+        } else {
+            gfx::FRect srcRect{.x = 0.0f, .y = 0.0f, .w = (float)screen.width, .h = (float)screen.height};
+            m_graphicsService.RenderToTexture(swFbTexture, dispTexture, srcRect, dstRect);
+        }
     };
 
     // Logo texture
@@ -884,15 +997,27 @@ void App::RunEmulator() {
         }
 
         // Create texture with the logo image
-        m_context.images.ymirLogo.texture = m_graphicsService.CreateTexture(
-            SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, imgW, imgH, [=, this](SDL_Texture *texture, bool) {
-                SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR);
-                SDL_UpdateTexture(texture, nullptr, ymirLogoImgData, imgW * sizeof(uint32));
+        auto logoImageResult = m_graphicsService.CreateTexture(
+            {
+                .width = static_cast<uint32>(imgW),
+                .height = static_cast<uint32>(imgH),
+                .format = gfx::PixelFormat::R8G8B8A8_UNORM,
+                .access = gfx::TextureAccess::Static,
+                .name = "[Ymir] Logo image",
+            },
+            [=, this](gfx::GUITextureHandle texture, bool, void *data, size_t pitch) {
+                auto byteData = static_cast<char *>(data);
+                for (size_t y = 0; y < imgH; ++y) {
+                    memcpy(byteData + y * pitch, ymirLogoImgData + y * imgW * sizeof(uint32), imgW * sizeof(uint32));
+                }
             });
-        if (m_context.images.ymirLogo.texture == gfx::kInvalidTextureHandle) {
-            ShowStartupFailure("Failed to create logo texture: {}", SDL_GetError());
+        if (!logoImageResult) {
+            ShowStartupFailure("Failed to create logo texture: {}.\nThe graphics backend will reset on next launch.",
+                               logoImageResult.Error().message);
+            m_graphicsService.RevertGraphicsBackend();
             return;
         }
+        m_context.images.ymirLogo.texture = logoImageResult.Value();
 
         m_context.images.ymirLogo.size.x = imgW;
         m_context.images.ymirLogo.size.y = imgH;
@@ -903,10 +1028,9 @@ void App::RunEmulator() {
     // ---------------------------------
     // Setup Dear ImGui Platform/Renderer backends
 
-    ImGui_ImplSDL3_InitForSDLRenderer(screen.window, m_graphicsService.GetRenderer());
-    ImGui_ImplSDLRenderer3_Init(m_graphicsService.GetRenderer());
+    m_graphicsService.ImGuiInit();
 
-    ImVec4 clearColor = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
+    gfx::ColorRGBA clearColor{0.0f, 0.0f, 0.0f, 1.0f};
 
     // ---------------------------------
     // Setup framebuffer and render callbacks
@@ -925,14 +1049,6 @@ void App::RunEmulator() {
             auto &sharedCtx = *static_cast<SharedContext *>(ctx);
             auto &screen = sharedCtx.screen;
             ++screen.VDP1Frames;
-        });
-
-        callbacks.VDP2ResolutionChanged.Bind(&m_context, [](uint32 width, uint32 height, void *ctx) {
-            auto &sharedCtx = *static_cast<SharedContext *>(ctx);
-            auto &screen = sharedCtx.screen;
-            if (width != screen.width || height != screen.height) {
-                screen.SetResolution(width, height);
-            }
         });
 
         callbacks.VDP2DrawFinished.Bind(&m_context, [](void *ctx) {
@@ -987,7 +1103,7 @@ void App::RunEmulator() {
                 }
                 if (settings.video.reduceLatency || !screen.updated || screen.videoSync) {
                     std::unique_lock lock{screen.mtxFramebuffer};
-                    std::copy_n(fb, width * height, screen.framebuffers[0].data());
+                    std::copy_n(fb, width * height, screen.framebuffers[screen.currBackFramebuffer].data());
                     screen.updated = true;
                     if (screen.videoSync) {
                         screen.frameReadyEvent.Set();
@@ -995,6 +1111,8 @@ void App::RunEmulator() {
                 }
             },
         });
+
+        m_graphicsService.RegisterHardwareRendererCallbacks(vdp);
     }
 
     // ---------------------------------
@@ -1069,13 +1187,11 @@ void App::RunEmulator() {
     // ---------------------------------
     // MIDI setup
 
-    {
-        auto *input = m_midiService.GetInput();
-        input->setCallback(OnMidiInputReceived, this);
-
-        const std::string api = input->getApiName(input->getCurrentApi());
-        devlog::info<grp::base>("Using MIDI backend: {}", api);
-    }
+    m_midiService.SetMidiInputCallback(OnMidiInputReceived, this);
+    m_midiService.Initialize([&] {
+        settings.audio.midiInputPort.Notify();
+        settings.audio.midiOutputPort.Notify();
+    });
 
     // ---------------------------------
     // File dialogs
@@ -1171,20 +1287,8 @@ void App::RunEmulator() {
     m_mouseHideTime = t;
 
     // Start emulator thread
-    m_emuThread = std::thread([&] { EmulatorThread(); });
-    ScopeGuard sgStopEmuThread{[&] {
-        // TODO: fix this hacky mess
-        // HACK: unpause, unsilence audio system and set frame request signal in order to unlock the emulator thread if
-        // it is waiting for free space in the audio buffer due to being paused
-        m_emuProcessEvent.Set();
-        m_context.audioSystem.SetSilent(false);
-        screen.frameRequestEvent.Set();
-        m_context.EnqueueEvent(events::emu::SetPaused(false));
-        m_context.EnqueueEvent(events::emu::Shutdown());
-        if (m_emuThread.joinable()) {
-            m_emuThread.join();
-        }
-    }};
+    StartEmulatorThread();
+    ScopeGuard sgStopEmuThread{[this] { StopEmulatorThread(); }};
 
     // Start screenshot processor thread
     m_screenshotService.Start(m_context);
@@ -1263,7 +1367,9 @@ void App::RunEmulator() {
 
         // Configure video sync
         const bool fullScreen = settings.video.fullScreen;
-        const bool videoSync = fullScreen ? settings.video.syncInFullscreenMode : settings.video.syncInWindowedMode;
+        const bool videoSync =
+            !vdp.GetRenderer().IsHardwareRenderer() && // TODO: fix video sync with hardware renderers
+            (fullScreen ? settings.video.syncInFullscreenMode : settings.video.syncInWindowedMode);
         screen.videoSync = videoSync && !m_context.paused && m_context.emuSpeed.limitSpeed;
 
         const double frameIntervalAdjustFactor = 0.2; // how much adjustment is applied to the frame interval
@@ -1328,18 +1434,20 @@ void App::RunEmulator() {
             }
 
             // Update VSync setting
-            int newVSync;
+            gfx::PresentMode newPresentMode;
             if (videoSync) {
-                newVSync = baseFrameRate <= maxFrameRate ? 1 : SDL_RENDERER_VSYNC_DISABLED;
+                newPresentMode = baseFrameRate <= maxFrameRate ? gfx::PresentMode::VSync : gfx::PresentMode::Adaptive;
             } else {
-                newVSync = 1;
+                newPresentMode = gfx::PresentMode::VSync;
             }
-            if (vsync != newVSync) {
-                if (SDL_SetRenderVSync(m_graphicsService.GetRenderer(), newVSync)) {
-                    devlog::info<grp::base>("VSync {}", (newVSync == 1 ? "enabled" : "disabled"));
-                    vsync = newVSync;
+            if (presentMode != newPresentMode) {
+                auto result = m_graphicsService.SetPresentMode(newPresentMode);
+                if (result) {
+                    devlog::info<grp::base>("VSync {}",
+                                            (newPresentMode == gfx::PresentMode::VSync ? "enabled" : "disabled"));
+                    presentMode = newPresentMode;
                 } else {
-                    devlog::warn<grp::base>("Could not change VSync mode: {}", SDL_GetError());
+                    devlog::warn<grp::base>("Could not change VSync mode: {}", result.Error().message);
                 }
             }
 
@@ -1576,15 +1684,17 @@ void App::RunEmulator() {
                 }
                 break;
 
-            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: [[fallthrough]];
+            case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN: util::os::ConfigureWindowDecorations(screen.window); break;
+
             case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
                 if (!settings.gui.overrideUIScale) {
-                    const float windowScale = SDL_GetWindowDisplayScale(screen.window);
-                    m_displayService.RescaleUI(windowScale);
+                    m_displayService.RescaleUI();
                     m_displayService.PersistWindowGeometry();
                 }
                 break;
-            case SDL_EVENT_WINDOW_RESIZED: [[fallthrough]];
+            case SDL_EVENT_WINDOW_RESIZED:
+                m_graphicsService.ResizeFramebuffer(evt.window.data1, evt.window.data2);
+                [[fallthrough]];
             case SDL_EVENT_WINDOW_MOVED: m_displayService.PersistWindowGeometry(); break;
 
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -1622,8 +1732,7 @@ void App::RunEmulator() {
         }
         if (rescaleUIPending) {
             rescaleUIPending = false;
-            const float windowScale = SDL_GetWindowDisplayScale(screen.window);
-            m_displayService.RescaleUI(windowScale);
+            m_displayService.RescaleUI();
         }
 
         // Process all axis changes
@@ -1694,24 +1803,38 @@ void App::RunEmulator() {
             case EvtType::SetProcessPriority: util::BoostCurrentProcessPriority(std::get<bool>(evt.value)); break;
             case EvtType::SwitchGraphicsBackend: //
             {
-                auto prevBackend = settings.video.graphicsBackend;
-                auto backend = std::get<gfx::Backend>(evt.value);
-                ImGui_ImplSDLRenderer3_Shutdown();
-                ImGui_ImplSDL3_Shutdown();
+                auto params = std::get<GraphicsBackendParams>(evt.value);
+                if (params.backend != m_graphicsService.GetGraphicsContextBackend() ||
+                    params.adapter != settings.video.graphicsAdapter) {
 
-                // TODO: recreate window when switching back from OpenGL to another API
-                if (m_graphicsService.CreateRenderer(backend, screen.window, vsync)) {
-                    settings.video.graphicsBackend = backend;
-                    settings.MakeDirty();
-                } else {
-                    m_context.DisplayMessage(fmt::format("Could not initialize {} backend: {}",
-                                                         gfx::GraphicsBackendName(backend), SDL_GetError()));
-                    m_graphicsService.CreateRenderer(prevBackend, screen.window, vsync);
+                    // Shut down hardware renderer to free up resources, otherwise the device instance held by it
+                    // prevents us from reusing the window
+                    if (vdp.GetRenderer().IsHardwareRenderer()) {
+                        util::Event evtDone{false};
+                        m_context.EnqueueEvent(events::emu::UseNullVDPRenderer(evtDone));
+                        evtDone.Wait();
+                    }
+
+                    const services::GraphicsContextSpec spec{
+                        .backend = params.backend,
+                        .adapter = params.adapter,
+                        .window = screen.window,
+                    };
+                    auto result = m_graphicsService.InitGraphicsContext(spec, presentMode);
+                    if (result) {
+                        settings.video.graphicsBackend = params.backend;
+                        settings.video.graphicsAdapter = params.adapter;
+                        settings.MakeDirty();
+                        m_context.DisplayMessage(
+                            fmt::format("{} initialized successfully", gfx::GraphicsBackendName(params.backend)));
+                    } else {
+                        m_context.DisplayMessage(fmt::format("Could not initialize {} backend: {}",
+                                                             gfx::GraphicsBackendName(params.backend),
+                                                             result.Error().message));
+                    }
+                    m_context.EnqueueEvent(events::emu::SwitchVDPRenderer());
                 }
 
-                SDL_Renderer *renderer = m_graphicsService.GetRenderer();
-                ImGui_ImplSDL3_InitForSDLRenderer(screen.window, renderer);
-                ImGui_ImplSDLRenderer3_Init(renderer);
                 break;
             }
 
@@ -1822,8 +1945,37 @@ void App::RunEmulator() {
                 screenshot::Screenshot ss{};
                 ss.fbWidth = screen.width;
                 ss.fbHeight = screen.height;
-                ss.fb.resize(screen.width * screen.height);
-                std::copy_n(screen.framebuffers[1].begin(), ss.fb.size(), ss.fb.begin());
+                if (vdp.GetRenderer().IsHardwareRenderer()) {
+                    // Hardware renderers always copy the full resolution texture
+                    ss.fb.resize(vdp::kMaxResH * vdp::kMaxResV);
+                    const size_t framebufferSize = vdp::kMaxResH * vdp::kMaxResV * sizeof(uint32);
+                    gfx::IGraphicsContext &gfxCtx = m_graphicsService.GetGraphicsContext();
+                    auto result = gfxCtx.DownloadDisplayOutputTexture(ss.fb.data(), framebufferSize);
+                    if (result) {
+                        const size_t copySize = result.Value();
+                        if (copySize < framebufferSize) {
+                            devlog::warn<grp::base>(
+                                "Display framebuffer not fully downloaded. Expected {} bytes, got {} bytes",
+                                framebufferSize, copySize);
+                        }
+                    } else {
+                        m_context.DisplayMessage(
+                            fmt::format("Display framebuffer could not be downloaded: {}", result.Error().message));
+                    }
+
+                    // Shrink it down to size in-place
+                    for (uint32 y = 1; y < screen.height; ++y) {
+                        const size_t srcPos = y * vdp::kMaxResH;
+                        const size_t dstPos = y * screen.width;
+                        std::copy_n(&ss.fb[srcPos], screen.width, &ss.fb[dstPos]);
+                    }
+                    ss.fb.resize(screen.width * screen.height);
+                } else {
+                    // The software renderer already outputs the frame in a compact vector
+                    ss.fb.resize(screen.width * screen.height);
+                    const auto &fb = screen.framebuffers[screen.currBackFramebuffer ^ 1u];
+                    std::copy_n(fb.begin(), ss.fb.size(), ss.fb.begin());
+                }
                 ss.fbScaleX = screen.scaleX;
                 ss.fbScaleY = screen.scaleY;
                 ss.ssScale = settings.general.screenshotScale;
@@ -1843,18 +1995,20 @@ void App::RunEmulator() {
         }
 
         // Update display
-        if (screen.updated || screen.videoSync) {
-            if (screen.videoSync && screen.expectFrame && !m_context.paused) {
-                screen.frameReadyEvent.Wait();
-                screen.frameReadyEvent.Reset();
-                screen.expectFrame = false;
-            }
-            screen.updated = false;
+        if (screen.videoSync && screen.expectFrame && !m_context.paused) {
+            screen.frameReadyEvent.Wait();
+            screen.frameReadyEvent.Reset();
+            screen.expectFrame = false;
+        }
+        if (screen.updated) {
             {
                 std::unique_lock lock{screen.mtxFramebuffer};
-                screen.framebuffers[1] = screen.framebuffers[0];
+                screen.updated = false;
+                screen.currBackFramebuffer ^= 1u;
             }
-            screen.CopyFramebufferToTexture(m_graphicsService.GetSDLTexture(swFbTexture));
+            const gfx::IRect area{.x = 0, .y = 0, .w = screen.width, .h = screen.height};
+            m_graphicsService.UpdateTexture(
+                swFbTexture, &area, [&](void *data, size_t pitch) { screen.CopyFramebufferToTexture(data, pitch); });
         }
 
         auto now = clk::now();
@@ -1941,7 +2095,7 @@ void App::RunEmulator() {
         m_inputService.UpdateInputs(std::chrono::duration<double>(timeDelta).count());
 
         const bool prevForceAspectRatio = settings.video.forceAspectRatio;
-        const double prevForcedAspect = settings.video.forcedAspect;
+        const Ratio prevForcedAspect = settings.video.forcedAspect;
 
         // Hide mouse cursor if no interactions were made recently or if the mouse is captured
         const bool mouseMoved = io.MouseDelta.x != 0.0f && io.MouseDelta.y != 0.0f;
@@ -1967,8 +2121,7 @@ void App::RunEmulator() {
         // Draw ImGui widgets
 
         // Start the Dear ImGui frame
-        ImGui_ImplSDLRenderer3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
+        m_graphicsService.ImGuiNewFrame();
         ImGui::NewFrame();
 
         // In PhysicalMouse mode, automatically release all mice if any ImGui window gains focus
@@ -2001,7 +2154,7 @@ void App::RunEmulator() {
 
             const float mousePosY = io.MousePos.y;
             const float vpTopQuarter =
-                viewport->Pos.y + std::min(viewport->Size.y * 0.25f, 120.0f * m_context.displayScale);
+                viewport->Pos.y + std::min(viewport->Size.y * 0.25f, 120.0f * m_imguiData.displayScale);
 
             // Show menu bar if mouse is in the top quarter of the screen (minimum of 120 scaled pixels) and visible
             return mousePosY <= vpTopQuarter;
@@ -2035,7 +2188,7 @@ void App::RunEmulator() {
                                 }
                                 if (shorten) {
                                     if (ImGui::BeginItemTooltip()) {
-                                        ImGui::PushTextWrapPos(450.0f * m_context.displayScale);
+                                        ImGui::PushTextWrapPos(450.0f * m_imguiData.displayScale);
                                         ImGui::Text("%s", fullPathStr.c_str());
                                         ImGui::PopTextWrapPos();
                                         ImGui::EndTooltip();
@@ -2132,14 +2285,14 @@ void App::RunEmulator() {
                                 [&] {
                                     ImGui::TextUnformatted(
                                         "Are you sure you wish to clear all save states for this game?");
-                                    if (ImGui::Button(
-                                            "Yes", ImVec2(80 * m_context.displayScale, 0 * m_context.displayScale))) {
+                                    if (ImGui::Button("Yes", ImVec2(80 * m_imguiData.displayScale,
+                                                                    0 * m_imguiData.displayScale))) {
                                         m_saveStateService.ClearSaveStates();
                                         m_windowManagerService.CloseGenericModal();
                                     }
                                     ImGui::SameLine();
-                                    if (ImGui::Button(
-                                            "No", ImVec2(80 * m_context.displayScale, 0 * m_context.displayScale))) {
+                                    if (ImGui::Button("No", ImVec2(80 * m_imguiData.displayScale,
+                                                                   0 * m_imguiData.displayScale))) {
                                         m_windowManagerService.CloseGenericModal();
                                     }
                                 },
@@ -2190,6 +2343,10 @@ void App::RunEmulator() {
                                         input::ToShortcut(inputContext, actions::general::TakeScreenshot).c_str())) {
                         m_context.EnqueueEvent(events::gui::TakeScreenshot());
                     }
+                    if (ImGui::MenuItem("Open screenshots directory")) {
+                        SDL_OpenURL(
+                            fmt::format("file:///{}", m_context.profile.GetPath(ProfilePath::Screenshots)).c_str());
+                    }
 
                     ImGui::Separator();
 
@@ -2207,25 +2364,27 @@ void App::RunEmulator() {
                 }
                 if (ImGui::BeginMenu("View")) {
                     auto &videoSettings = settings.video;
+                    ImGui::PushItemFlag(ImGuiItemFlags_AutoClosePopups, false);
                     ImGui::MenuItem("Force integer scaling", nullptr, &videoSettings.forceIntegerScaling);
                     ImGui::MenuItem("Force aspect ratio", nullptr, &videoSettings.forceAspectRatio);
+                    ImGui::PopItemFlag();
                     if (ImGui::SmallButton("4:3")) {
-                        videoSettings.forcedAspect = 4.0 / 3.0;
+                        videoSettings.forcedAspect = {4, 3};
                         settings.MakeDirty();
                     }
                     ImGui::SameLine();
                     if (ImGui::SmallButton("3:2")) {
-                        videoSettings.forcedAspect = 3.0 / 2.0;
+                        videoSettings.forcedAspect = {3, 2};
                         settings.MakeDirty();
                     }
                     ImGui::SameLine();
                     if (ImGui::SmallButton("16:10")) {
-                        videoSettings.forcedAspect = 16.0 / 10.0;
+                        videoSettings.forcedAspect = {16, 10};
                         settings.MakeDirty();
                     }
                     ImGui::SameLine();
                     if (ImGui::SmallButton("16:9")) {
-                        videoSettings.forcedAspect = 16.0 / 9.0;
+                        videoSettings.forcedAspect = {16, 9};
                         settings.MakeDirty();
                     }
 
@@ -2409,46 +2568,47 @@ void App::RunEmulator() {
                     ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("Settings")) {
+                    auto &settingsWindow = m_windowManagerService.SettingsWindow();
                     if (ImGui::MenuItem("Settings",
                                         input::ToShortcut(inputContext, actions::general::OpenSettings).c_str(),
-                                        &m_windowManagerService.SettingsWindow().Open)) {
-                        if (m_windowManagerService.SettingsWindow().Open) {
-                            m_windowManagerService.SettingsWindow().RequestFocus();
+                                        &settingsWindow.Open)) {
+                        if (settingsWindow.Open) {
+                            settingsWindow.RequestFocus();
                         }
                     }
                     ImGui::Separator();
                     if (ImGui::MenuItem("General")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::General);
+                        settingsWindow.OpenTab(ui::SettingsTab::General);
                     }
                     if (ImGui::MenuItem("GUI")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::GUI);
+                        settingsWindow.OpenTab(ui::SettingsTab::GUI);
                     }
                     if (ImGui::MenuItem("Hotkeys")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::Hotkeys);
+                        settingsWindow.OpenTab(ui::SettingsTab::Hotkeys);
                     }
                     if (ImGui::MenuItem("System")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::System);
+                        settingsWindow.OpenTab(ui::SettingsTab::System);
                     }
                     if (ImGui::MenuItem("IPL (BIOS)")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::IPL);
+                        settingsWindow.OpenTab(ui::SettingsTab::IPL);
                     }
                     if (ImGui::MenuItem("Input")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::Input);
+                        settingsWindow.OpenTab(ui::SettingsTab::Input);
                     }
                     if (ImGui::MenuItem("Video")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::Video);
+                        settingsWindow.OpenTab(ui::SettingsTab::Video);
                     }
                     if (ImGui::MenuItem("Audio")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::Audio);
+                        settingsWindow.OpenTab(ui::SettingsTab::Audio);
                     }
                     if (ImGui::MenuItem("Cartridge")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::Cartridge);
+                        settingsWindow.OpenTab(ui::SettingsTab::Cartridge);
                     }
                     if (ImGui::MenuItem("CD Block")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::CDBlock);
+                        settingsWindow.OpenTab(ui::SettingsTab::CDBlock);
                     }
                     if (ImGui::MenuItem("Tweaks")) {
-                        m_windowManagerService.SettingsWindow().OpenTab(ui::SettingsTab::Tweaks);
+                        settingsWindow.OpenTab(ui::SettingsTab::Tweaks);
                     }
 
                     ImGui::EndMenu();
@@ -2502,25 +2662,26 @@ void App::RunEmulator() {
                     sh2Menu("Slave SH2", m_windowManagerService.SlaveSH2WindowSet());
 
                     if (ImGui::BeginMenu("SCU")) {
-                        ImGui::MenuItem("Registers", nullptr, &m_windowManagerService.SCUWindowSet().regs.Open);
-                        ImGui::MenuItem("DSP", nullptr, &m_windowManagerService.SCUWindowSet().dsp.Open);
-                        ImGui::MenuItem("DMA", nullptr, &m_windowManagerService.SCUWindowSet().dma.Open);
-                        ImGui::MenuItem("DMA trace", nullptr, &m_windowManagerService.SCUWindowSet().dmaTrace.Open);
-                        ImGui::MenuItem("Interrupt trace", nullptr,
-                                        &m_windowManagerService.SCUWindowSet().intrTrace.Open);
+                        auto &windowSet = m_windowManagerService.SCUWindowSet();
+                        ImGui::MenuItem("Registers", nullptr, &windowSet.regs.Open);
+                        ImGui::MenuItem("DSP", nullptr, &windowSet.dsp.Open);
+                        ImGui::MenuItem("DMA", nullptr, &windowSet.dma.Open);
+                        ImGui::MenuItem("DMA trace", nullptr, &windowSet.dmaTrace.Open);
+                        ImGui::MenuItem("Interrupt trace", nullptr, &windowSet.intrTrace.Open);
                         ImGui::EndMenu();
                     }
 
                     if (ImGui::BeginMenu("SCSP")) {
-                        ImGui::MenuItem("Output", nullptr, &m_windowManagerService.SCSPWindowSet().output.Open);
-                        ImGui::MenuItem("Slots", nullptr, &m_windowManagerService.SCSPWindowSet().slots.Open);
-                        ImGui::MenuItem("KYONEX trace", nullptr,
-                                        &m_windowManagerService.SCSPWindowSet().kyonexTrace.Open);
+                        auto &windowSet = m_windowManagerService.SCSPWindowSet();
+                        ImGui::MenuItem("Output", nullptr, &windowSet.output.Open);
+                        ImGui::MenuItem("Slots", nullptr, &windowSet.slots.Open);
+                        ImGui::MenuItem("KYONEX trace", nullptr, &windowSet.kyonexTrace.Open);
 
                         ImGui::EndMenu();
                     }
 
                     if (ImGui::BeginMenu("VDP")) {
+                        auto &windowSet = m_windowManagerService.VDPWindowSet();
                         auto layerMenuItem = [&](const char *name, vdp::Layer layer) {
                             const bool enabled = vdp.IsLayerEnabled(layer);
                             ImGui::PushItemFlag(ImGuiItemFlags_AutoClosePopups, false);
@@ -2530,8 +2691,7 @@ void App::RunEmulator() {
                             ImGui::PopItemFlag();
                         };
 
-                        ImGui::MenuItem("Layer visibility", nullptr,
-                                        &m_windowManagerService.VDPWindowSet().vdp2LayerVisibility.Open);
+                        ImGui::MenuItem("Layer visibility", nullptr, &windowSet.vdp2LayerVisibility.Open);
                         ImGui::Indent();
                         layerMenuItem("Sprite", vdp::Layer::Sprite);
                         layerMenuItem("RBG0", vdp::Layer::RBG0);
@@ -2545,51 +2705,50 @@ void App::RunEmulator() {
                         ImGui::BeginDisabled();
                         ImGui::TextUnformatted("VDP1");
                         ImGui::EndDisabled();
-                        ImGui::MenuItem("Registers", nullptr, &m_windowManagerService.VDPWindowSet().vdp1Regs.Open);
+                        ImGui::MenuItem("Registers##vdp1", nullptr, &windowSet.vdp1Regs.Open);
 
                         ImGui::Separator();
                         ImGui::BeginDisabled();
                         ImGui::TextUnformatted("VDP2");
                         ImGui::EndDisabled();
-                        ImGui::MenuItem("Background layer parameters", nullptr,
-                                        &m_windowManagerService.VDPWindowSet().vdp2BGLayerParams.Open);
-                        ImGui::MenuItem("Sprite layer parameters", nullptr,
-                                        &m_windowManagerService.VDPWindowSet().vdp2SpriteLayerParams.Open);
-                        ImGui::MenuItem("Window parameters", nullptr,
-                                        &m_windowManagerService.VDPWindowSet().vdp2WindowParams.Open);
-                        ImGui::MenuItem("Color calculation parameters", nullptr,
-                                        &m_windowManagerService.VDPWindowSet().vdp2ColorCalcParams.Open);
-                        ImGui::MenuItem("Debug overlay", nullptr,
-                                        &m_windowManagerService.VDPWindowSet().vdp2DebugOverlay.Open);
-                        ImGui::MenuItem("VRAM access patterns", nullptr,
-                                        &m_windowManagerService.VDPWindowSet().vdp2VRAMAccessPatterns.Open);
-                        ImGui::MenuItem("Color RAM palette", nullptr,
-                                        &m_windowManagerService.VDPWindowSet().vdp2CRAM.Open);
+                        ImGui::MenuItem("Registers##vdp2", nullptr, &windowSet.vdp2Regs.Open);
+                        ImGui::MenuItem("Background layer parameters", nullptr, &windowSet.vdp2BGLayerParams.Open);
+                        ImGui::MenuItem("Sprite layer parameters", nullptr, &windowSet.vdp2SpriteLayerParams.Open);
+                        ImGui::MenuItem("Window parameters", nullptr, &windowSet.vdp2WindowParams.Open);
+                        ImGui::MenuItem("Color calculation parameters", nullptr, &windowSet.vdp2ColorCalcParams.Open);
+                        ImGui::MenuItem("Debug overlay", nullptr, &windowSet.vdp2DebugOverlay.Open);
+                        ImGui::MenuItem("VRAM access patterns", nullptr, &windowSet.vdp2VRAMAccessPatterns.Open);
+                        ImGui::MenuItem("Color RAM palette", nullptr, &windowSet.vdp2CRAM.Open);
 
                         ImGui::EndMenu();
                     }
 
                     if (ImGui::BeginMenu("CD Block")) {
+                        auto &windowSet = m_windowManagerService.CDBlockWindowSet();
                         ImGui::BeginDisabled();
                         ImGui::TextUnformatted("HLE");
                         ImGui::EndDisabled();
-                        ImGui::MenuItem("Command trace", nullptr,
-                                        &m_windowManagerService.CDBlockWindowSet().cmdTrace.Open);
-                        ImGui::MenuItem("Filters", nullptr, &m_windowManagerService.CDBlockWindowSet().filters.Open);
-                        ImGui::MenuItem("Partitions", nullptr,
-                                        &m_windowManagerService.CDBlockWindowSet().partitions.Open);
+                        ImGui::MenuItem("Command trace", nullptr, &windowSet.cmdTrace.Open);
+                        ImGui::MenuItem("Filters", nullptr, &windowSet.filters.Open);
+                        ImGui::MenuItem("Partitions", nullptr, &windowSet.partitions.Open);
                         ImGui::Separator();
                         ImGui::BeginDisabled();
                         ImGui::TextUnformatted("LLE");
                         ImGui::EndDisabled();
-                        ImGui::MenuItem("CD drive state trace", nullptr,
-                                        &m_windowManagerService.CDBlockWindowSet().driveStateTrace.Open);
-                        ImGui::MenuItem("YGR command trace", nullptr,
-                                        &m_windowManagerService.CDBlockWindowSet().ygrCmdTrace.Open);
+                        ImGui::MenuItem("CD drive state trace", nullptr, &windowSet.driveStateTrace.Open);
+                        ImGui::MenuItem("YGR command trace", nullptr, &windowSet.ygrCmdTrace.Open);
                         ImGui::EndMenu();
                     }
 
                     ImGui::MenuItem("Debug output", nullptr, &m_windowManagerService.DebugOutputWindow().Open);
+                    ImGui::Separator();
+                    if (ImGui::MenuItem(
+                            "Windowed video output",
+                            input::ToShortcut(inputContext, actions::general::ToggleWindowedVideoOutput).c_str(),
+                            &settings.video.displayVideoOutputInWindow)) {
+                        fitWindowToScreenNow = true;
+                        settings.MakeDirty();
+                    }
                     ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("Help")) {
@@ -2657,11 +2816,11 @@ void App::RunEmulator() {
                 const bool horzDisplay = videoSettings.rotation == Settings::Video::DisplayRotation::Normal ||
                                          videoSettings.rotation == Settings::Video::DisplayRotation::_180;
 
-                double aspectRatio = videoSettings.forceAspectRatio
-                                         ? 1.0 / videoSettings.forcedAspect
-                                         : (double)screen.height / screen.width * screen.scaleY / screen.scaleX;
+                Ratio aspectRatio = videoSettings.forceAspectRatio
+                                        ? videoSettings.forcedAspect.Inverse()
+                                        : Ratio{screen.height * screen.scaleY, screen.width * screen.scaleX};
                 if (!horzDisplay) {
-                    aspectRatio = 1.0 / aspectRatio;
+                    aspectRatio = aspectRatio.Inverse();
                 }
 
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
@@ -2669,9 +2828,9 @@ void App::RunEmulator() {
                     (horzDisplay ? ImVec2(vdp::kMinResH, vdp::kMinResV) : ImVec2(vdp::kMinResV, vdp::kMinResH)),
                     ImVec2(FLT_MAX, FLT_MAX),
                     [](ImGuiSizeCallbackData *data) {
-                        double aspectRatio = *(double *)data->UserData;
+                        Ratio aspectRatio = *(Ratio *)data->UserData;
                         data->DesiredSize.y =
-                            (float)(int)(data->DesiredSize.x * aspectRatio) + ImGui::GetFrameHeightWithSpacing();
+                            (float)aspectRatio.MulCeil(data->DesiredSize.x) + ImGui::GetFrameHeightWithSpacing();
                     },
                     (void *)&aspectRatio);
 
@@ -2700,21 +2859,22 @@ void App::RunEmulator() {
                     screen.dSizeX = horzDisplay ? avail.x : avail.y;
                     screen.dSizeY = horzDisplay ? avail.y : avail.x;
 
-                    const SDL_Texture *dispTexturePtr = m_graphicsService.GetSDLTexture(dispTexture);
+                    // TODO: for SDL Renderer, return SDL_Texture * cast to ImTextureID
+                    const ImTextureID dispTextureID = m_graphicsService.GetImGuiTextureID(dispTexture);
                     auto *drawList = ImGui::GetWindowDrawList();
                     switch (videoSettings.rotation) {
                     default: [[fallthrough]];
                     case Settings::Video::DisplayRotation::Normal:
-                        drawList->AddImageQuad((ImTextureID)dispTexturePtr, tl, tr, br, bl, uv1, uv2, uv3, uv4);
+                        drawList->AddImageQuad(dispTextureID, tl, tr, br, bl, uv1, uv2, uv3, uv4);
                         break;
                     case Settings::Video::DisplayRotation::_90CW:
-                        drawList->AddImageQuad((ImTextureID)dispTexturePtr, tl, tr, br, bl, uv4, uv1, uv2, uv3);
+                        drawList->AddImageQuad(dispTextureID, tl, tr, br, bl, uv4, uv1, uv2, uv3);
                         break;
                     case Settings::Video::DisplayRotation::_180:
-                        drawList->AddImageQuad((ImTextureID)dispTexturePtr, tl, tr, br, bl, uv3, uv4, uv1, uv2);
+                        drawList->AddImageQuad(dispTextureID, tl, tr, br, bl, uv3, uv4, uv1, uv2);
                         break;
                     case Settings::Video::DisplayRotation::_90CCW:
-                        drawList->AddImageQuad((ImTextureID)dispTexturePtr, tl, tr, br, bl, uv2, uv3, uv4, uv1);
+                        drawList->AddImageQuad(dispTextureID, tl, tr, br, bl, uv2, uv3, uv4, uv1);
                         break;
                     }
 
@@ -2747,7 +2907,7 @@ void App::RunEmulator() {
                 const float mousePosY = io.MousePos.y;
                 const float vpBottomQuarter =
                     viewport->Pos.y +
-                    std::min(viewport->Size.y * 0.75f, viewport->Size.y - 120.0f * m_context.displayScale);
+                    std::min(viewport->Size.y * 0.75f, viewport->Size.y - 120.0f * m_imguiData.displayScale);
                 if ((mouseMoved && mousePosY >= vpBottomQuarter) || m_context.rewinding || m_context.paused) {
                     m_rewindBarFadeTimeBase = now;
                 }
@@ -2774,12 +2934,12 @@ void App::RunEmulator() {
                 static constexpr float kBaseShadowOffset = 3.0f;
                 static constexpr float kBaseTextShadowOffset = 1.0f;
                 static constexpr sint64 kBlinkInterval = 700;
-                const float size = kBaseSize * m_context.displayScale;
-                const float fontSizeMedium = m_context.fontSizes.medium * m_context.displayScale;
-                const float padding = kBasePadding * m_context.displayScale;
-                const float shadowOffset = kBaseShadowOffset * m_context.displayScale;
-                const float textShadowOffset = kBaseTextShadowOffset * m_context.displayScale;
-                ImFont *font = m_context.fonts.sansSerif.regular;
+                const float size = kBaseSize * m_imguiData.displayScale;
+                const float fontSizeMedium = m_imguiData.fontSizes.medium * m_imguiData.displayScale;
+                const float padding = kBasePadding * m_imguiData.displayScale;
+                const float shadowOffset = kBaseShadowOffset * m_imguiData.displayScale;
+                const float textShadowOffset = kBaseTextShadowOffset * m_imguiData.displayScale;
+                ImFont *font = m_imguiData.fonts.sansSerif.regular;
                 ImGui::PushFont(font, kBaseSize);
                 const ImVec2 charSize = ImGui::CalcTextSize(ICON_MS_PLAY_ARROW);
                 ImGui::PopFont();
@@ -2827,7 +2987,7 @@ void App::RunEmulator() {
                                       slomo ? (rev ? ICON_MS_ARROW_BACK_2 : ICON_MS_PLAY_ARROW)
                                             : (rev ? ICON_MS_FAST_REWIND : ICON_MS_FAST_FORWARD));
 
-                        ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.medium);
+                        ImGui::PushFont(m_imguiData.fonts.sansSerif.regular, m_imguiData.fontSizes.medium);
                         const auto textSize = ImGui::CalcTextSize(speed.c_str());
                         ImGui::PopFont();
 
@@ -2837,10 +2997,10 @@ void App::RunEmulator() {
                                              br.y + textPadding.y);
                         const ImVec2 textPos(rectPos.x + textPadding.x, rectPos.y + textPadding.y);
 
-                        drawList->AddText(m_context.fonts.sansSerif.regular, fontSizeMedium,
+                        drawList->AddText(m_imguiData.fonts.sansSerif.regular, fontSizeMedium,
                                           ImVec2(textPos.x + textShadowOffset, textPos.y + textShadowOffset),
                                           ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.85f)), speed.c_str());
-                        drawList->AddText(m_context.fonts.sansSerif.regular, fontSizeMedium, textPos,
+                        drawList->AddText(m_imguiData.fonts.sansSerif.regular, fontSizeMedium, textPos,
                                           ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.00f)), speed.c_str());
                     } else if (rev) {
                         drawIndicator(tl, alpha, size, ICON_MS_ARROW_BACK_2);
@@ -2858,11 +3018,11 @@ void App::RunEmulator() {
                     static constexpr float kVolumeBarBaseWidth = 100.0f;
                     static constexpr float kVolumeBarBaseHeight = 15.0f;
                     static constexpr float kVolumeBarYFudge = 3.0f; // compensate for Material Symbols char height
-                    const float iconSize = kIconBaseSize * m_context.displayScale;
-                    const float iconPadding = kIconBasePadding * m_context.displayScale;
-                    const float volumeBarWidth = kVolumeBarBaseWidth * m_context.displayScale;
-                    const float volumeBarHeight = kVolumeBarBaseHeight * m_context.displayScale;
-                    const float volumeBarYFudge = kVolumeBarYFudge * m_context.displayScale;
+                    const float iconSize = kIconBaseSize * m_imguiData.displayScale;
+                    const float iconPadding = kIconBasePadding * m_imguiData.displayScale;
+                    const float volumeBarWidth = kVolumeBarBaseWidth * m_imguiData.displayScale;
+                    const float volumeBarHeight = kVolumeBarBaseHeight * m_imguiData.displayScale;
+                    const float volumeBarYFudge = kVolumeBarYFudge * m_imguiData.displayScale;
                     const float gain = m_context.audioSystem.GetGain();
                     const bool mute = m_context.audioSystem.IsMute();
                     const bool forceDisplay = mute || gain == 0.0f;
@@ -2915,7 +3075,7 @@ void App::RunEmulator() {
                             if (mute) {
                                 volumeText = fmt::format("(Mute) {}", volumeText);
                             }
-                            ImGui::PushFont(font, m_context.fontSizes.medium);
+                            ImGui::PushFont(font, m_imguiData.fontSizes.medium);
                             const ImVec2 volumeTextSize = ImGui::CalcTextSize(volumeText.c_str());
                             ImGui::PopFont();
                             const ImVec2 volumeTextPos{p1.x - iconPadding - volumeTextSize.x, p1.y - volumeTextSize.y};
@@ -2978,7 +3138,7 @@ void App::RunEmulator() {
 
                 const float textWrapWidth = viewport->WorkSize.x - padding.x * 4.0f;
 
-                ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.small);
+                ImGui::PushFont(m_imguiData.fonts.sansSerif.regular, m_imguiData.fontSizes.small);
                 const auto textSize = ImGui::CalcTextSize(fpsText.c_str(), nullptr, false, textWrapWidth);
                 ImGui::PopFont();
 
@@ -2991,8 +3151,9 @@ void App::RunEmulator() {
                     rectPos,
                     ImVec2(rectPos.x + textSize.x + padding.x * 2.0f, rectPos.y + textSize.y + padding.y * 2.0f),
                     ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.5f)));
-                drawList->AddText(m_context.fonts.sansSerif.regular, m_context.fontSizes.small * m_context.displayScale,
-                                  textPos, ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f)), fpsText.c_str(), nullptr,
+                drawList->AddText(m_imguiData.fonts.sansSerif.regular,
+                                  m_imguiData.fontSizes.small * m_imguiData.displayScale, textPos,
+                                  ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f)), fpsText.c_str(), nullptr,
                                   textWrapWidth);
             }
 
@@ -3031,7 +3192,7 @@ void App::RunEmulator() {
 
                     const float textWrapWidth = viewport->WorkSize.x - padding.x * 4.0f - spacing.x * 2.0f;
 
-                    ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.large);
+                    ImGui::PushFont(m_imguiData.fonts.sansSerif.regular, m_imguiData.fontSizes.large);
                     const auto textSize = ImGui::CalcTextSize(message->message.c_str(), nullptr, false, textWrapWidth);
                     ImGui::PopFont();
                     const ImVec2 textPos(messageX + padding.x, messageY + padding.y);
@@ -3040,8 +3201,8 @@ void App::RunEmulator() {
                         ImVec2(messageX, messageY),
                         ImVec2(messageX + textSize.x + padding.x * 2.0f, messageY + textSize.y + padding.y * 2.0f),
                         ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, alpha * 0.5f)));
-                    drawList->AddText(m_context.fonts.sansSerif.regular,
-                                      m_context.fontSizes.large * m_context.displayScale, textPos,
+                    drawList->AddText(m_imguiData.fonts.sansSerif.regular,
+                                      m_imguiData.fontSizes.large * m_imguiData.displayScale, textPos,
                                       ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, alpha)), message->message.c_str(),
                                       nullptr, textWrapWidth);
 
@@ -3056,18 +3217,14 @@ void App::RunEmulator() {
 
         ImGui::Render();
 
-        SDL_Renderer *renderer = m_graphicsService.GetRenderer();
-
         // Clear screen
-        const ImVec4 bgClearColor = fullScreen ? ImVec4(0, 0, 0, 1.0f) : clearColor;
-        SDL_SetRenderDrawColorFloat(renderer, bgClearColor.x, bgClearColor.y, bgClearColor.z, bgClearColor.w);
-        SDL_RenderClear(renderer);
+        m_graphicsService.ClearScreen(clearColor);
 
         // Draw Saturn screen
         if (!settings.video.displayVideoOutputInWindow) {
             const auto &videoSettings = settings.video;
             const bool forceAspectRatio = videoSettings.forceAspectRatio;
-            const double forcedAspect = videoSettings.forcedAspect;
+            const Ratio forcedAspect = videoSettings.forcedAspect;
             const bool aspectRatioChanged = forceAspectRatio && forcedAspect != prevForcedAspect;
             const bool forceAspectRatioChanged = prevForceAspectRatio != forceAspectRatio;
             const bool screenSizeChanged = aspectRatioChanged || forceAspectRatioChanged || screen.resolutionChanged;
@@ -3093,8 +3250,8 @@ void App::RunEmulator() {
 
             wh -= menuBarHeight;
 
-            double baseWidth = forceAspectRatio ? std::ceil(screen.height * screen.scaleY * forcedAspect)
-                                                : screen.width * screen.scaleX;
+            double baseWidth =
+                forceAspectRatio ? forcedAspect.MulCeil(screen.height * screen.scaleY) : screen.width * screen.scaleX;
             double baseHeight = screen.height * screen.scaleY;
             if (!horzDisplay) {
                 std::swap(baseWidth, baseHeight);
@@ -3132,7 +3289,7 @@ void App::RunEmulator() {
                         screenScaleY = screen.prevScaleY;
                     }
                     if (screenSizeChanged) {
-                        double baseWidth = forceAspectRatio ? std::ceil(screenHeight * screenScaleY * prevForcedAspect)
+                        double baseWidth = forceAspectRatio ? prevForcedAspect.MulCeil(screenHeight * screenScaleY)
                                                             : screenWidth * screenScaleX;
                         double baseHeight = screenHeight * screenScaleY;
                         if (!horzDisplay) {
@@ -3190,16 +3347,15 @@ void App::RunEmulator() {
             }
 
             // Draw the texture
-            SDL_FRect srcRect{.x = 0.0f,
-                              .y = 0.0f,
-                              .w = (float)(screen.width * screen.fbScale),
-                              .h = (float)(screen.height * screen.fbScale)};
-            SDL_FRect dstRect{.x = floorf(slackX * 0.5f),
-                              .y = floorf(slackY * 0.5f + menuBarHeight),
-                              .w = (float)scaledWidth,
-                              .h = (float)scaledHeight};
-            SDL_Texture *dispTexturePtr = m_graphicsService.GetSDLTexture(dispTexture);
-            SDL_RenderTextureRotated(renderer, dispTexturePtr, &srcRect, &dstRect, rotAngle, nullptr, SDL_FLIP_NONE);
+            gfx::FRect srcRect{.x = 0.0f,
+                               .y = 0.0f,
+                               .w = (float)(screen.width * screen.fbScale),
+                               .h = (float)(screen.height * screen.fbScale)};
+            gfx::FRect dstRect{.x = floorf(slackX * 0.5f),
+                               .y = floorf(slackY * 0.5f + menuBarHeight),
+                               .w = (float)scaledWidth,
+                               .h = (float)scaledHeight};
+            m_graphicsService.DrawTextureRotated(dispTexture, srcRect, dstRect, rotAngle);
 
             screen.scale = scale;
             screen.dCenterX = dstRect.x + dstRect.w * 0.5f;
@@ -3213,19 +3369,21 @@ void App::RunEmulator() {
         screen.resolutionChanged = false;
 
         // Render ImGui widgets
-#if defined(__APPLE__)
-        // Logical->Physical window-coordinate fix primarily for MacOS Retina displays
-        const float pixelDensity = SDL_GetWindowPixelDensity(screen.window);
-        SDL_SetRenderScale(renderer, pixelDensity, pixelDensity);
-#endif
+        m_graphicsService.ImGuiRenderFrame();
 
-        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
-
-#if defined(__APPLE__)
-        SDL_SetRenderScale(renderer, 1.0f, 1.0f);
-#endif
-
-        SDL_RenderPresent(renderer);
+        {
+            auto presentResult = m_graphicsService.Present();
+            if (!presentResult) {
+                // Revert to sane settings right now, just to be safe
+                settings.video.graphicsBackend = gfx::Backend::SDLRenderer;
+                settings.video.graphicsAdapter = std::nullopt;
+                settings.video.useHardwareAcceleration = false;
+                settings.Save();
+                util::ShowFatalErrorDialog("The graphics context crashed. Cannot continue execution.\n"
+                                           "Your graphics settings were reset.");
+                goto end_loop;
+            }
+        }
 
         // Process ImGui INI file write requests
         // TODO: compress and include in state blob
@@ -3237,11 +3395,29 @@ void App::RunEmulator() {
         settings.CheckDirty();
         m_saveStateService.CheckDebuggerStateDirty();
         m_persistenceService.DoPendingPersistences();
+        m_discordRPCService.Poll();
     }
 
 end_loop:; // the semicolon is not a typo!
 
     // Everything is cleaned up automatically by ScopeGuards
+}
+
+void App::StartEmulatorThread() {
+    m_emuThread = std::thread([this] { EmulatorThread(); });
+}
+
+void App::StopEmulatorThread() {
+    if (!m_emuThread.joinable()) {
+        return;
+    }
+
+    m_emuProcessEvent.Set();
+    m_context.screen.frameRequestEvent.Set();
+    m_context.audioSystem.SetSilent(true);
+    m_context.EnqueueEvent(events::emu::Shutdown());
+
+    m_emuThread.join();
 }
 
 void App::EmulatorThread() {

@@ -2,17 +2,20 @@
 
 #include <ymir/hw/sh2/sh2.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
 
 using namespace ymir;
 
 namespace app::ui {
 
-SH2ExceptionVectorsView::SH2ExceptionVectorsView(SharedContext &context, sh2::SH2 &sh2)
-    : m_context(context)
-    , m_sh2(sh2) {}
+SH2ExceptionVectorsView::SH2ExceptionVectorsView(sh2::SH2 &sh2)
+    : m_sh2(sh2) {}
 
 void SH2ExceptionVectorsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("Layout")) {
             if (ImGui::MenuItem("Narrow", nullptr, m_columnShift == 0)) {
@@ -42,15 +45,15 @@ void SH2ExceptionVectorsView::Display() {
     const uint32 baseAddress = m_useVBR ? vbr : m_customAddress;
 
     // Compute several layout sizes
-    const float fontSize = m_context.fontSizes.medium;
-    ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+    const float fontSize = imguiData->fontSizes.medium;
+    ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
     const float framePadding = ImGui::GetStyle().FramePadding.x;
     const float vecFieldWidth = framePadding * 2 + hexCharWidth * 8;
 
     auto drawHex32 = [&](auto id, uint32 &value) {
-        ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
         ImGui::SetNextItemWidth(vecFieldWidth);
         bool changed = ImGui::InputScalar(fmt::format("##input_{}", id).c_str(), ImGuiDataType_U32, &value, nullptr,
                                           nullptr, "%08X", ImGuiInputTextFlags_CharsHexadecimal);
@@ -118,7 +121,7 @@ void SH2ExceptionVectorsView::Display() {
             ImGui::TableSetupColumn(fmt::format("##vec_addr_{}", i).c_str(), ImGuiTableColumnFlags_WidthFixed,
                                     hexCharWidth * 8);
             ImGui::TableSetupColumn(fmt::format("##vec_val_{}", i).c_str(), ImGuiTableColumnFlags_WidthFixed,
-                                    vecFieldWidth + (last ? 0.0f : 10.0f * m_context.displayScale));
+                                    vecFieldWidth + (last ? 0.0f : 10.0f * imguiData->displayScale));
         }
 
         for (uint32 vecOfs = 0; vecOfs <= (0x7F >> m_columnShift); ++vecOfs) {
@@ -126,13 +129,13 @@ void SH2ExceptionVectorsView::Display() {
                 const uint32 address = baseAddress + (base + vecOfs) * sizeof(uint32);
 
                 if (ImGui::TableNextColumn()) {
-                    ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
                     ImGui::AlignTextToFramePadding();
                     ImGui::Text("%02X", base + vecOfs);
                     ImGui::PopFont();
                 }
                 if (ImGui::TableNextColumn()) {
-                    ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
                     ImGui::AlignTextToFramePadding();
                     ImGui::Text("%08X", address);
                     ImGui::PopFont();
@@ -159,8 +162,9 @@ void SH2ExceptionVectorsView::Display() {
 
 float SH2ExceptionVectorsView::GetWidth() const {
     // Compute several layout sizes
-    const float fontSize = m_context.fontSizes.medium;
-    ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    const float fontSize = imguiData->fontSizes.medium;
+    ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
     const float windowPadding = ImGui::GetStyle().WindowPadding.x;
@@ -172,7 +176,7 @@ float SH2ExceptionVectorsView::GetWidth() const {
     const uint32 numCols = 1u << m_columnShift;
 
     return (hexCharWidth * 2 + hexCharWidth * 8 + vecFieldWidth + cellPadding * 2 * 3) * numCols +
-           (10.0f * m_context.displayScale) * (numCols - 1) + scrollbarWidth + windowPadding * 2;
+           (10.0f * imguiData->displayScale) * (numCols - 1) + scrollbarWidth + windowPadding * 2;
 }
 
 } // namespace app::ui

@@ -2,10 +2,12 @@
 
 #include <ymir/hw/scu/scu.hpp>
 
+#include <imgui.h>
+
 namespace app::ui {
 
-SCURegistersView::SCURegistersView(SharedContext &context)
-    : m_scu(context.saturn.GetSCU()) {}
+SCURegistersView::SCURegistersView(ymir::scu::SCU &scu)
+    : m_scu(scu) {}
 
 void SCURegistersView::Display() {
     auto &probe = m_scu.GetProbe();

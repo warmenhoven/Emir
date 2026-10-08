@@ -1,5 +1,7 @@
 #include "scsp_output_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 SCSPOutputWindow::SCSPOutputWindow(SharedContext &context)
@@ -11,8 +13,9 @@ SCSPOutputWindow::SCSPOutputWindow(SharedContext &context)
 }
 
 void SCSPOutputWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(200 * m_context.displayScale, 50 * m_context.displayScale),
-                                        ImVec2(FLT_MAX, 200 * m_context.displayScale));
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(200 * imguiData->displayScale, 50 * imguiData->displayScale),
+                                        ImVec2(FLT_MAX, 200 * imguiData->displayScale));
 }
 
 void SCSPOutputWindow::DrawContents() {

@@ -1,5 +1,7 @@
 #include "vdp2_cram_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 VDP2CRAMWindow::VDP2CRAMWindow(SharedContext &context)
@@ -11,8 +13,9 @@ VDP2CRAMWindow::VDP2CRAMWindow(SharedContext &context)
 }
 
 void VDP2CRAMWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(860 * m_context.displayScale, 250 * m_context.displayScale),
-                                        ImVec2(860 * m_context.displayScale, FLT_MAX));
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(860 * imguiData->displayScale, 250 * imguiData->displayScale),
+                                        ImVec2(860 * imguiData->displayScale, FLT_MAX));
 }
 
 void VDP2CRAMWindow::DrawContents() {

@@ -5,6 +5,8 @@
 #include <app/ui/fonts/IconsMaterialSymbols.h>
 #include <app/ui/widgets/audio_widgets.hpp>
 
+#include <app/imgui_data.hpp>
+
 using namespace ymir;
 
 namespace app::ui {
@@ -15,14 +17,15 @@ SCSPSlotsView::SCSPSlotsView(SharedContext &context)
     , m_tracer(context.tracers.SCSP) {}
 
 void SCSPSlotsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
     const ImVec2 msCharSize = ImGui::CalcTextSize(ICON_MS_KEYBOARD_TAB);
     const auto msCharWidth = msCharSize.x;
 
-    const ImVec2 wfSize{80.0f * m_context.displayScale, msCharSize.y};
+    const ImVec2 wfSize{80.0f * imguiData->displayScale, msCharSize.y};
 
     auto &probe = m_scsp.GetProbe();
     const auto &slots = probe.GetSlots();
@@ -111,7 +114,7 @@ void SCSPSlotsView::Display() {
             ImGui::TableNextRow();
             if (ImGui::TableNextColumn()) {
                 // Index
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02d", i);
                 ImGui::PopFont();
             }
@@ -123,25 +126,25 @@ void SCSPSlotsView::Display() {
             }
             if (ImGui::TableNextColumn()) {
                 // SA
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%05X", slot.startAddress);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // LSA
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%04X", slot.loopStartAddress);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // LEA
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%04X", slot.loopEndAddress);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // Sample offset
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%04X", slot.currSample & 0xFFFF);
                 ImGui::PopFont();
             }
@@ -169,13 +172,13 @@ void SCSPSlotsView::Display() {
             }
             if (ImGui::TableNextColumn()) {
                 // PCM8B
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%s", slot.pcm8Bit ? " 8" : "16");
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // SBCTL
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.sampleXOR >> 8u);
                 ImGui::PopFont();
             }
@@ -203,7 +206,7 @@ void SCSPSlotsView::Display() {
                     break;
                 }
 
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%s", soundSourceText);
                 ImGui::PopFont();
                 ImGui::SetItemTooltip("%s", soundSourceHint);
@@ -211,37 +214,37 @@ void SCSPSlotsView::Display() {
 
             if (ImGui::TableNextColumn()) {
                 // AR
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.attackRate);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // D1R
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.decay1Rate);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // D2R
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.decay2Rate);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // RR
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.releaseRate);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // DL
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.decayLevel);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // KRS
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%X", slot.keyRateScaling);
                 ImGui::PopFont();
             }
@@ -284,7 +287,7 @@ void SCSPSlotsView::Display() {
                 // EG state
                 using enum scsp::Slot::EGState;
 
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 switch (slot.egState) {
                 case Attack: ImGui::TextColored(color, "%s", "ATK"); break;
                 case Decay1: ImGui::TextColored(color, "%s", "DC1"); break;
@@ -295,26 +298,26 @@ void SCSPSlotsView::Display() {
             }
             if (ImGui::TableNextColumn()) {
                 // EG level
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%03X", slot.GetEGLevel());
                 ImGui::PopFont();
             }
 
             if (ImGui::TableNextColumn()) {
                 // MDL
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%X", slot.modLevel);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // MDXSL
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.modXSelect);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // MDYSL
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.modYSelect);
                 ImGui::PopFont();
             }
@@ -331,7 +334,7 @@ void SCSPSlotsView::Display() {
 
             if (ImGui::TableNextColumn()) {
                 // TL
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.totalLevel);
                 ImGui::PopFont();
             }
@@ -348,13 +351,13 @@ void SCSPSlotsView::Display() {
 
             if (ImGui::TableNextColumn()) {
                 // OCT
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%X", slot.octave);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // FNS
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%03X", slot.freqNumSwitch);
                 ImGui::PopFont();
             }
@@ -371,13 +374,13 @@ void SCSPSlotsView::Display() {
 
             auto drawLFOWaveform = [&](scsp::Slot::Waveform waveform, uint8 sens, bool bipolar) {
                 const auto pos = ImGui::GetCursorScreenPos();
-                const float padding = 3.0f * m_context.displayScale;
+                const float padding = 3.0f * imguiData->displayScale;
                 const ImVec2 wfSize(msCharSize.x - padding * 2.0f, msCharSize.y - padding * 2.0f);
                 const ImVec2 basePos(pos.x + padding, pos.y + padding);
                 const ImVec2 centerPos(pos.x + msCharSize.x * 0.5f, pos.y + msCharSize.y * 0.5f);
                 const ImVec2 endPos(pos.x + msCharSize.x - padding, pos.y + msCharSize.y - padding);
 
-                const float thickness = 1.5f * m_context.displayScale;
+                const float thickness = 1.5f * imguiData->displayScale;
                 ImVec4 waveColor = color;
                 waveColor.w = disabled ? ImGui::GetStyle().DisabledAlpha : 1.0f;
                 const ImU32 colorValue = ImGui::ColorConvertFloat4ToU32(waveColor);
@@ -405,16 +408,16 @@ void SCSPSlotsView::Display() {
                                 {centerPos.x, endPos.y},
                                 {endPos.x, centerPos.y},
                             };
-                            drawList->AddPolyline(points, std::size(points), colorValue, ImDrawFlags_RoundCornersAll,
-                                                  thickness);
+                            drawList->AddPolyline(points, std::size(points), colorValue, thickness,
+                                                  ImDrawFlags_RoundCornersAll);
                         } else {
                             const ImVec2 points[] = {
                                 {basePos.x, endPos.y},
                                 {endPos.x, basePos.y},
                                 {endPos.x, endPos.y},
                             };
-                            drawList->AddPolyline(points, std::size(points), colorValue, ImDrawFlags_RoundCornersAll,
-                                                  thickness);
+                            drawList->AddPolyline(points, std::size(points), colorValue, thickness,
+                                                  ImDrawFlags_RoundCornersAll);
                         }
                         break;
                     }
@@ -426,16 +429,16 @@ void SCSPSlotsView::Display() {
                                 {centerPos.x + 0.5f, basePos.y + 0.5f}, {centerPos.x + 0.5f, endPos.y + 0.5f},
                                 {endPos.x + 0.5f, endPos.y + 0.5f},     {endPos.x + 0.5f, centerPos.y + 0.5f},
                             };
-                            drawList->AddPolyline(points, std::size(points), colorValue, ImDrawFlags_RoundCornersAll,
-                                                  thickness);
+                            drawList->AddPolyline(points, std::size(points), colorValue, thickness,
+                                                  ImDrawFlags_RoundCornersAll);
                         } else {
                             const ImVec2 points[] = {
                                 {basePos.x + 0.5f, endPos.y + 0.5f},    {basePos.x + 0.5f, basePos.y + 0.5f},
                                 {centerPos.x + 0.5f, basePos.y + 0.5f}, {centerPos.x + 0.5f, endPos.y + 0.5f},
                                 {endPos.x + 0.5f, endPos.y + 0.5f},
                             };
-                            drawList->AddPolyline(points, std::size(points), colorValue, ImDrawFlags_RoundCornersAll,
-                                                  thickness);
+                            drawList->AddPolyline(points, std::size(points), colorValue, thickness,
+                                                  ImDrawFlags_RoundCornersAll);
                         }
                         break;
                     }
@@ -448,16 +451,16 @@ void SCSPSlotsView::Display() {
                                 {basePos.x + wfSize.x * 0.75f, endPos.y},
                                 {endPos.x, centerPos.y},
                             };
-                            drawList->AddPolyline(points, std::size(points), colorValue, ImDrawFlags_RoundCornersAll,
-                                                  thickness);
+                            drawList->AddPolyline(points, std::size(points), colorValue, thickness,
+                                                  ImDrawFlags_RoundCornersAll);
                         } else {
                             const ImVec2 points[] = {
                                 {basePos.x, endPos.y},
                                 {centerPos.x, basePos.y},
                                 {endPos.x, endPos.y},
                             };
-                            drawList->AddPolyline(points, std::size(points), colorValue, ImDrawFlags_RoundCornersAll,
-                                                  thickness);
+                            drawList->AddPolyline(points, std::size(points), colorValue, thickness,
+                                                  ImDrawFlags_RoundCornersAll);
                         }
                         break;
                     }
@@ -478,8 +481,8 @@ void SCSPSlotsView::Display() {
                                 {basePos.x + wfSize.x * 1.0f, basePos.y + wfSize.y * 0.811f},
                                 {basePos.x + wfSize.x * 1.0f, centerPos.y},
                             };
-                            drawList->AddPolyline(points, std::size(points), colorValue, ImDrawFlags_RoundCornersAll,
-                                                  thickness);
+                            drawList->AddPolyline(points, std::size(points), colorValue, thickness,
+                                                  ImDrawFlags_RoundCornersAll);
                         } else {
                             const ImVec2 points[] = {
                                 {basePos.x + wfSize.x * 0.0f, endPos.y},
@@ -495,8 +498,8 @@ void SCSPSlotsView::Display() {
                                 {basePos.x + wfSize.x * 1.0f, basePos.y + wfSize.y * 0.811f},
                                 {basePos.x + wfSize.x * 1.0f, endPos.y},
                             };
-                            drawList->AddPolyline(points, std::size(points), colorValue, ImDrawFlags_RoundCornersAll,
-                                                  thickness);
+                            drawList->AddPolyline(points, std::size(points), colorValue, thickness,
+                                                  ImDrawFlags_RoundCornersAll);
                         }
                         break;
                     }
@@ -516,13 +519,13 @@ void SCSPSlotsView::Display() {
             }
             if (ImGui::TableNextColumn()) {
                 // LFOF
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.lfofRaw);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // ALFOS
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%X", slot.ampLFOSens);
                 ImGui::PopFont();
             }
@@ -532,7 +535,7 @@ void SCSPSlotsView::Display() {
             }
             if (ImGui::TableNextColumn()) {
                 // PLFOS
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%X", slot.pitchLFOSens);
                 ImGui::PopFont();
             }
@@ -543,25 +546,25 @@ void SCSPSlotsView::Display() {
 
             if (ImGui::TableNextColumn()) {
                 // IMXL
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%X", slot.inputMixingLevel);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // ISEL
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%X", slot.inputSelect);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // DISDL
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%X", slot.directSendLevel);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 // DIPAN
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(color, "%02X", slot.directPan);
                 ImGui::PopFont();
             }
@@ -576,7 +579,7 @@ void SCSPSlotsView::Display() {
                     for (uint32 j = 0; j < max; ++j) {
                         waveform[j] = output.Read(j + ofs) / 32768.0f;
                     }
-                    widgets::Oscilloscope(m_context, std::span{waveform}.first(max), wfSize);
+                    widgets::Oscilloscope(std::span{waveform}.first(max), wfSize);
                 }
             }
 

@@ -13,7 +13,7 @@ void SCSPOutputView::Display(ImVec2 size) {
         m_waveform[i].left = static_cast<float>(sample.left) / 32768.0f;
         m_waveform[i].right = static_cast<float>(sample.right) / 32768.0f;
     }
-    widgets::Oscilloscope(m_context, m_waveform, size);
+    widgets::Oscilloscope(m_waveform, size);
 }
 
 } // namespace app::ui

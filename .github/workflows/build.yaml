@@ -48,10 +48,9 @@ permissions:
   contents: read
 
 env:
-  USERNAME: StrikerX3
+  USERNAME: ymir-emu
   VCPKG_EXE: ${{ github.workspace }}/vcpkg/vcpkg
-  FEED_URL: https://nuget.pkg.github.com/StrikerX3/index.json
-  VCPKG_BINARY_SOURCES: "clear;nuget,https://nuget.pkg.github.com/StrikerX3/index.json,readwrite"
+  VULKAN_SDK_VERSION: "1.4.357.0"
 
 jobs:
   get-project-version:
@@ -84,8 +83,8 @@ jobs:
           echo "build-timestamp=$(date +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
 
   build-windows:
-    name: windows-${{ matrix.c_compiler }}-${{ matrix.architecture.name }}
-    runs-on: ${{ matrix.architecture.runner }}
+    name: windows-${{ matrix.c_compiler }}-${{ matrix.arch.name }}
+    runs-on: ${{ matrix.arch.runner }}
     needs: [get-project-version]
 
     strategy:
@@ -97,29 +96,39 @@ jobs:
         # Notes about compilers:
         # - MSVC (cl) produces much slower code and takes a long time to complete the LTO step
         c_compiler: [clang] # [clang, cl]
-        architecture:
+        arch:
           - name: "x86_64-SSE2"
             enable_avx2_option: "OFF"
             runner: windows-latest
             target: x64
             vcpkg_triplet: x64-win-llvm-static-md
+            dxc_arch: x64
           - name: "x86_64-AVX2"
             enable_avx2_option: "ON"
             runner: windows-latest
             target: x64
             vcpkg_triplet: x64-win-llvm-avx2-static-md
+            dxc_arch: x64
           - name: "ARM64"
             enable_avx2_option: "OFF"
             runner: windows-11-arm
             target: arm64
             vcpkg_triplet: arm64-windows
+            dxc_arch: arm64
         include:
           - c_compiler: clang
             cpp_compiler: clang
 
     steps:
       # Set up MASM for lzma
-      - uses: glslang/setup-masm@83f52fc3599c361e8428805627dc749f2717ce75
+      - name: Set up MASM
+        uses: glslang/setup-masm@bd171b9b0a619ff6237c164fab5fb920cc579889
+
+      - name: Set up Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@37effcfa045411f8bfbbda26df2fd1b3bf3436fa
+        with:
+          vulkan_version: ${{ env.VULKAN_SDK_VERSION }}
+          cache: true
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -131,35 +140,29 @@ jobs:
         run: |
           export BUILD_VERSION=${{ needs.get-project-version.outputs.project-version }}
           echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
-          echo "ymir-artifact-name=ymir-windows-${{ matrix.architecture.name }}-${BUILD_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "ymir-debug-symbols-name=dbgsym-ymir-windows-${{ matrix.architecture.name }}-${BUILD_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "ymir-artifact-name=ymir-windows-${{ matrix.arch.name }}-${BUILD_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "ymir-debug-symbols-name=dbgsym-ymir-windows-${{ matrix.arch.name }}-${BUILD_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Configure MSVC
         if: ${{ matrix.c_compiler == 'cl' }}
         uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c
         with:
-          arch: ${{ matrix.architecture.target }}
+          arch: ${{ matrix.arch.target }}
 
       - name: Bootstrap vcpkg
         shell: pwsh
         run: ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.bat
 
-      - name: Add NuGet sources to vcpkg
-        shell: pwsh
-        run: |
-          .$(${{ env.VCPKG_EXE }} fetch nuget) `
-            sources add `
-            -Source "${{ env.FEED_URL }}" `
-            -StorePasswordInClearText `
-            -Name GitHubPackages `
-            -UserName "${{ env.USERNAME }}" `
-            -Password "${{ secrets.GITHUB_TOKEN }}"
-          .$(${{ env.VCPKG_EXE }} fetch nuget) `
-            setapikey "${{ secrets.GITHUB_TOKEN }}" `
-            -Source "${{ env.FEED_URL }}"
+      - name: Cache vcpkg
+        id: cache-vcpkg
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: windows-${{ matrix.arch.name }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-triplets/**') }}
 
       - name: Configure CMake
         env:
+          VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
           CXX: ${{ matrix.cpp_compiler }}
           CC: ${{ matrix.c_compiler }}
         run: >
@@ -168,9 +171,9 @@ jobs:
           -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
-          -DVCPKG_TARGET_TRIPLET=${{ matrix.architecture.vcpkg_triplet }}
+          -DVCPKG_TARGET_TRIPLET=${{ matrix.arch.vcpkg_triplet }}
           -DBUILD_SHARED_LIBS=OFF
-          -DYmir_AVX2=${{ matrix.architecture.enable_avx2_option }}
+          -DYmir_AVX2=${{ matrix.arch.enable_avx2_option }}
           -DYmir_ENABLE_IPO=ON
           -DYmir_ENABLE_DEVLOG=OFF
           -DYmir_ENABLE_IMGUI_DEMO=OFF
@@ -221,16 +224,31 @@ jobs:
 
           Copy-Item -Path ".\apps\ymir-sdl3\res\licenses\*"                     -Destination "$licensesDir\"  -Recurse
           Copy-Item -Path ".\vendor\concurrentqueue\concurrentqueue\LICENSE.md" -Destination "$licensesDir\concurrentqueue-LICENSE.md"
+          Copy-Item -Path ".\vendor\dr_libs\LICENSE"                            -Destination "$licensesDir\dr_libs-LICENSE"
           Copy-Item -Path ".\vendor\imgui\imgui\LICENSE.txt"                    -Destination "$licensesDir\imgui-LICENSE.txt"
           Copy-Item -Path ".\vendor\libchdr\libchdr\LICENSE.txt"                -Destination "$licensesDir\libchdr-LICENSE.txt"
           Copy-Item -Path ".\vendor\libchdr\libchdr\deps\lzma-25.01\LICENSE"    -Destination "$licensesDir\lzma-LICENSE"
           Copy-Item -Path ".\vendor\lz4\lz4\lib\LICENSE"                        -Destination "$licensesDir\lz4-LICENSE"
           Copy-Item -Path ".\vendor\mio\LICENSE"                                -Destination "$licensesDir\mio-LICENSE"
+          Copy-Item -Path ".\vendor\stb\stb\LICENSE"                            -Destination "$licensesDir\stb-LICENSE"
           Copy-Item -Path ".\vendor\xxHash\xxHash\LICENSE"                      -Destination "$licensesDir\xxHash-LICENSE"
           Copy-Item -Path ".\LICENSE"                                           -Destination "$licensesDir\Ymir-LICENSE"
           Copy-Item -Path "${{ github.workspace }}\gcdb\LICENSE"                -Destination "$licensesDir\SDL_GameControllerDB-LICENSE"
           Copy-Item -Path "${{ github.workspace }}\gcdb\gamecontrollerdb.txt"   -Destination ".\gamecontrollerdb.txt"
-          Compress-Archive -Path "README.md","CHANGELOG.md","TROUBLESHOOTING.md","gamecontrollerdb.txt","$licensesDir/","build/apps/ymir-sdl3/ymir-sdl3.exe" -DestinationPath "${{ steps.strings.outputs.ymir-artifact-name }}.zip"
+
+          Invoke-WebRequest -Uri "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2607/dxc_2026_07_29.zip" -OutFile dxc.zip
+          Expand-Archive -Path dxc.zip -DestinationPath .\dxc
+
+          $items = @()
+          $items += "README.md"
+          $items += "CHANGELOG.md"
+          $items += "TROUBLESHOOTING.md"
+          $items += "gamecontrollerdb.txt"
+          $items += "$licensesDir/"
+          $items += "build/apps/ymir-sdl3/ymir-sdl3.exe"
+          $items += "dxc\bin\${{ matrix.arch.dxc_arch }}\dxcompiler.dll"
+          $items += "dxc\bin\${{ matrix.arch.dxc_arch }}\dxil.dll"
+          Compress-Archive -Path $items -DestinationPath "${{ steps.strings.outputs.ymir-artifact-name }}.zip"
 
       - name: Upload Ymir artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
@@ -248,8 +266,8 @@ jobs:
             build/apps/ymir-sdl3/ymir-sdl3.pdb
 
   build-linux:
-    name: linux-${{ matrix.compiler }}-${{ matrix.architecture.name }}
-    runs-on: ${{ matrix.architecture.runner }}
+    name: linux-${{ matrix.compiler }}-${{ matrix.arch.name }}
+    runs-on: ${{ matrix.arch.runner }}
     needs: [get-project-version]
 
     strategy:
@@ -261,22 +279,48 @@ jobs:
         # Notes about compilers:
         # - GCC (gcc) produces much slower code and takes a long time to complete the LTO step
         compiler: [clang] # [clang, gcc]
-        architecture:
+        arch:
           - name: "x86_64-SSE2"
             enable_avx2_option: "OFF"
             runner: ubuntu-24.04
+            vulkan_arch: x86_64
           - name: "x86_64-AVX2"
             enable_avx2_option: "ON"
             runner: ubuntu-24.04
+            vulkan_arch: x86_64
           - name: "AArch64-NEON"
             enable_avx2_option: "OFF" # doesn't matter actually
             runner: ubuntu-24.04-arm
+            vulkan_arch: aarch64
         include:
           - compiler: clang
             c_compiler: "clang-18"
             cpp_compiler: "clang++-18"
 
     steps:
+      - name: Cache Vulkan SDK with DXC build (AArch64)
+        id: cache-dxc
+        if: matrix.arch.name == 'AArch64-NEON'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/vulkan-sdk/${{ env.VULKAN_SDK_VERSION }}
+          key: dxc-aarch64-${{ runner.os }}-${{ env.VULKAN_SDK_VERSION }}
+
+      - name: Set up Vulkan SDK
+        id: vulkan-sdk
+        if: steps.cache-dxc.outputs.cache-hit != 'true'
+        uses: jakoch/install-vulkan-sdk-action@37effcfa045411f8bfbbda26df2fd1b3bf3436fa
+        with:
+          vulkan_version: ${{ env.VULKAN_SDK_VERSION }}
+          cache: true
+
+      - name: Build DXC for Vulkan SDK (AArch64)
+        if: matrix.arch.name == 'AArch64-NEON' && steps.cache-dxc.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cd $VULKAN_SDK/..
+          ./vulkansdk --skip-deps --maxjobs dxc
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           submodules: recursive
@@ -287,7 +331,7 @@ jobs:
         run: |
           export BUILD_VERSION=${{ needs.get-project-version.outputs.project-version }}
           echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
-          echo "ymir-artifact-name=ymir-linux-${{ matrix.architecture.name }}-${BUILD_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "ymir-artifact-name=ymir-linux-${{ matrix.arch.name }}-${BUILD_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: |
@@ -310,21 +354,15 @@ jobs:
 
       - name: Cache vcpkg
         id: cache-vcpkg
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ github.workspace }}/vcpkg_cache
-          key: linux-${{ matrix.architecture.name }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-triplets/**') }}
-
-      # This absolute monstrosity of a hack is taken from https://github.com/microsoft/vcpkg/issues/46040
-      - name: Overwrite /usr/bin/mono
-        # nuget downloaded by vcpkg fetch on aarch64 is a shell script, not a CIL program.
-        # This prevents vcpkg from trying and failing to run it in mono.
-        if: matrix.architecture.name == 'AArch64-NEON'
-        run: sudo sh -c "mv /usr/bin/mono /usr/bin/mono-real && echo '#! /usr/bin/env bash\nif [ \"\$1\" = \"/usr/bin/nuget\" ]; then \$*; else /usr/bin/mono-real \$*; fi' > /usr/bin/mono && chmod 755 /usr/bin/mono"
+          key: linux-${{ matrix.arch.name }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-triplets/**') }}
 
       - name: Configure CMake
         env:
           VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
+          VULKAN_SDK: '/home/runner/vulkan-sdk/${{ env.VULKAN_SDK_VERSION }}/${{ matrix.arch.vulkan_arch }}'
         run: >
           cmake -B ${{ steps.strings.outputs.build-output-dir }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
@@ -332,7 +370,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
           -DBUILD_SHARED_LIBS=OFF
-          -DYmir_AVX2=${{ matrix.architecture.enable_avx2_option }}
+          -DYmir_AVX2=${{ matrix.arch.enable_avx2_option }}
           -DYmir_ENABLE_IPO=ON
           -DYmir_ENABLE_DEVLOG=OFF
           -DYmir_ENABLE_IMGUI_DEMO=OFF
@@ -376,11 +414,13 @@ jobs:
           done
           cp -Rf apps/ymir-sdl3/res/licenses/*                    ./licenses/
           cp -f vendor/concurrentqueue/concurrentqueue/LICENSE.md licenses/concurrentqueue-LICENSE.md
+          cp -f vendor/dr_libs/LICENSE                            licenses/dr_libs-LICENSE
           cp -f vendor/imgui/imgui/LICENSE.txt                    licenses/imgui-LICENSE.txt
           cp -f vendor/libchdr/libchdr/LICENSE.txt                licenses/libchdr-LICENSE.txt
           cp -f vendor/libchdr/libchdr/deps/lzma-25.01/LICENSE    licenses/lzma-LICENSE
           cp -f vendor/lz4/lz4/lib/LICENSE                        licenses/lz4-LICENSE
           cp -f vendor/mio/LICENSE                                licenses/mio-LICENSE
+          cp -f vendor/stb/stb/LICENSE                            licenses/stb-LICENSE
           cp -f vendor/xxHash/xxHash/LICENSE                      licenses/xxHash-LICENSE
           cp -f LICENSE                                           licenses/Ymir-LICENSE
           cp -f ${{ github.workspace }}/gcdb/LICENSE              licenses/SDL_GameControllerDB-LICENSE
@@ -419,6 +459,12 @@ jobs:
           #  isa_name: "'x86_64;arm64'"
 
     steps:
+      - name: Set up Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@37effcfa045411f8bfbbda26df2fd1b3bf3436fa
+        with:
+          vulkan_version: ${{ env.VULKAN_SDK_VERSION }}
+          cache: true
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           submodules: recursive
@@ -431,38 +477,28 @@ jobs:
           echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
           echo "ymir-artifact-name=ymir-macos-${{ matrix.arch.name }}-${BUILD_VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Install tools
-        shell: bash
-        run: brew install mono nuget
-
       - name: Bootstrap vcpkg
         shell: bash
         run: ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.sh
 
-      - name: Add NuGet sources to vcpkg
-        shell: bash
-        env:
-          VCPKG_EXE: ${{ github.workspace }}/vcpkg/vcpkg
-          USERNAME: StrikerX3
-          FEED_URL: https://nuget.pkg.github.com/StrikerX3/index.json
-        run: |
-          nuget sources add \
-            -Source "${{ env.FEED_URL }}" \
-            -StorePasswordInClearText \
-            -Name GitHubPackages \
-            -UserName "${{ env.USERNAME }}" \
-            -Password "${{ secrets.GITHUB_TOKEN }}"
-          nuget setapikey "${{ secrets.GITHUB_TOKEN }}" \
-            -Source "${{ env.FEED_URL }}"
+      - name: Cache vcpkg
+        id: cache-vcpkg
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: macos-${{ matrix.arch.name }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'vcpkg-triplets/**') }}
 
       - name: Configure CMake
+        env:
+          VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
         run: >
           cmake -B ${{ steps.strings.outputs.build-output-dir }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
           -DBUILD_SHARED_LIBS=OFF
           -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch.isa_name }}
-          -DVCPKG_TARGET_TRIPLET=${{ matrix.arch.triplet_arch }}-osx
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          -DVCPKG_TARGET_TRIPLET=${{ matrix.arch.triplet_arch }}-osx12
           -DYmir_AVX2=${{ matrix.arch.enable_avx2_option }}
           -DYmir_ENABLE_IPO=ON
           -DYmir_ENABLE_DEVLOG=OFF
@@ -507,11 +543,13 @@ jobs:
           done
           cp -Rf apps/ymir-sdl3/res/licenses/*                    ./licenses/
           cp -f vendor/concurrentqueue/concurrentqueue/LICENSE.md licenses/concurrentqueue-LICENSE.md
+          cp -f vendor/dr_libs/LICENSE                            licenses/dr_libs-LICENSE
           cp -f vendor/imgui/imgui/LICENSE.txt                    licenses/imgui-LICENSE.txt
           cp -f vendor/libchdr/libchdr/LICENSE.txt                licenses/libchdr-LICENSE.txt
           cp -f vendor/libchdr/libchdr/deps/lzma-25.01/LICENSE    licenses/lzma-LICENSE
           cp -f vendor/lz4/lz4/lib/LICENSE                        licenses/lz4-LICENSE
           cp -f vendor/mio/LICENSE                                licenses/mio-LICENSE
+          cp -f vendor/stb/stb/LICENSE                            licenses/stb-LICENSE
           cp -f vendor/xxHash/xxHash/LICENSE                      licenses/xxHash-LICENSE
           cp -f LICENSE                                           licenses/Ymir-LICENSE
           cp -f ${{ github.workspace }}/gcdb/LICENSE              licenses/SDL_GameControllerDB-LICENSE
@@ -528,3 +566,4 @@ jobs:
         with:
           name: ${{ steps.strings.outputs.ymir-artifact-name }}
           path: ${{ steps.strings.outputs.ymir-artifact-name }}.zip
+          retention-days: 90

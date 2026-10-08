@@ -4,7 +4,6 @@
 
 #include <ymir/util/event.hpp>
 
-#include <filesystem>
 #include <mutex>
 #include <queue>
 #include <thread>

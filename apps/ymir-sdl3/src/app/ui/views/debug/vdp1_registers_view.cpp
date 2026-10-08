@@ -2,8 +2,6 @@
 
 #include <ymir/hw/vdp/vdp.hpp>
 
-#include <app/events/emu_debug_event_factory.hpp>
-
 #include <imgui.h>
 
 using namespace ymir;
@@ -37,6 +35,7 @@ void VDP1RegistersView::Display() {
 
     ImGui::Separator();
 
+    ImGui::Text("Current display framebuffer: %u", probe.GetSpriteDisplayFB());
     checkbox("[TVMR.VBE] VBlank Erase", regs1.vblankErase);
     checkbox("[FBCR.FCT] Framebuffer swap trigger", regs1.fbSwapTrigger);
     checkbox("[FBCR.FCM] Framebuffer swap mode", regs1.fbSwapMode);
@@ -47,8 +46,7 @@ void VDP1RegistersView::Display() {
     ImGui::Unindent();
     ImGui::Text("[FBCR.PTM] Plot trigger mode: %u", regs1.plotTrigger);
     ImGui::Text("[EWDR] Erase write value: 0x%04X", regs1.eraseWriteValue);
-    ImGui::Text("[EWLR/EWRR] Erase window: %ux%u - %ux%u", regs1.eraseX1, regs1.eraseY1, regs1.eraseX3,
-                regs1.eraseY3);
+    ImGui::Text("[EWLR/EWRR] Erase window: %ux%u - %ux%u", regs1.eraseX1, regs1.eraseY1, regs1.eraseX3, regs1.eraseY3);
     ImGui::Indent();
     {
         ImGui::Text("Latched erase write value: 0x%04X", probe.GetLatchedEraseWriteValue());

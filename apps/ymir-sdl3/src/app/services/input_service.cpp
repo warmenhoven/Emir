@@ -1,6 +1,5 @@
 #include "input_service.hpp"
 
-#include <algorithm>
 #include <app/actions.hpp>
 #include <app/events/emu_event_factory.hpp>
 #include <app/events/gui_event_factory.hpp>
@@ -8,14 +7,20 @@
 #include <app/services/mouse_capture_service.hpp>
 #include <app/services/save_state_service.hpp>
 #include <app/ui/widgets/input_widgets.hpp>
-#include <cmath>
-#include <fmt/format.h>
-#include <imgui.h>
-#include <limits>
-#include <util/math.hpp>
+
 #include <ymir/sys/saturn.hpp>
+
+#include <util/math.hpp>
 #include <ymir/util/callback.hpp>
 #include <ymir/util/dev_log.hpp>
+
+#include <fmt/format.h>
+
+#include <imgui.h>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 using clk = std::chrono::steady_clock;
 
@@ -911,8 +916,6 @@ void InputService::DrawInputs(ImDrawList *drawList) {
 
                 .strokeColor = {xhair.strokeColor[0], xhair.strokeColor[1], xhair.strokeColor[2], xhair.strokeColor[3]},
                 .strokeThickness = xhair.strokeThickness,
-
-                .displayScale = m_context.displayScale,
             };
             ui::widgets::Crosshair(drawList, params, {input.posX, input.posY});
         }

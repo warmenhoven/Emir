@@ -6,10 +6,10 @@ The repository includes several vendored dependencies as Git submodules. When cl
 You can also initialize submodules with `git submodule update --init --recursive` after a `git clone` or when pulling changes.
 
 Ymir has been successfully compiled with the following toolchains:
-- Visual Studio 2022's Clang 19.1.5
-- Visual Studio 2022's MSVC 19.44.35213.0
-- Visual Studio 2026's Clang 20.1.8
-- Visual Studio 2026's MSVC 19.50.35724.0
+- Clang 19.1.5 on Visual Studio 2022
+- MSVC 19.44.35213.0 on Visual Studio 2022
+- Clang 22.1.3 on Visual Studio 2026
+- MSVC 19.51.36260.0 on Visual Studio 2026
 - Clang 15.0.7 on WSL Ubuntu 24.04.5 LTS (`clang-15` / `clang++-15`)
 - Clang 18.1.3 on WSL Ubuntu 24.04.5 LTS (`clang` / `clang++`)
 - Clang 19.1.1 on Ubuntu 24.04.2 LTS (`clang-19` / `clang++-19`)
@@ -17,6 +17,7 @@ Ymir has been successfully compiled with the following toolchains:
 - Clang 19.1.7 on FreeBSD 14.3-RELEASE (`clang19` / `clang++19`)
 - Clang 21.1.0 on FreeBSD 14.3-RELEASE (`clang21` / `clang++21`)
 - Apple Clang 17 on macOS 15 Sequoia
+- Apple Clang 21.0.0.21000101 on macOS 26 Tahoe
 
 The project has been compiled for x86_64 and ARM64 Windows, Linux, FreeBSD and macOS platforms.
 
@@ -78,7 +79,16 @@ It is highly recommended to use [Ninja](https://ninja-build.org/) as it greatly 
 To build Ymir on Windows, you will need [Visual Studio 2022 Community](https://visualstudio.microsoft.com/vs/community/) or later and [CMake 3.28+](https://cmake.org/).
 Clang is highly recommended over MSVC as it produces much higher quality code, outperforming MSVC by 50-80%. However, MSVC tends to provide a better debugging experience.
 
-All dependencies are included through `vcpkg` and in the `vendor` directory, and are built together with the emulator. No external dependencies are needed.
+You may also want to install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home). You can do so by downloading and running the installer or with the following command:
+
+```sh
+winget install KhronosGroup.VulkanSDK
+```
+
+Vulkan is an optional dependency on Windows as Ymir always supports Direct3D 12 and 11 on this operating system.
+
+All other dependencies are included through `vcpkg` and in the `vendor` directory, and are built together with the emulator.
+The core library does not consume any vcpkg dependencies.
 
 You can choose to generate a .sln file with CMake or open the directory directly with Visual Studio.
 Both methods work, but opening the directory allows Visual Studio to use Ninja for significantly faster build times.
@@ -97,6 +107,10 @@ To build Ymir on Linux, first you will need to install SDL3's required dependenc
 You might also have to install additional packages:
 - `autoconf autoconf-archive automake libtool` for ALSA
 - `python3 python3-venv` for dbus
+
+Vulkan is an optional dependency which enables GPU-accelerated VDP1/VDP2 rendering. For that reason, it is highly recommended to install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home).
+If Vulkan is enabled, you will also need `dxc` to allow Ymir to compile shaders offline. DXC is usually included with the SDK. shaderc (`glslc`) is not supported due to usage of modern HLSL features in some shaders (e.g. 64-bit integers).
+You can opt to install the Vulkan dependencies from your system's package manager instead of the SDK. For example, on Ubuntu: `libvulkan-dev vulkan-tools vulkan-validationlayers spirv-tools-dev glslc glslang-tools`.
 
 The compiler of choice for this platform is Clang. GCC is also supported, but produces slightly slower code.
 
@@ -123,14 +137,15 @@ Install required packages:
 
 ```sh
 pkg install cmake evdev-proto git gmake libX11 libXcursor libXext libXfixes libXi \
-    libXrandr libXrender libXScrnSaver libXtst libglvnd libinotify llvm19 ninja patchelf \
+    libXrandr libXrender libXScrnSaver libXtst libglvnd libinotify ninja patchelf \
     pkgconf python3 vulkan-loader zip
 ```
 
 Notes:
 - A default FreeBSD installation provides a stripped-down LLVM toolchain which lacks
-  the required `clang-scan-deps` binary. Therefore it is necessary to install a
-  complete LLVM toolchain package, e.g. `llvm19`.
+  the required `clang-scan-deps` binary on FreeBSD versions below 15.0. Therefore
+  it is necessary to install a complete LLVM toolchain package on such systems,
+  e.g. `llvm19`.
 - The usage of CMake's "Precompile Headers" feature triggers a compiler bug in LLVM
   prior to version 21 for ARM64 builds on FreeBSD. Therefore it is necessary to install
   and use at least `llvm21` for ARM64.
@@ -138,15 +153,14 @@ Notes:
 Configure build:
 
 ```sh
-CXX=clang++19 \
-CC=clang19 \
 cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake
 ```
 
 Notes:
-- By default vcpkg and CMake will use the stripped-down LLVM toolchain instead of
-  the previously installed complete toolchain. Therefore it is necessary to set
-  the `CXX` and `CC` environment variables to the correct compilers.
+- If a different compiler than the one from the stripped-down LLVM toolchain shall
+  be used, it is necessary to set and export the `CC` and `CXX` environment variables
+  in order for vcpkg and CMake to pick up the requested compiler, e.g. `export CC=clang21`
+  and `export CXX=clang++21`.
 
 Pass additional `-D<option>=<value>` parameters to tune the build. See the [Build configuration](#build-configuration) section above for details.
 
@@ -363,7 +377,7 @@ It is recommended to keep your vendored dependencies in a subdirectory of your r
 `third_party`. Inside it, run these commands:
 
 ```sh
-git submodule add https://github.com/StrikerX3/Ymir.git
+git submodule add https://github.com/ymir-emu/Ymir.git
 git submodule update --init --recursive
 ```
 
@@ -389,7 +403,7 @@ include(FetchContent)
 
 FetchContent_Declare(
     ymir
-    GIT_REPOSITORY https://github.com/StrikerX3/Ymir
+    GIT_REPOSITORY https://github.com/ymir-emu/Ymir
     GIT_TAG        v0.3.2   # ideally, a specific tag or commit, but `main` also works
 )
 

@@ -28,7 +28,6 @@ struct Enhancements {
     /// @brief Determines if any enhancement is enabled:
     /// - `deinterlace` is set to `true`
     /// - `transparentMeshes` is set to `true`
-    /// resolution scale factor is greater than 1.0x
     /// @return `true` if any enhancement is active, `false` otherwise
     bool AnyEnabled() const {
         return deinterlace || transparentMeshes;
@@ -133,7 +132,6 @@ struct VDP2DebugRender {
         WindowSet<true> customWindowSet{};
         std::array<bool, 2> customLineWindowTableEnable{};
         std::array<uint32, 2> customLineWindowTableAddress{};
-        std::array<std::array<bool, vdp::kMaxResH>, 2> customWindowState{};
 
         Color888 windowInsideColor{.r = 0xFF, .g = 0xFF, .b = 0xFF};
         Color888 windowOutsideColor{.r = 0x00, .g = 0x00, .b = 0x00};
@@ -187,9 +185,6 @@ struct RendererCallbacks {
 
     /// @brief Invoked when the VDP1 swaps framebuffers.
     CBVDP1FramebufferSwap VDP1FramebufferSwap;
-
-    /// @brief Invoked when the VDP2 resolution is changed.
-    CBVDP2ResolutionChanged VDP2ResolutionChanged;
 
     /// @brief Invoked when the VDP2 finishes drawing a frame.
     CBVDP2DrawFinished VDP2DrawFinished;

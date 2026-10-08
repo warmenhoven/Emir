@@ -1,6 +1,7 @@
 #include "debug_output_view.hpp"
 
 #include <app/events/gui_event_factory.hpp>
+#include <app/imgui_data.hpp>
 
 #include <util/sdl_file_dialog.hpp>
 
@@ -15,6 +16,8 @@ DebugOutputView::DebugOutputView(SharedContext &context)
     , m_tracer(context.tracers.SCU) {}
 
 void DebugOutputView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     if (ImGui::Button("Clear##debug_output")) {
         m_tracer.ClearDebugMessages();
     }
@@ -31,7 +34,7 @@ void DebugOutputView::Display() {
     }
 
     if (ImGui::BeginChild("##scu_debug_output")) {
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
         std::string fullBuffer{};
         const size_t count = m_tracer.debugMessages.Count();
         for (size_t i = 0; i < count; i++) {

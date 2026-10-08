@@ -625,7 +625,7 @@ struct Sandbox {
 
                 LineStepper line{coordL, coordR, true};
                 TextureStepper texUStepper;
-                texUStepper.Setup(line.Length() + 1, 0, texSize);
+                texUStepper.Setup(line.DMajor() + 1, 0, texSize);
                 bool needsAA = false;
                 for (line.Step(); line.CanStep(); needsAA = line.Step()) {
                     auto [x, y] = line.Coord();
@@ -635,7 +635,7 @@ struct Sandbox {
                     texUStepper.StepPixel();
                     const uint32 u = texUStepper.Value();
 
-                    const bool match = false && altSteps <= line.Length() && currSteps == altSteps;
+                    const bool match = false && altSteps <= line.DMajor() && currSteps == altSteps;
 
                     uint32 color;
                     switch (polygonFillMode) {
@@ -673,7 +673,7 @@ struct Sandbox {
                     currSteps++;
                 }
 
-                if (altSteps <= line.Length()) {
+                if (altSteps <= line.DMajor()) {
                     altLine.SetStep(altSteps);
                     auto [x, y] = altLine.Coord();
                     // if (x == targetX && y == targetY) {
@@ -681,7 +681,7 @@ struct Sandbox {
                     //}
                 }
 
-                if (altStepsAA <= line.Length()) {
+                if (altStepsAA <= line.DMajor()) {
                     altLine.SetStep(altStepsAA);
                     if (altLine.NeedsAA()) {
                         auto [aax, aay] = altLine.AACoord();

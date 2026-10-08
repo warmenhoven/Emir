@@ -21,7 +21,6 @@ add_executable(ymir-sdl3
     src/app/settings_defaults.hpp
     src/app/shared_context.cpp
     src/app/shared_context.hpp
-    src/app/stb_implementations.cpp
     src/app/toml_implementation.cpp
     src/app/update_checker.cpp
     src/app/update_checker.hpp
@@ -63,7 +62,6 @@ add_executable(ymir-sdl3
 
     src/app/services/graphics_service.cpp
     src/app/services/graphics_service.hpp
-    src/app/services/graphics_types.hpp
     src/app/services/midi_service.cpp
     src/app/services/midi_service.hpp
     src/app/services/midi_types.hpp
@@ -81,6 +79,8 @@ add_executable(ymir-sdl3
     src/app/services/rom_service.hpp
     src/app/services/disc_service.cpp
     src/app/services/disc_service.hpp
+    src/app/services/discord_rpc_service.cpp
+    src/app/services/discord_rpc_service.hpp
     src/app/services/display_service.cpp
     src/app/services/display_service.hpp
     src/app/services/file_dialog_service.cpp
@@ -91,6 +91,20 @@ add_executable(ymir-sdl3
     src/app/services/persistence_service.hpp
     src/app/services/window_manager_service.cpp
     src/app/services/window_manager_service.hpp
+
+    src/app/services/gfx/gfx_adapters.cpp
+    src/app/services/gfx/gfx_adapters.hpp
+    src/app/services/gfx/gfx_context.hpp
+    src/app/services/gfx/gfx_context_impl_null.hpp
+    src/app/services/gfx/gfx_context_impl_sdl_renderer.cpp
+    src/app/services/gfx/gfx_context_impl_sdl_renderer.hpp
+    src/app/services/gfx/gfx_context_impls.hpp
+    src/app/services/gfx/gfx_context_specs.hpp
+    src/app/services/gfx/gfx_gui_types.hpp
+    src/app/services/gfx/gfx_texture_id_manager.cpp
+    src/app/services/gfx/gfx_texture_id_manager.hpp
+    src/app/services/gfx/gfx_types.cpp
+    src/app/services/gfx/gfx_types.hpp
 
     src/app/ui/window_base.cpp
     src/app/ui/window_base.hpp
@@ -209,6 +223,8 @@ add_executable(ymir-sdl3
     src/app/ui/views/debug/vdp2_debug_overlay_view.hpp
     src/app/ui/views/debug/vdp2_layer_visibility_view.cpp
     src/app/ui/views/debug/vdp2_layer_visibility_view.hpp
+    src/app/ui/views/debug/vdp2_registers_view.cpp
+    src/app/ui/views/debug/vdp2_registers_view.hpp
     src/app/ui/views/debug/vdp2_sprite_layer_params_view.cpp
     src/app/ui/views/debug/vdp2_sprite_layer_params_view.hpp
     src/app/ui/views/debug/vdp2_vram_access_patterns_view.cpp
@@ -372,6 +388,8 @@ add_executable(ymir-sdl3
     src/app/ui/windows/debug/vdp2_debug_overlay_window.hpp
     src/app/ui/windows/debug/vdp2_layer_visibility_window.cpp
     src/app/ui/windows/debug/vdp2_layer_visibility_window.hpp
+    src/app/ui/windows/debug/vdp2_registers_window.cpp
+    src/app/ui/windows/debug/vdp2_registers_window.hpp
     src/app/ui/windows/debug/vdp2_sprite_layer_params_window.cpp
     src/app/ui/windows/debug/vdp2_sprite_layer_params_window.hpp
     src/app/ui/windows/debug/vdp2_vram_access_patterns_window.cpp
@@ -403,6 +421,98 @@ add_executable(ymir-sdl3
 )
 add_executable(ymir::ymir-sdl3 ALIAS ymir-sdl3)
 
+## Add platform-specific graphics context implementations
+if (WIN32)
+    target_sources(ymir-sdl3 PRIVATE
+        src/app/services/gfx/gfx_context_impl_d3d11.cpp
+        src/app/services/gfx/gfx_context_impl_d3d11.hpp
+        src/app/services/gfx/gfx_context_impl_d3d12.cpp
+        src/app/services/gfx/gfx_context_impl_d3d12.hpp
+        src/app/services/gfx/gfx_context_spec_d3d12.hpp
+        src/app/services/gfx/gfx_d3d_utils.cpp
+        src/app/services/gfx/gfx_d3d_utils.hpp
+    )
+endif ()
+
+if (Vulkan_FOUND)
+    target_sources(ymir-sdl3 PRIVATE
+        src/app/services/gfx/gfx_context_impl_vulkan.cpp
+        src/app/services/gfx/gfx_context_impl_vulkan.hpp
+    )
+endif ()
+
+if (APPLE)
+    target_sources(ymir-sdl3 PRIVATE
+        src/app/services/gfx/gfx_context_impl_metal.mm
+        src/app/services/gfx/gfx_context_impl_metal.hpp
+        src/app/services/gfx/gfx_context_spec_metal.hpp
+        src/app/services/gfx/gfx_metal_utils.mm
+        src/app/services/gfx/gfx_metal_utils.hpp
+    )
+
+    set_source_files_properties(
+        src/app/services/gfx/gfx_context_impl_metal.mm
+        src/app/services/gfx/gfx_metal_utils.mm
+        PROPERTIES SKIP_PRECOMPILE_HEADERS ON
+    )
+endif ()
+
+## Compile shaders
+set(SHADER_INPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
+set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+
+set(VERTEX_SHADER_SOURCES
+    res/shaders/gctx/quad_vs.hlsl
+)
+set(PIXEL_SHADER_SOURCES
+    res/shaders/gctx/quad_ps.hlsl
+)
+## TODO: add per-platform shader code if needed
+# if (WIN32)
+#     list(APPEND VERTEX_SHADER_SOURCES
+#         res/shaders/d3d12/some_shader_vs.hlsl
+#     )
+#     list(APPEND PIXEL_SHADER_SOURCES
+#         res/shaders/d3d12/some_shader_ps.hlsl
+#     )
+# elseif (APPLE)
+# elseif (UNIX) # Linux and FreeBSD
+# endif ()
+
+set(COMPILED_SHADERS "")
+foreach (SHADER_SRC ${VERTEX_SHADER_SOURCES})
+    compile_shader(
+        OUT_PATHS SHADER_BINARY_FILES
+        SOURCE "${SHADER_SRC}"
+        WHENCE "${SHADER_INPUT_DIR}"
+        DESTINATION "${SHADER_OUTPUT_DIR}"
+        ENTRYPOINT "VSMain"
+        PROFILE "vs_6_0"
+    )
+    list(APPEND COMPILED_SHADERS ${SHADER_BINARY_FILES})
+endforeach ()
+foreach (SHADER_SRC ${PIXEL_SHADER_SOURCES})
+    compile_shader(
+        OUT_PATHS SHADER_BINARY_FILES
+        SOURCE "${SHADER_SRC}"
+        WHENCE "${SHADER_INPUT_DIR}"
+        DESTINATION "${SHADER_OUTPUT_DIR}"
+        ENTRYPOINT "PSMain"
+        PROFILE "ps_6_0"
+    )
+    list(APPEND COMPILED_SHADERS ${SHADER_BINARY_FILES})
+endforeach ()
+
+## Create the embedded shaders target
+MESSAGE(STATUS "Generating SDL3 frontend shader resource library: ${COMPILED_SHADERS}")
+cmrc_add_resource_library(ymir-sdl3-shaders
+    ALIAS ymir-sdl3::shaders
+    NAMESPACE ymir_sdl3_shaders
+    WHENCE "${SHADER_OUTPUT_DIR}"
+    ${COMPILED_SHADERS}
+)
+
+## Set executable version
 set_target_properties(ymir-sdl3 PROPERTIES
                       VERSION ${Ymir_VERSION}
                       SOVERSION ${Ymir_VERSION_MAJOR})
@@ -433,7 +543,6 @@ find_package(OpenSSL CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(rtmidi CONFIG REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
-find_package(Stb REQUIRED)
 find_package(tomlplusplus CONFIG REQUIRED)
 
 target_include_directories(ymir-sdl3
@@ -441,11 +550,11 @@ target_include_directories(ymir-sdl3
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     PRIVATE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
-        "$<BUILD_INTERFACE:${Stb_INCLUDE_DIR}>"
 )
 target_link_libraries(ymir-sdl3 PRIVATE
     ymir::ymir-core
     ymir-sdl3::rc
+    ymir-sdl3::shaders
     SDL3::SDL3
     date::date
     fmt::fmt
@@ -454,12 +563,17 @@ target_link_libraries(ymir-sdl3 PRIVATE
     tomlplusplus::tomlplusplus
     cereal::cereal
     lz4::lz4
+    discord-rpc
     RtMidi::rtmidi
     CURL::libcurl_static
+    stb::stb
+    dr_libs::dr_libs
 )
 if (WIN32)
     target_link_libraries(ymir-sdl3 PRIVATE
         Dwmapi
+
+        WIL::WIL
     )
 endif ()
 target_compile_features(ymir-sdl3 PUBLIC cxx_std_20)
@@ -469,6 +583,10 @@ cmrc_add_resource_library(ymir-sdl3-rc
     ALIAS ymir-sdl3::rc
     NAMESPACE Ymir_sdl3_rc
     WHENCE res/embed
+
+    res/embed/about/contributors.txt
+    res/embed/about/friends.txt
+    res/embed/about/patreon.txt
 
     res/embed/fonts/MaterialSymbolsOutlined_Filled-Regular.ttf
     res/embed/fonts/MPLUSU-Ymir-Bold.ttf

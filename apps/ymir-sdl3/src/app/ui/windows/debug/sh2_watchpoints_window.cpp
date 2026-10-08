@@ -1,5 +1,7 @@
 #include "sh2_watchpoints_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 using namespace ymir;
 
 namespace app::ui {
@@ -13,8 +15,9 @@ SH2WatchpointsWindow::SH2WatchpointsWindow(SharedContext &context, bool master, 
 }
 
 void SH2WatchpointsWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(285 * m_context.displayScale, 300 * m_context.displayScale),
-                                        ImVec2(285 * m_context.displayScale, FLT_MAX));
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(285 * imguiData->displayScale, 300 * imguiData->displayScale),
+                                        ImVec2(285 * imguiData->displayScale, FLT_MAX));
 }
 
 void SH2WatchpointsWindow::DrawContents() {

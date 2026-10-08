@@ -2,15 +2,17 @@
 
 #include <ymir/hw/scu/scu.hpp>
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
-SCUDSPDataRAMView::SCUDSPDataRAMView(SharedContext &context)
-    : m_context(context)
-    , m_scu(context.saturn.GetSCU()) {}
+SCUDSPDataRAMView::SCUDSPDataRAMView(ymir::scu::SCU &scu)
+    : m_scu(scu) {}
 
 void SCUDSPDataRAMView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -30,14 +32,14 @@ void SCUDSPDataRAMView::Display() {
         for (uint32 i = 0; i < 64; i++) {
             ImGui::TableNextRow();
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
                 ImGui::AlignTextToFramePadding();
                 ImGui::Text("%02X", i);
                 ImGui::PopFont();
             }
             for (uint32 bank = 0; bank < 4; bank++) {
                 if (ImGui::TableNextColumn()) {
-                    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
                     ImGui::SetNextItemWidth(paddingWidth * 2 + hexCharWidth * 8);
                     ImGui::InputScalar(fmt::format("##data_{}_{}", bank, i).c_str(), ImGuiDataType_U32,
                                        &dsp.dataRAM[bank][i], nullptr, nullptr, "%08X",

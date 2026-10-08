@@ -1,14 +1,16 @@
 #include "scu_dma_trace_view.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
-SCUDMATraceView::SCUDMATraceView(SharedContext &context)
-    : m_context(context)
-    , m_tracer(context.tracers.SCU) {}
+SCUDMATraceView::SCUDMATraceView(SCUTracer &tracer)
+    : m_tracer(tracer) {}
 
 void SCUDMATraceView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -53,18 +55,18 @@ void SCUDMATraceView::Display() {
 
             ImGui::TableNextRow();
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%u", trace.counter);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%u", trace.channel);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 if (trace.indirect) {
-                    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                     ImGui::Text("%07X", trace.indirectAddr);
                     ImGui::PopFont();
                 } else {
@@ -72,25 +74,25 @@ void SCUDMATraceView::Display() {
                 }
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%07X", trace.srcAddr);
                 ImGui::PopFont();
                 ImGui::SameLine();
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
                 ImGui::TextDisabled("+%d", trace.srcAddrInc);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%07X", trace.dstAddr);
                 ImGui::PopFont();
                 ImGui::SameLine();
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
                 ImGui::TextDisabled("+%d", trace.dstAddrInc);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%X", trace.xferCount);
                 ImGui::PopFont();
             }

@@ -1,16 +1,19 @@
 #include "sh2_divu_trace_view.hpp"
 
+#include <app/imgui_data.hpp>
+
 #include <cinttypes>
 
 using namespace ymir;
 
 namespace app::ui {
 
-SH2DivisionUnitTraceView::SH2DivisionUnitTraceView(SharedContext &context, SH2Tracer &tracer)
-    : m_context(context)
-    , m_tracer(tracer) {}
+SH2DivisionUnitTraceView::SH2DivisionUnitTraceView(SH2Tracer &tracer)
+    : m_tracer(tracer) {}
 
 void SH2DivisionUnitTraceView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     ImGui::BeginGroup();
 
     ImGui::Checkbox("Enable", &m_tracer.traceDivisions);
@@ -30,7 +33,7 @@ void SH2DivisionUnitTraceView::Display() {
     }
 
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -62,7 +65,7 @@ void SH2DivisionUnitTraceView::Display() {
 
             ImGui::TableNextRow();
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%u", trace.counter);
                 ImGui::PopFont();
             }
@@ -71,7 +74,7 @@ void SH2DivisionUnitTraceView::Display() {
             }
             if (ImGui::TableNextColumn()) {
                 if (m_showHex) {
-                    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                     if (trace.div64) {
                         ImGui::Text("%016" PRIX64, trace.dividend);
                     } else {
@@ -84,7 +87,7 @@ void SH2DivisionUnitTraceView::Display() {
             }
             if (ImGui::TableNextColumn()) {
                 if (m_showHex) {
-                    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                     ImGui::Text("%08X", trace.divisor);
                     ImGui::PopFont();
                 } else {
@@ -94,7 +97,7 @@ void SH2DivisionUnitTraceView::Display() {
             if (ImGui::TableNextColumn()) {
                 if (trace.finished) {
                     if (m_showHex) {
-                        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                         ImGui::Text("%08X", trace.quotient);
                         ImGui::PopFont();
                     } else {
@@ -105,7 +108,7 @@ void SH2DivisionUnitTraceView::Display() {
             if (ImGui::TableNextColumn()) {
                 if (trace.finished) {
                     if (m_showHex) {
-                        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                         ImGui::Text("%08X", trace.remainder);
                         ImGui::PopFont();
                     } else {

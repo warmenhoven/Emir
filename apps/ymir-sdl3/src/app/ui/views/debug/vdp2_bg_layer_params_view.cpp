@@ -4,17 +4,19 @@
 
 #include <ymir/hw/vdp/vdp.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
 
 using namespace ymir;
 
 namespace app::ui {
 
-VDP2BGLayerParamsView::VDP2BGLayerParamsView(SharedContext &context, vdp::VDP &vdp)
-    : m_context(context)
-    , m_vdp(vdp) {}
+VDP2BGLayerParamsView::VDP2BGLayerParamsView(vdp::VDP &vdp)
+    : m_vdp(vdp) {}
 
 void VDP2BGLayerParamsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &probe = m_vdp.GetProbe();
     const auto &regs2 = probe.GetVDP2Regs();
     const auto &state2 = probe.GetVDP2State();
@@ -27,30 +29,14 @@ void VDP2BGLayerParamsView::Display() {
         }
     };
 
-    bool dispEnable = regs2.TVMD.DISP;
-    ImGui::Checkbox("Display enabled", &dispEnable);
-    ImGui::SameLine();
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("VCNT: %d", regs2.ReadVCNT());
-
-    auto [width, height] = probe.GetResolution();
-    auto interlaceMode = probe.GetInterlaceMode();
-
-    static constexpr const char *kInterlaceNames[]{"progressive", "(invalid)", "single-density interlace",
-                                                   "double-density interlace"};
-
-    ImGui::TextUnformatted("Resolution:");
-    ImGui::SameLine();
-    ImGui::Text("%ux%u %s", width, height, kInterlaceNames[static_cast<uint8>(interlaceMode)]);
-
     if (ImGui::BeginTable("layers", 7, ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("");
-        ImGui::TableSetupColumn("NBG0", ImGuiTableColumnFlags_WidthFixed, 70.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("NBG1", ImGuiTableColumnFlags_WidthFixed, 70.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("NBG2", ImGuiTableColumnFlags_WidthFixed, 70.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("NBG3", ImGuiTableColumnFlags_WidthFixed, 70.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("RBG0", ImGuiTableColumnFlags_WidthFixed, 70.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("RBG1", ImGuiTableColumnFlags_WidthFixed, 70.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("NBG0", ImGuiTableColumnFlags_WidthFixed, 70.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("NBG1", ImGuiTableColumnFlags_WidthFixed, 70.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("NBG2", ImGuiTableColumnFlags_WidthFixed, 70.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("NBG3", ImGuiTableColumnFlags_WidthFixed, 70.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("RBG0", ImGuiTableColumnFlags_WidthFixed, 70.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("RBG1", ImGuiTableColumnFlags_WidthFixed, 70.0f * imguiData->displayScale);
         ImGui::TableHeadersRow();
 
         // -------------------------------------------------------------------------------------------------------------

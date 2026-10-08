@@ -1,17 +1,20 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+#include <ymir/core/types.hpp>
+
+namespace ymir::sh2 {
+class SH2;
+}
 
 namespace app::ui {
 
 class SH2InterruptsView {
 public:
-    SH2InterruptsView(SharedContext &context, ymir::sh2::SH2 &sh2);
+    SH2InterruptsView(ymir::sh2::SH2 &sh2);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     ymir::sh2::SH2 &m_sh2;
 
     uint8 m_extIntrVector = 0x0;

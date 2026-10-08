@@ -19,6 +19,7 @@
 
 #include <ymir/util/event.hpp>
 #include <ymir/util/inline.hpp>
+#include <ymir/util/result.hpp>
 
 #include <ymir/core/types.hpp>
 
@@ -26,6 +27,7 @@
 
 #include <array>
 #include <atomic>
+#include <memory>
 #include <span>
 #include <thread>
 #include <type_traits>
@@ -48,9 +50,13 @@ struct SoftwareRendererCallbacks {
 
 class SoftwareVDPRenderer : public IVDPRenderer {
 public:
-    SoftwareVDPRenderer(VDPState &state, config::VDP2DebugRender &vdp2DebugRenderOptions,
+    SoftwareVDPRenderer(VDPState &state, const config::VDP2DebugRender &vdp2DebugRenderOptions,
                         const config::VDP2AccessPatternsConfig &vdp2AccessPatternsConfig);
     ~SoftwareVDPRenderer();
+
+    static util::ObjectResult<SoftwareVDPRenderer>
+    Create(VDPState &state, const config::VDP2DebugRender &vdp2DebugRenderOptions,
+           const config::VDP2AccessPatternsConfig &vdp2AccessPatternsConfig);
 
     // -------------------------------------------------------------------------
     // Basics
@@ -144,6 +150,7 @@ public:
     void VDP1EndFrame() override;
 
     void VDP2SetResolution(uint32 h, uint32 v, bool exclusive) override;
+    void VDP2UpdateResolution(uint32 h, uint32 v, bool exclusive);
     void VDP2SetField(bool odd) override;
     void VDP2LatchTVMD() override;
     void VDP2BeginFrame() override;
@@ -162,25 +169,24 @@ public:
 
 private:
     VDPState &m_state;
-    config::VDP2DebugRender &m_vdp2DebugRenderOptions;
+    const config::VDP2DebugRender &m_vdp2DebugRenderOptions;
     const config::VDP2AccessPatternsConfig &m_vdp2AccessPatternsConfig;
 
     uint32 m_HRes;
     uint32 m_VRes;
     bool m_exclusiveMonitor;
-    bool m_resolutionChanged = false;
 
     // Complementary (alternate) VDP1 framebuffers, for deinterlaced rendering.
     // When deinterlace mode is enabled, if the system is using double-density interlace, this buffer will contain the
     // field lines complementary to the standard VDP1 framebuffer memory (e.g. while displaying odd lines, this buffer
     // contains even lines).
     // VDP2 rendering will combine both buffers to draw a full-resolution progressive image in one go.
-    alignas(16) std::array<SpriteFB, 2> m_altSpriteFB;
+    alignas(16) std::array<SpriteFB, 2> m_altFBRAM;
 
     // Transparent mesh sprite framebuffer.
     // Used when transparent meshes are enabled.
     // Indexing: [altFB][drawFB]
-    alignas(16) std::array<std::array<SpriteFB, 2>, 2> m_meshFB;
+    alignas(16) std::array<std::array<SpriteFB, 2>, 2> m_meshFBRAM;
 
     // -------------------------------------------------------------------------
     // Threading
@@ -321,14 +327,11 @@ private:
         struct VDP1 {
             VDP1Regs regs;
             VDP1Memory mem;
-            alignas(16) std::array<SpriteFB, 2> spriteFB;
         } vdp1;
 
         void Reset() {
             vdp1.regs.Reset();
             vdp1.mem.Reset();
-            vdp1.spriteFB[0].fill(0);
-            vdp1.spriteFB[1].fill(0);
         }
 
         void EnqueueEvent(VDP1RenderEvent &&event) {
@@ -376,6 +379,7 @@ private:
             VDP1EraseFramebuffer,
             VDP1SwapFramebuffer,
 
+            VDP2UpdateResolution,
             VDP2BeginFrame,
             VDP2UpdateEnabledBGs,
             VDP2DrawLine,
@@ -396,16 +400,18 @@ private:
         Type type;
         union {
             struct {
+                uint32 h;
+                uint32 v;
+                bool exclusive;
+            } updateResolution;
+
+            struct {
                 uint32 vcnt;
             } drawLine;
 
             struct {
                 bool odd;
             } oddField;
-
-            /*struct {
-                uint64 steps;
-            } vdp1ProcessCommands;*/
 
             struct {
                 uint32 address;
@@ -431,6 +437,10 @@ private:
 
         static VDP2RenderEvent VDP1SwapFramebuffer() {
             return {Type::VDP1SwapFramebuffer};
+        }
+
+        static VDP2RenderEvent VDP2UpdateResolution(uint32 h, uint32 v, bool exclusive) {
+            return {Type::VDP2UpdateResolution, {.updateResolution = {.h = h, .v = v, .exclusive = exclusive}}};
         }
 
         static VDP2RenderEvent VDP2BeginFrame() {
@@ -529,13 +539,10 @@ private:
             alignas(16) std::array<Color888, kVDP2CRAMSize / sizeof(uint16)> CRAMCache;
         } vdp2;
 
-        uint8 displayFB;
-
         void Reset() {
             vdp2.regs.Reset();
             vdp2.mem.Reset();
             vdp2.CRAMCache.fill({.u32 = 0});
-            displayFB = 0;
         }
 
         void EnqueueEvent(VDP2RenderEvent &&event) {
@@ -653,11 +660,8 @@ private:
     // Retrieves the current set of VDP1 registers.
     const VDP1Regs &VDP1GetRegs() const;
 
-    // Retrieves the current index of the VDP1 display framebuffer.
-    uint8 VDP1GetDisplayFBIndex() const;
-
-    // Retrieves a reference to the current VDP1 draw framebuffer in use by the renderer.
-    std::array<SpriteFB, 2> &VDP1GetRendererDrawFB(bool altFB);
+    // Retrieves a reference to the current VDP1 FBRAM in use by the renderer.
+    SpriteFB &VDP1GetRendererFBRAM(bool altFB, uint8 fbIndex);
 
     // Erases the current VDP1 display framebuffer.
     template <bool countCycles>
@@ -923,6 +927,7 @@ private:
         alignas(16) std::array<Color888, kMaxResH> meshTempColors;
         alignas(16) std::array<bool, kMaxResH> colorGradEnabled;
         alignas(16) std::array<Color888, kMaxResH> colorGradLayerColors;
+        alignas(16) std::array<std::array<bool, vdp::kMaxResH>, 2> customWindowState;
     };
 
     // Pre-allocated buffers for VDP2ComposeLine for primary and alternate fields.
@@ -1052,8 +1057,8 @@ private:
     // x is the X coordinate of the pixel to draw.
     // regs2 is a reference to the set of VDP2 registers to use
     // params contains the sprite layer's parameters.
-    // spriteFB is a reference to the sprite framebuffer to read from.
-    // spriteFBOffset is the offset into the buffer of the pixel to read.
+    // fbram is a reference to the sprite framebuffer to read from.
+    // fbramOffset is the offset into the buffer of the pixel to read.
     //
     // colorMode is the CRAM color mode.
     // altField selects the complementary field when rendering deinterlaced frames
@@ -1061,8 +1066,8 @@ private:
     // applyMesh determines if the pixel to be applied is a transparent mesh pixel (true) or a regular sprite layer
     // pixel (false).
     template <uint32 colorMode, bool altField, bool transparentMeshes, bool applyMesh>
-    void VDP2DrawSpritePixel(uint32 x, const VDP2Regs &regs2, const SpriteParams &params, const SpriteFB &spriteFB,
-                             uint32 spriteFBOffset);
+    void VDP2DrawSpritePixel(uint32 x, const VDP2Regs &regs2, const SpriteParams &params, const SpriteFB &fbram,
+                             uint32 fbramOffset);
 
     // Draws the current VDP2 scanline of the specified normal background layer.
     //
@@ -1312,13 +1317,13 @@ private:
     // Fetches sprite data based on the current sprite mode.
     //
     // regs2 is a reference to the set of VDP2 registers to use
-    // fb is the VDP1 framebuffer to read sprite data from.
-    // fbOffset is the offset into the framebuffer (in bytes) where the sprite data is located.
+    // fbram is the VDP1 framebuffer to read sprite data from.
+    // fbramOffset is the offset into the framebuffer (in bytes) where the sprite data is located.
     //
     // applyMesh determines if the pixel to be fetched is a transparent mesh pixel (true) or a regular sprite layer
     // pixel (false).
     template <bool applyMesh>
-    SpriteData VDP2FetchSpriteData(const VDP2Regs &regs2, const SpriteFB &fb, uint32 fbOffset);
+    SpriteData VDP2FetchSpriteData(const VDP2Regs &regs2, const SpriteFB &fbram, uint32 fbramOffset);
 
     // Retrieves the Y display coordinate based on the current interlace mode.
     //

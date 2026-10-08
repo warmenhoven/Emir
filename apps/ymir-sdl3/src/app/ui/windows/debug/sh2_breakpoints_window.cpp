@@ -1,5 +1,7 @@
 #include "sh2_breakpoints_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 using namespace ymir;
 
 namespace app::ui {
@@ -13,8 +15,9 @@ SH2BreakpointsWindow::SH2BreakpointsWindow(SharedContext &context, bool master, 
 }
 
 void SH2BreakpointsWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(250 * m_context.displayScale, 250 * m_context.displayScale),
-                                        ImVec2(250 * m_context.displayScale, FLT_MAX));
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(250 * imguiData->displayScale, 250 * imguiData->displayScale),
+                                        ImVec2(250 * imguiData->displayScale, FLT_MAX));
 }
 
 void SH2BreakpointsWindow::DrawContents() {

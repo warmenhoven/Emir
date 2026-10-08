@@ -1,5 +1,6 @@
 #include "peripheral_config_window.hpp"
 
+#include <app/imgui_data.hpp>
 #include <app/settings.hpp>
 
 #include <ymir/hw/smpc/smpc.hpp>
@@ -24,6 +25,7 @@ void PeripheralConfigWindow::Open(uint32 portIndex, uint32 slotIndex) {
 }
 
 void PeripheralConfigWindow::PrepareWindow() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &smpc = m_context.saturn.GetSMPC();
     auto &port = m_portIndex == 0 ? smpc.GetPeripheralPort1() : smpc.GetPeripheralPort2();
     auto &periph = port.GetPeripheral(/* TODO: m_slotIndex */);
@@ -35,8 +37,8 @@ void PeripheralConfigWindow::PrepareWindow() {
     // m_windowConfig.name = fmt::format("Port {} slot {} {} configuration###periph_config_window", m_portIndex + 1,
     //                                   m_slotIndex + 1, periph.GetName());
 
-    ImGui::SetNextWindowSizeConstraints(ImVec2(500 * m_context.displayScale, 300 * m_context.displayScale),
-                                        ImVec2(1000 * m_context.displayScale, 900 * m_context.displayScale));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(500 * imguiData->displayScale, 300 * imguiData->displayScale),
+                                        ImVec2(1000 * imguiData->displayScale, 900 * imguiData->displayScale));
     auto *vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));

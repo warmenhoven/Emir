@@ -1,10 +1,12 @@
 #include "file_dialog_service.hpp"
 #include "display_service.hpp"
 
+#include <ymir/util/dev_log.hpp>
+
 #include <SDL3/SDL.h>
+
 #include <fmt/format.h>
 #include <fmt/std.h>
-#include <ymir/util/dev_log.hpp>
 
 namespace app::services {
 

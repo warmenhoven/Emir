@@ -12,7 +12,7 @@
 #include <app/input/input_context.hpp>
 #include <app/input/input_events.hpp>
 
-#include <app/services/graphics_types.hpp>
+#include <app/services/gfx/gfx_types.hpp>
 
 #include <app/profile.hpp>
 
@@ -20,6 +20,7 @@
 #include <app/display.hpp>
 
 #include <ymir/util/observable.hpp>
+#include <ymir/util/ratio.hpp>
 
 #include "settings_defaults.hpp"
 
@@ -161,6 +162,8 @@ struct Settings {
 
         bool checkForUpdates;
         bool includeNightlyBuilds;
+
+        bool enableDiscordPresence;
     } general;
 
     struct GUI {
@@ -459,10 +462,11 @@ struct Settings {
         enum class DisplayRotation { Normal, _90CW, _180, _90CCW };
 
         gfx::Backend graphicsBackend;
+        std::optional<gfx::AdapterID> graphicsAdapter;
 
         bool forceIntegerScaling;
         bool forceAspectRatio;
-        double forcedAspect;
+        Ratio forcedAspect;
         DisplayRotation rotation;
 
         bool autoResizeWindow;
@@ -486,6 +490,8 @@ struct Settings {
 
         display::DisplayMode fullScreenMode;
         bool borderlessFullScreen;
+
+        util::Observable<bool> useHardwareAcceleration;
 
         struct SoftwareRenderer {
             util::Observable<bool> threadedVDP1;

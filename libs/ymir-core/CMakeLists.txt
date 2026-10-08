@@ -25,6 +25,9 @@ add_library(ymir-core
     include/ymir/debug/watchpoint_defs.hpp
     include/ymir/debug/ygr_tracer_base.hpp
 
+    include/ymir/gpu/shaders/gpu_shaders.hpp
+    include/ymir/gpu/shaders/gpu_shader_types.hpp
+
     include/ymir/hw/hw_defs.hpp
 
     include/ymir/hw/cart/cart_base.hpp
@@ -52,7 +55,7 @@ add_library(ymir-core
     include/ymir/hw/scsp/scsp.hpp
     include/ymir/hw/scsp/scsp_callbacks.hpp
     include/ymir/hw/scsp/scsp_defs.hpp
-	include/ymir/hw/scsp/scsp_midi_defs.hpp
+    include/ymir/hw/scsp/scsp_midi_defs.hpp
     include/ymir/hw/scsp/scsp_dsp.hpp
     include/ymir/hw/scsp/scsp_dsp_instr.hpp
     include/ymir/hw/scsp/scsp_internal_callbacks.hpp
@@ -138,6 +141,7 @@ add_library(ymir-core
     include/ymir/hw/vdp/renderer/vdp_renderer.hpp
     include/ymir/hw/vdp/renderer/vdp_renderer_base.hpp
     include/ymir/hw/vdp/renderer/vdp_renderer_defs.hpp
+    include/ymir/hw/vdp/renderer/vdp_renderer_hw_base.hpp
     include/ymir/hw/vdp/renderer/vdp_renderer_null.hpp
     include/ymir/hw/vdp/renderer/vdp_renderer_sw.hpp
 
@@ -217,7 +221,9 @@ add_library(ymir-core
     include/ymir/util/date_time.hpp
     include/ymir/util/dev_assert.hpp
     include/ymir/util/dev_log.hpp
+    include/ymir/util/dirty_bitmap.hpp
     include/ymir/util/event.hpp
+    include/ymir/util/fmt_ratio.hpp
     include/ymir/util/function_info.hpp
     include/ymir/util/hashing.hpp
     include/ymir/util/inline.hpp
@@ -225,6 +231,7 @@ add_library(ymir-core
     include/ymir/util/observable.hpp
     include/ymir/util/process.hpp
     include/ymir/util/ratio.hpp
+    include/ymir/util/result.hpp
     include/ymir/util/scope_guard.hpp
     include/ymir/util/size_ops.hpp
     include/ymir/util/string.hpp
@@ -289,6 +296,9 @@ add_library(ymir-core
 
     src/ymir/hw/vdp/renderer/vdp_renderer_sw.cpp
 
+    src/ymir/hw/vdp/renderer/common_hw/common_hw_defs.hpp
+    src/ymir/hw/vdp/renderer/common_hw/memory_usage_tracker.hpp
+
     src/ymir/media/cd_defs.cpp
     src/ymir/media/cd_interface.cpp
     src/ymir/media/cd_utils.cpp
@@ -346,18 +356,201 @@ else ()
     target_sources(ymir-core PRIVATE src/ymir/media/host_cd_dummy.cpp)
 endif ()
 
+## Add OS-specific source files for graphics
+if (WIN32 AND Ymir_ENABLE_GPU_API)
+    target_sources(ymir-core
+        PUBLIC
+            include/ymir/gpu/d3d12/d3d12_commands.hpp
+            include/ymir/gpu/d3d12/d3d12_debug.hpp
+            include/ymir/gpu/d3d12/d3d12_descriptor_heap.hpp
+            include/ymir/gpu/d3d12/d3d12_descriptor_heap_allocator.hpp
+            include/ymir/gpu/d3d12/d3d12_device.hpp
+            include/ymir/gpu/d3d12/d3d12_fence.hpp
+            include/ymir/gpu/d3d12/d3d12_object_wrapper.hpp
+            include/ymir/gpu/d3d12/d3d12_pipeline_state.hpp
+            include/ymir/gpu/d3d12/d3d12_resource.hpp
+            include/ymir/gpu/d3d12/d3d12_root_signature.hpp
+            include/ymir/gpu/d3d12/d3d12_swap_chain.hpp
+            include/ymir/gpu/d3d12/d3d12_utils.hpp
+
+            include/ymir/hw/vdp/renderer/vdp_renderer_hw_d3d12.hpp
+
+        PRIVATE
+            src/ymir/gpu/d3d12/d3d12_debug.cpp
+
+            src/ymir/gpu/shaders/gpu_shaders_windows.cpp
+
+            src/ymir/hw/vdp/renderer/vdp_renderer_hw_d3d12.cpp
+
+            src/ymir/hw/vdp/renderer/d3d12/d3d12_barrier_tracker.hpp
+            src/ymir/hw/vdp/renderer/d3d12/d3d12_dev_log.hpp
+            src/ymir/hw/vdp/renderer/d3d12/d3d12_upload_buffer.hpp
+    )
+elseif (APPLE)
+    target_sources(ymir-core PRIVATE
+        src/ymir/gpu/shaders/gpu_shaders_macos.cpp
+    )
+elseif (UNIX) # Linux and FreeBSD
+    target_sources(ymir-core PRIVATE
+        src/ymir/gpu/shaders/gpu_shaders_unixlike.cpp
+    )
+else ()
+    target_sources(ymir-core PRIVATE
+        src/ymir/gpu/shaders/gpu_shaders_other.cpp
+    )
+endif ()
+
+## Compile VDP1 and VDP2 renderer shaders
+set(SHADER_INPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/res/shaders")
+set(SHADER_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+
+# The syntax for each entry is "<path>[|<variant>[|<macro>[|<macro[...]]]]"
+#   <path> is the path to the shader source code relative CMAKE_CURRENT_SOURCE_DIR
+#   <variant> specifies an optional variant name for the shader
+#   <macro> defines macros for that variant
+set(COMPUTE_SHADER_SOURCES
+    res/shaders/src/vdp/cs_vdp1_erase.hlsl
+    res/shaders/src/vdp/cs_vdp1_fbram_write.hlsl
+
+    res/shaders/src/vdp/cs_vdp2_compose.hlsl
+    res/shaders/src/vdp/cs_vdp2_render_bgs.hlsl
+    res/shaders/src/vdp/cs_vdp2_render_sprite.hlsl
+)
+
+# Generate shader specializations
+foreach (_transparent_mesh RANGE 1)
+    set(_macros_transparent_mesh "POLYSPEC_TRANSPARENT_MESH=${_transparent_mesh}")
+
+    # Polygon drawing
+    foreach (_shading_mode RANGE 3)
+        set(_variant_name "${_transparent_mesh}_${_shading_mode}")
+        set(_macros_shading_mode "POLYSPEC_SHADING_MODE=${_shading_mode}")
+        set(_macros "${_macros_transparent_mesh}|${_macros_shading_mode}")
+        list(APPEND COMPUTE_SHADER_SOURCES "res/shaders/src/vdp/cs_vdp1_polydraw.hlsl|${_variant_name}|${_macros}")
+    endforeach ()
+
+    # Output merger
+    foreach (_merge_mode RANGE 2)
+        set(_variant_name "${_transparent_mesh}_${_merge_mode}")
+        set(_macros_merge_mode "POLYSPEC_MERGE_MODE=${_merge_mode}")
+        set(_macros "${_macros_transparent_mesh}|${_macros_merge_mode}")
+        list(APPEND COMPUTE_SHADER_SOURCES "res/shaders/src/vdp/cs_vdp1_output_merger.hlsl|${_variant_name}|${_macros}")
+    endforeach ()
+endforeach ()
+
+## TODO: add per-platform shader code if needed
+# if (WIN32)
+#     list(APPEND COMPUTE_SHADER_SOURCES
+#         res/shaders/vdp/d3d12/some_shader_cs.hlsl
+#     )
+# elseif (APPLE)
+# elseif (UNIX) # Linux and FreeBSD
+# endif ()
+
+set(COMPILED_SHADERS "")
+set(COMPILED_SHADERS_SOURCE_PATHS "")
+foreach (SHADER_SRC ${COMPUTE_SHADER_SOURCES})
+    # Split shader parameters
+    string(REPLACE "|" ";" _sublist "${SHADER_SRC}")
+    set(_shader_src_path "")
+    set(_variant "")
+    set(_macros "")
+    list(LENGTH  _sublist _list_length)
+    list(GET _sublist 0 _shader_src_path)
+    if (${_list_length} GREATER_EQUAL 2)
+        list(GET _sublist 1 _variant)
+    endif ()
+    if (${_list_length} GREATER_EQUAL 3)
+        list(SUBLIST _sublist 2 -1 _macros)
+    endif ()
+
+    compile_shader(
+        OUT_PATHS SHADER_BINARY_FILES
+        SOURCE "${_shader_src_path}"
+        WHENCE "${SHADER_INPUT_DIR}"
+        DESTINATION "${SHADER_OUTPUT_DIR}"
+        ENTRYPOINT "CSMain"
+        PROFILE "cs_6_0"
+        VARIANT ${_variant}
+        MACROS ${_macros}
+        INCLUDE_PATHS "${SHADER_INPUT_DIR}/include"
+    )
+    list(APPEND COMPILED_SHADERS ${SHADER_BINARY_FILES})
+    list(APPEND COMPILED_SHADERS_SOURCE_PATHS ${_shader_src_path})
+endforeach ()
+
+# Configure properties for shader source files in Visual Studio solutions
+if (WIN32)
+    set_source_files_properties(
+        ${COMPILED_SHADERS_SOURCE_PATHS}
+        PROPERTIES
+            VS_SHADER_TYPE "Compute"
+            VS_SHADER_MODEL "6.0"
+            VS_SHADER_ENTRYPOINT "CSMain"
+    )
+endif ()
+
+
+## Create the embedded shaders target
+MESSAGE(STATUS "Generating core shader resource library: ${COMPILED_SHADERS}")
+cmrc_add_resource_library(ymir-core-shaders
+    ALIAS ymir-core::shaders
+    NAMESPACE ymir_core_shaders
+    WHENCE "${SHADER_OUTPUT_DIR}"
+    ${COMPILED_SHADERS}
+)
+
+
 ## Add dependencies
 target_link_libraries(ymir-core PUBLIC
+    ymir-core::shaders
+
     fmt::fmt
     mio
     concurrentqueue
     xxHash::xxHash
     chdr-static
+    stb::stb
+    dr_libs::dr_libs
 )
 if (WIN32)
-    ## synchronization.lib required for WaitOnAddress and WakeByAddressAll
     target_link_libraries(ymir-core PUBLIC
-        synchronization
+        synchronization  # for WaitOnAddress and WakeByAddressAll
+    )
+endif ()
+if (WIN32 AND Ymir_ENABLE_GPU_API)
+    target_link_libraries(ymir-core PUBLIC
+        # Direct3D 11 and 12
+        d3d12
+        dxgi
+        dxguid
+        dxcompiler
+
+        WIL::WIL
+    )
+elseif (APPLE)
+    find_package(Iconv REQUIRED)
+    target_link_libraries(ymir-core PUBLIC
+        Iconv::Iconv
+    )
+elseif (ANDROID)
+    # Bionic only provides iconv from API 28 onwards; util/string.cpp skips it below that.
+elseif (UNIX) # Linux and FreeBSD
+    find_package(Iconv REQUIRED)
+    target_link_libraries(ymir-core PUBLIC
+        Iconv::Iconv
+    )
+    if (CMAKE_SYSTEM_NAME MATCHES FreeBSD)
+        # Prevent third-party package libiconv from interfering with iconv from libc.
+        target_compile_definitions(ymir-core PUBLIC "LIBICONV_PLUG")
+    endif ()
+endif ()
+
+if (Vulkan_FOUND)
+    message(STATUS "Adding Vulkan to ymir-core")
+    target_link_libraries(ymir-core PRIVATE
+        Vulkan::Vulkan
+        Vulkan::SPIRV-Tools
     )
 endif ()
 
@@ -443,6 +636,9 @@ target_compile_definitions(ymir-core PUBLIC "Ymir_DEV_ASSERTIONS=$<BOOL:${Ymir_E
 target_compile_definitions(ymir-core PUBLIC "Ymir_DEV_BUILD=$<BOOL:${Ymir_DEV_BUILD}>")
 target_compile_definitions(ymir-core PUBLIC "Ymir_EXTRA_INLINING=$<BOOL:${Ymir_EXTRA_INLINING}>")
 target_compile_definitions(ymir-core PUBLIC "Ymir_VDP_OUTPUT_XRGB=$<BOOL:${Ymir_ENABLE_LIBRETRO}>")
+target_compile_definitions(ymir-core PUBLIC "YMIR_PLATFORM_HAS_DIRECT3D=$<AND:$<BOOL:${WIN32}>,$<BOOL:${Ymir_ENABLE_GPU_API}>>")
+target_compile_definitions(ymir-core PUBLIC "YMIR_PLATFORM_HAS_VULKAN=$<BOOL:${Vulkan_FOUND}>")
+target_compile_definitions(ymir-core PUBLIC "YMIR_PLATFORM_HAS_METAL=$<AND:$<BOOL:${APPLE}>,$<BOOL:${Ymir_ENABLE_GPU_API}>>")
 target_compile_definitions(ymir-core PUBLIC "TOML_EXCEPTIONS=0")
 
 ## Define feature flags macros

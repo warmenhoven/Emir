@@ -1,5 +1,7 @@
 #include "control_pad_config_view.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 ControlPadConfigView::ControlPadConfigView(SharedContext &context)
@@ -8,6 +10,7 @@ ControlPadConfigView::ControlPadConfigView(SharedContext &context)
     , m_unboundActionsWidget(context) {}
 
 void ControlPadConfigView::Display(Settings::Input::Port::ControlPad &controllerSettings, uint32 portIndex) {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings();
     auto &binds = controllerSettings.binds;
 
@@ -25,7 +28,7 @@ void ControlPadConfigView::Display(Settings::Input::Port::ControlPad &controller
     m_unboundActionsWidget.Display();
     if (ImGui::BeginTable("hotkeys", 1 + input::kNumBindsPerInput,
                           ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY)) {
-        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed, 70.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed, 70.0f * imguiData->displayScale);
         for (size_t i = 0; i < input::kNumBindsPerInput; i++) {
             ImGui::TableSetupColumn(fmt::format("Hotkey {}", i + 1).c_str(), ImGuiTableColumnFlags_WidthStretch, 1.0f);
         }

@@ -6,6 +6,8 @@
 
 #include <app/events/gui_event_factory.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <util/os_features.hpp>
 
 #include <ymir/version.hpp>
@@ -28,7 +30,8 @@ void UpdateOnboardingWindow::PrepareWindow() {
 }
 
 void UpdateOnboardingWindow::DrawContents() {
-    ImGui::PushTextWrapPos(450.0f * m_context.displayScale);
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::PushTextWrapPos(450.0f * imguiData->displayScale);
 
     ImGui::TextUnformatted("Ymir can check for new versions automatically on startup.");
     ImGui::TextUnformatted("This requires an Internet connection and will reach github.com to check for new versions.");
@@ -36,13 +39,11 @@ void UpdateOnboardingWindow::DrawContents() {
     ImGui::Checkbox("Check for updates on startup", &m_checkForUpdates);
     widgets::ExplanationTooltip(
         "Ymir will check for updates whenever it is launched, and notify you if a new version is available.\n"
-        "Upon accepting, Ymir will immediately check for updates if this option is enabled.",
-        m_context.displayScale);
+        "Upon accepting, Ymir will immediately check for updates if this option is enabled.");
     ImGui::Checkbox("Update to nightly builds", &m_includeNightlyBuilds);
     widgets::ExplanationTooltip(
         "Whenever Ymir checks for updates, it will also consider nightly builds.\n"
-        "Nightly builds include the latest features and bug fixes, but are work-in-progress and may contain bugs",
-        m_context.displayScale);
+        "Nightly builds include the latest features and bug fixes, but are work-in-progress and may contain bugs");
 
     ImGui::NewLine();
     ImGui::TextUnformatted("Choose Accept to apply these settings or Decide later to close this window now.\n"

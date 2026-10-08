@@ -9,12 +9,20 @@ Does nothing, but invokes all standard renderer callbacks at appropriate times.
 
 #include <ymir/hw/vdp/renderer/vdp_renderer_base.hpp>
 
+#include <ymir/util/result.hpp>
+
+#include <memory>
+
 namespace ymir::vdp {
 
 class NullVDPRenderer : public IVDPRenderer {
 public:
     NullVDPRenderer()
         : IVDPRenderer(VDPRendererType::Null) {}
+
+    static util::ObjectResult<NullVDPRenderer> Create() {
+        return std::make_unique<NullVDPRenderer>();
+    }
 
     // -------------------------------------------------------------------------
     // Basics
@@ -84,9 +92,7 @@ public:
         Callbacks.VDP1DrawFinished();
     }
 
-    void VDP2SetResolution(uint32 h, uint32 v, bool exclusive) override {
-        Callbacks.VDP2ResolutionChanged(h, v);
-    }
+    void VDP2SetResolution(uint32 h, uint32 v, bool exclusive) override {}
     void VDP2SetField(bool odd) override {}
     void VDP2LatchTVMD() override {}
     void VDP2BeginFrame() override {}

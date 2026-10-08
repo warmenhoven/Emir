@@ -3,19 +3,21 @@
 #include <ymir/hw/scu/scu.hpp>
 #include <ymir/hw/scu/scu_dsp_disasm.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <string_view>
 
 using namespace ymir;
 
 namespace app::ui {
 
-SCUDSPDisassemblyView::SCUDSPDisassemblyView(SharedContext &context)
-    : m_context(context)
-    , m_scu(context.saturn.GetSCU()) {}
+SCUDSPDisassemblyView::SCUDSPDisassemblyView(ymir::scu::SCU &scu)
+    : m_scu(scu) {}
 
 void SCUDSPDisassemblyView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -42,17 +44,17 @@ void SCUDSPDisassemblyView::Display() {
 
             ImGui::TableNextRow();
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(m_colors.disasm.address, "%02X", pc);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(m_colors.disasm.bytes, "%08X", opcode);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
 
                 auto drawMnemonic = [&](std::string_view mnemonic) {
                     ImGui::TextColored(m_colors.disasm.mnemonic, "%s", mnemonic.data());

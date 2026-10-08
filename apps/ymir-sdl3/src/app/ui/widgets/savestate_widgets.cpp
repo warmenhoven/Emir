@@ -1,5 +1,7 @@
 #include "savestate_widgets.hpp"
 
+#include <app/imgui_data.hpp>
+
 #include <fmt/format.h>
 
 #include <imgui.h>
@@ -7,6 +9,8 @@
 namespace app::ui::widgets {
 
 void RewindBar(SharedContext &context, float alpha, const RewindBarStyle &style) {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     alpha = std::clamp(alpha, 0.0f, 1.0f);
     if (alpha == 0.0f) {
         return;
@@ -22,11 +26,11 @@ void RewindBar(SharedContext &context, float alpha, const RewindBarStyle &style)
 
     const ImVec2 windowPos{
         (workPos.x + workSize.x) * 0.5f,
-        (workPos.y + workSize.y - style.padding * context.displayScale),
+        (workPos.y + workSize.y - style.padding * imguiData->displayScale),
     };
     ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always, ImVec2{0.5f, 1.0f});
     ImGui::SetNextWindowSize(
-        ImVec2(workSize.x - style.padding * 2.0f * context.displayScale, style.height * context.displayScale));
+        ImVec2(workSize.x - style.padding * 2.0f * imguiData->displayScale, style.height * imguiData->displayScale));
     ImGui::SetNextWindowViewport(viewport->ID);
 
     const ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
@@ -67,7 +71,7 @@ void RewindBar(SharedContext &context, float alpha, const RewindBarStyle &style)
 
         ImDrawList *drawList = ImGui::GetWindowDrawList();
 
-        ImGui::PushFont(context.fonts.monospace.bold, context.fontSizes.small);
+        ImGui::PushFont(imguiData->fonts.monospace.bold, imguiData->fontSizes.small);
 
         const ImVec2 startSize = ImGui::CalcTextSize(startStr.c_str());
         const ImVec2 endSize = ImGui::CalcTextSize(endStr.c_str());
@@ -100,11 +104,11 @@ void RewindBar(SharedContext &context, float alpha, const RewindBarStyle &style)
 
         // Background
         drawList->AddRectFilled(rectTopLeft, ImVec2(pos.x + avail.x, pos.y + avail.y), bgColor,
-                                style.rounding * context.displayScale, ImDrawFlags_RoundCornersAll);
+                                style.rounding * imguiData->displayScale, ImDrawFlags_RoundCornersAll);
 
         // Progress bar
         drawList->AddRectFilled(rectTopLeft, ImVec2(pos.x + avail.x * pct, pos.y + avail.y), barColor,
-                                style.rounding * context.displayScale, ImDrawFlags_RoundCornersAll);
+                                style.rounding * imguiData->displayScale, ImDrawFlags_RoundCornersAll);
 
         // Seconds markers
         size_t secondOffset = endOffset - endFrame;
@@ -120,8 +124,8 @@ void RewindBar(SharedContext &context, float alpha, const RewindBarStyle &style)
 
         // Border
         drawList->AddRect(rectTopLeft, ImVec2(pos.x + avail.x, pos.y + avail.y), borderColor,
-                          style.rounding * context.displayScale, ImDrawFlags_RoundCornersAll,
-                          style.borderThickness * context.displayScale);
+                          style.rounding * imguiData->displayScale, style.borderThickness * imguiData->displayScale,
+                          ImDrawFlags_RoundCornersAll);
     }
     ImGui::End();
 }

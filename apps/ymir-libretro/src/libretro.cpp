@@ -530,7 +530,7 @@ static void apply_core_options() {
 
     auto sh2_clock = get_variable("ymir_sh2_clock");
     if (!sh2_clock.empty())
-        core.saturn->SetSH2ClockFactor(RatioU32::FromPercentage(static_cast<uint32_t>(std::stoi(sh2_clock))));
+        core.saturn->SetSH2ClockFactor(Ratio::FromPercentage(static_cast<uint32_t>(std::stoi(sh2_clock))));
 
     auto rtc_mode = get_variable("ymir_rtc_mode");
     if (rtc_mode == "host")
@@ -541,9 +541,9 @@ static void apply_core_options() {
     // Region -- applied at load time, changing at runtime would require a reset.
 
     // --- Video ---
-    config.video.threadedVDP1 = (get_variable("ymir_threaded_vdp1") == "enabled");
-    config.video.threadedVDP2 = (get_variable("ymir_threaded_vdp2") == "enabled");
-    config.video.threadedDeinterlacer = (get_variable("ymir_threaded_deinterlacer") == "enabled");
+    config.swRenderer.threadedVDP1 = (get_variable("ymir_threaded_vdp1") == "enabled");
+    config.swRenderer.threadedVDP2 = (get_variable("ymir_threaded_vdp2") == "enabled");
+    config.swRenderer.threadedDeinterlacer = (get_variable("ymir_threaded_deinterlacer") == "enabled");
 
     core.saturn->VDP.ModifyEnhancements([](ymir::vdp::config::Enhancements &enh) {
         enh.deinterlace = (get_variable("ymir_deinterlace") == "enabled");

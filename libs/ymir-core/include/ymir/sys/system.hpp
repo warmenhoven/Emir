@@ -13,7 +13,7 @@ namespace ymir::sys {
 struct System {
     core::config::sys::VideoStandard videoStandard = core::config::sys::VideoStandard::NTSC;
     ClockSpeed clockSpeed = ClockSpeed::_320;
-    RatioU32 sh2ClockFactor = RatioU32::One();
+    Ratio sh2ClockFactor = Ratio::One();
 
     const ClockRatios &GetClockRatios() const {
         return m_activeClockRatios;
@@ -25,7 +25,7 @@ struct System {
         const ClockRatios &baseRatios = kClockRatios[(pal << 1) | (clock352 << 0)];
 
         m_activeClockRatios = baseRatios;
-        if (sh2ClockFactor != RatioU32::One()) {
+        if (sh2ClockFactor != Ratio::One()) {
             const auto [num, den] = sh2ClockFactor.Pair();
             m_activeClockRatios.SCSPNum *= den;
             m_activeClockRatios.SCSPDen *= num;

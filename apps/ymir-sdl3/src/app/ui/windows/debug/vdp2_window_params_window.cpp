@@ -4,7 +4,7 @@ namespace app::ui {
 
 VDP2WindowParamsWindow::VDP2WindowParamsWindow(SharedContext &context)
     : VDPWindowBase(context)
-    , m_layerParamsView(context, m_vdp) {
+    , m_layerParamsView(m_vdp) {
 
     m_windowConfig.name = "VDP2 window parameters";
     m_windowConfig.flags = ImGuiWindowFlags_AlwaysAutoResize;

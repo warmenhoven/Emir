@@ -2,20 +2,22 @@
 
 #include <ymir/hw/sh2/sh2.hpp>
 
+#include <app/imgui_data.hpp>
+
 using namespace ymir;
 
 namespace app::ui {
 
-SH2FreeRunningTimerView::SH2FreeRunningTimerView(SharedContext &context, ymir::sh2::SH2 &sh2)
-    : m_context(context)
-    , m_sh2(sh2) {}
+SH2FreeRunningTimerView::SH2FreeRunningTimerView(ymir::sh2::SH2 &sh2)
+    : m_sh2(sh2) {}
 
 void SH2FreeRunningTimerView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &probe = m_sh2.GetProbe();
     auto &frt = probe.FRT();
     auto &intc = probe.INTC();
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -26,7 +28,7 @@ void SH2FreeRunningTimerView::Display() {
 
             ImGui::BeginGroup();
             ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             if (ImGui::InputScalar("##tier", ImGuiDataType_U8, &TIER, nullptr, nullptr, "%02X",
                                    ImGuiInputTextFlags_CharsHexadecimal)) {
                 frt.WriteTIER(TIER);
@@ -62,7 +64,7 @@ void SH2FreeRunningTimerView::Display() {
 
             ImGui::BeginGroup();
             ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             if (ImGui::InputScalar("##ftcsr", ImGuiDataType_U8, &FTCSR, nullptr, nullptr, "%02X",
                                    ImGuiInputTextFlags_CharsHexadecimal)) {
                 frt.WriteFTCSR<true>(FTCSR);
@@ -102,7 +104,7 @@ void SH2FreeRunningTimerView::Display() {
 
             ImGui::BeginGroup();
             ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             if (ImGui::InputScalar("##tcr", ImGuiDataType_U8, &TCR, nullptr, nullptr, "%02X",
                                    ImGuiInputTextFlags_CharsHexadecimal)) {
                 frt.WriteTCR(TCR);
@@ -149,7 +151,7 @@ void SH2FreeRunningTimerView::Display() {
 
             ImGui::BeginGroup();
             ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             if (ImGui::InputScalar("##tocr", ImGuiDataType_U8, &TOCR, nullptr, nullptr, "%02X",
                                    ImGuiInputTextFlags_CharsHexadecimal)) {
                 frt.WriteTOCR(TOCR);
@@ -181,7 +183,7 @@ void SH2FreeRunningTimerView::Display() {
     {
         ImGui::BeginGroup();
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 4);
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::InputScalar("##frc", ImGuiDataType_U16, &frt.FRC, nullptr, nullptr, "%04X",
                            ImGuiInputTextFlags_CharsHexadecimal);
         ImGui::PopFont();
@@ -195,7 +197,7 @@ void SH2FreeRunningTimerView::Display() {
     {
         ImGui::BeginGroup();
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 4);
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::InputScalar("##ocra", ImGuiDataType_U16, &frt.OCRA, nullptr, nullptr, "%04X",
                            ImGuiInputTextFlags_CharsHexadecimal);
         ImGui::PopFont();
@@ -209,7 +211,7 @@ void SH2FreeRunningTimerView::Display() {
     {
         ImGui::BeginGroup();
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 4);
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::InputScalar("##ocrb", ImGuiDataType_U16, &frt.OCRB, nullptr, nullptr, "%04X",
                            ImGuiInputTextFlags_CharsHexadecimal);
         ImGui::PopFont();
@@ -223,7 +225,7 @@ void SH2FreeRunningTimerView::Display() {
     {
         ImGui::BeginGroup();
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 4);
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::InputScalar("##icr", ImGuiDataType_U16, &frt.ICR, nullptr, nullptr, "%04X",
                            ImGuiInputTextFlags_CharsHexadecimal);
         ImGui::PopFont();
@@ -237,7 +239,7 @@ void SH2FreeRunningTimerView::Display() {
     {
         ImGui::BeginGroup();
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::InputScalar("##temp", ImGuiDataType_U8, &frt.TEMP, nullptr, nullptr, "%02X",
                            ImGuiInputTextFlags_CharsHexadecimal);
         ImGui::PopFont();
@@ -251,7 +253,7 @@ void SH2FreeRunningTimerView::Display() {
     ImGui::BeginGroup();
     uint8 iciVector = intc.GetVector(sh2::InterruptSource::FRT_ICI);
     ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     if (ImGui::InputScalar("##vcrc.ficvn", ImGuiDataType_U8, &iciVector, nullptr, nullptr, "%02X",
                            ImGuiInputTextFlags_CharsHexadecimal)) {
         intc.SetVector(sh2::InterruptSource::FRT_ICI, iciVector);
@@ -267,7 +269,7 @@ void SH2FreeRunningTimerView::Display() {
     ImGui::BeginGroup();
     uint8 ociVector = intc.GetVector(sh2::InterruptSource::FRT_OCI);
     ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     if (ImGui::InputScalar("##vcrc.focvn", ImGuiDataType_U8, &ociVector, nullptr, nullptr, "%02X",
                            ImGuiInputTextFlags_CharsHexadecimal)) {
         intc.SetVector(sh2::InterruptSource::FRT_OCI, ociVector);
@@ -283,7 +285,7 @@ void SH2FreeRunningTimerView::Display() {
     ImGui::BeginGroup();
     uint8 oviVector = intc.GetVector(sh2::InterruptSource::FRT_OVI);
     ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     if (ImGui::InputScalar("##vcrd.fovvn", ImGuiDataType_U8, &oviVector, nullptr, nullptr, "%02X",
                            ImGuiInputTextFlags_CharsHexadecimal)) {
         intc.SetVector(sh2::InterruptSource::FRT_OVI, oviVector);
@@ -299,7 +301,7 @@ void SH2FreeRunningTimerView::Display() {
     uint8 level = intc.GetLevel(sh2::InterruptSource::FRT_ICI);
     ImGui::BeginGroup();
     ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 1);
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     if (ImGui::InputScalar("##iprb_frtipn", ImGuiDataType_U8, &level, nullptr, nullptr, "%X",
                            ImGuiInputTextFlags_CharsHexadecimal)) {
         intc.SetLevel(sh2::InterruptSource::FRT_ICI, std::min<uint8>(level, 0xF));

@@ -1,17 +1,18 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+namespace ymir::scu {
+class SCU;
+}
 
 namespace app::ui {
 
 class SCUDSPDMARegistersView {
 public:
-    SCUDSPDMARegistersView(SharedContext &context);
+    SCUDSPDMARegistersView(ymir::scu::SCU &scu);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     ymir::scu::SCU &m_scu;
 };
 

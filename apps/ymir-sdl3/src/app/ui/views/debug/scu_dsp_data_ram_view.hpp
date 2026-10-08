@@ -1,17 +1,18 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+namespace ymir::scu {
+class SCU;
+}
 
 namespace app::ui {
 
 class SCUDSPDataRAMView {
 public:
-    SCUDSPDataRAMView(SharedContext &context);
+    SCUDSPDataRAMView(ymir::scu::SCU &scu);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     ymir::scu::SCU &m_scu;
 };
 

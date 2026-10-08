@@ -1,5 +1,7 @@
 #include "vdp2_color_calc_params_view.hpp"
 
+#include <app/ui/utils/debug/vdp_window_set_printer.hpp>
+
 #include <ymir/hw/vdp/vdp.hpp>
 
 #include <imgui.h>
@@ -66,6 +68,20 @@ void VDP2ColorCalcParamsView::Display() {
     } else {
         ImGui::TextUnformatted("Blend mode: Alpha (color ratio)");
     }
+
+    auto printWindowSet = [&]<bool hasSpriteWindow>(const vdp::WindowSet<hasSpriteWindow> &windowSet) {
+        WindowSetPrinter printer{windowSet.logic};
+        printer.AppendWindow("0", windowSet.enabled[0], windowSet.inverted[0]);
+        printer.AppendWindow("1", windowSet.enabled[1], windowSet.inverted[1]);
+        if constexpr (hasSpriteWindow) {
+            printer.AppendWindow("S", windowSet.enabled[2], windowSet.inverted[2]);
+        }
+        ImGui::Text("%s", printer.ToString().c_str());
+    };
+
+    ImGui::TextUnformatted("Windows: ");
+    ImGui::SameLine(0, 0);
+    printWindowSet(regs2.colorCalcParams.windowSet);
 }
 
 } // namespace app::ui

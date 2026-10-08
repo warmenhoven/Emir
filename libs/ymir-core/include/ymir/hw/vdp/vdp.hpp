@@ -9,6 +9,9 @@
 #include "vdp_state.hpp"
 
 #include "vdp_internal_callbacks.hpp"
+#if YMIR_PLATFORM_HAS_DIRECT3D
+    #include "renderer/vdp_renderer_hw_d3d12_callbacks.hpp"
+#endif
 
 #include "vdp_devlog.hpp"
 
@@ -25,6 +28,7 @@
 #include "renderer/vdp_renderer.hpp"
 
 #include <ymir/util/inline.hpp>
+#include <ymir/util/result.hpp>
 
 #include <blockingconcurrentqueue.h>
 
@@ -122,22 +126,49 @@ public:
     }
 
     /// @brief Switches to the null renderer.
-    /// @return a pointer to the renderer, or `nullptr` if it failed to instantiate
-    NullVDPRenderer *UseNullRenderer() {
+    /// @return a pointer to the renderer, or an error message if it failed to instantiate
+    util::PointerResult<NullVDPRenderer> UseNullRenderer() {
         return UseRenderer<NullVDPRenderer>();
     }
 
     /// @brief Switches to the software renderer.
-    /// @return a pointer to the renderer, or `nullptr` if it failed to instantiate
-    SoftwareVDPRenderer *UseSoftwareRenderer() {
-        auto *renderer = UseRenderer<SoftwareVDPRenderer>(m_state, vdp2DebugRenderOptions, vdp2AccessPatternsConfig);
+    /// @return a pointer to the renderer, or an error message if it failed to instantiate
+    util::PointerResult<SoftwareVDPRenderer> UseSoftwareRenderer() {
+        auto result = UseRenderer<SoftwareVDPRenderer>(m_state, vdp2DebugRenderOptions, vdp2AccessPatternsConfig);
+        if (!result) {
+            return result.Error();
+        }
+        SoftwareVDPRenderer *renderer = result.Value();
         if (renderer != nullptr) {
-            renderer->EnableThreadedVDP1(m_config.video.threadedVDP1);
-            renderer->EnableThreadedVDP2(m_config.video.threadedVDP2);
-            renderer->EnableThreadedDeinterlacer(m_config.video.threadedDeinterlacer);
+            renderer->EnableThreadedVDP1(m_config.swRenderer.threadedVDP1);
+            renderer->EnableThreadedVDP2(m_config.swRenderer.threadedVDP2);
+            renderer->EnableThreadedDeinterlacer(m_config.swRenderer.threadedDeinterlacer);
         }
         return renderer;
     }
+
+#if YMIR_PLATFORM_HAS_DIRECT3D
+    /// @brief Switches to the Direct3D 12 renderer.
+    /// @param[in] device a pointer to an `ID3D12Device` instance
+    /// @return a pointer to the renderer, or an error message if it failed to instantiate
+    util::PointerResult<Direct3D12VDPRenderer> UseDirect3D12Renderer(ID3D12Device *device) {
+        return UseRenderer<Direct3D12VDPRenderer>(m_state, vdp2DebugRenderOptions, vdp2AccessPatternsConfig, device);
+    }
+
+    /// @brief Configures the Direct3D 12 renderer frame request callback to use whenever the Direct3D 12 renderer is in
+    /// use.
+    ///
+    /// @param[in] callback the callback to register
+    void SetDirect3D12FrameCopyRequestCallback(CBDirect3D12FrameCopyRequestCallback callback) {
+        if (auto *hwRenderer = m_renderer->As<VDPRendererType::Direct3D12>()) {
+            // Apply directly to renderer
+            hwRenderer->HwCallbacks.FrameCopyRequest = callback;
+        } else {
+            // Remember for next instantiation.
+            m_d3d12RendererCallbacks.FrameCopyRequest = callback;
+        }
+    }
+#endif
 
     /// @brief Retrieves the enhancements configured for this VDP instance.
     /// @return the current enhancements configuration
@@ -217,11 +248,11 @@ public:
     // VDP1 framebuffer access
 
     std::span<const uint8> VDP1GetDisplayFramebuffer() const {
-        return m_state.spriteFB[m_state.displayFB];
+        return m_state.mem1.FBRAM[m_state.fbIndex.display];
     }
 
     std::span<const uint8> VDP1GetDrawFramebuffer() const {
-        return m_state.spriteFB[m_state.displayFB ^ 1];
+        return m_state.mem1.FBRAM[m_state.fbIndex.draw];
     }
 
     // -------------------------------------------------------------------------
@@ -257,37 +288,48 @@ private:
     /// @tparam T the renderer types
     /// @tparam ...Args argument types for the constructor
     /// @param[in] ...args arguments for the constructor
-    /// @return a pointer to the newly created renderer, or `nullptr` it if failed to instantiate
+    /// @return a pointer to the newly created renderer, or an error message it if failed to instantiate
     template <typename T, typename... Args>
         requires std::derived_from<T, IVDPRenderer>
-    T *UseRenderer(Args &&...args) {
-        T *renderer = new T(std::forward<Args>(args)...);
-        if (renderer == nullptr) {
-            return nullptr;
+    util::PointerResult<T> UseRenderer(Args &&...args) {
+        util::ObjectResult<T> result = T::Create(std::forward<Args>(args)...);
+        if (!result) {
+            return result.Error();
         }
-        if (!renderer->IsValid()) {
-            delete renderer;
-            return nullptr;
+        std::unique_ptr<T> renderer = result.Value();
+        if (!renderer) {
+            return util::ErrorMessage{"Not enough memory to instantiate renderer"};
         }
 
         const config::RendererCallbacks callbacks = m_renderer->Callbacks;
-        if (auto *swRenderer = m_renderer->As<VDPRendererType::Software>()) {
+        if (SoftwareVDPRenderer *swRenderer = m_renderer->As<VDPRendererType::Software>()) {
             m_swRendererCallbacks = swRenderer->SwCallbacks;
         }
+#if YMIR_PLATFORM_HAS_DIRECT3D
+        if (Direct3D12VDPRenderer *hwRenderer = m_renderer->As<VDPRendererType::Direct3D12>()) {
+            m_d3d12RendererCallbacks = hwRenderer->HwCallbacks;
+        }
+#endif
 
         renderer->Callbacks = callbacks;
         if constexpr (std::is_same_v<T, SoftwareVDPRenderer>) {
             renderer->SwCallbacks = m_swRendererCallbacks;
+#if YMIR_PLATFORM_HAS_DIRECT3D
+        } else if constexpr (std::is_same_v<T, Direct3D12VDPRenderer>) {
+            renderer->HwCallbacks = m_d3d12RendererCallbacks;
+#endif
         }
         renderer->ConfigureEnhancements(m_enhancements);
         renderer->VDP2SetResolution(m_HRes, m_VRes, m_exclusiveMonitor);
         renderer->VDP2SetField(m_state.regs2.TVSTAT.ODD);
 
-        m_renderer.reset(renderer);
+        T *pRenderer = renderer.get();
 
-        devlog::info<grp::config>("Switched to {} VDP renderer", renderer->GetName());
+        m_renderer = std::move(renderer);
 
-        return renderer;
+        devlog::info<grp::config>("Switched to {} VDP renderer", pRenderer->GetName());
+
+        return pRenderer;
     }
 
     CBHBlankStateChange m_cbHBlankStateChange;
@@ -312,6 +354,10 @@ private:
 
     /// @brief The current software renderer callbacks configuration.
     SoftwareRendererCallbacks m_swRendererCallbacks;
+
+#if YMIR_PLATFORM_HAS_DIRECT3D
+    Direct3D12RendererCallbacks m_d3d12RendererCallbacks;
+#endif
 
     // -------------------------------------------------------------------------
     // VDP1 memory/register access
@@ -480,6 +526,7 @@ public:
 
         [[nodiscard]] Dimensions GetResolution() const;
         [[nodiscard]] InterlaceMode GetInterlaceMode() const;
+        [[nodiscard]] uint8 GetSpriteDisplayFB() const;
 
         [[nodiscard]] const VDP1Regs &GetVDP1Regs() const;
         [[nodiscard]] const VDP2Regs &GetVDP2Regs() const;

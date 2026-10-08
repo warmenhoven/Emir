@@ -2,6 +2,8 @@
 
 #include <app/events/gui_event_factory.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <util/sdl_file_dialog.hpp>
 
 #include <misc/cpp/imgui_stdlib.h>
@@ -39,6 +41,7 @@ IPLSettingsView::IPLSettingsView(SharedContext &context)
     : SettingsViewBase(context) {}
 
 void IPLSettingsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings().system.ipl;
 
     ImGui::TextUnformatted("NOTE: Changing any of these options will cause a hard reset.");
@@ -54,7 +57,7 @@ void IPLSettingsView::Display() {
 
     std::filesystem::path iplRomsPath = m_context.profile.GetPath(ProfilePath::IPLROMImages);
 
-    ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
     ImGui::Text("IPL ROMs in %s", fmt::format("{}", iplRomsPath).c_str());
     ImGui::PopTextWrapPos();
 
@@ -76,12 +79,12 @@ void IPLSettingsView::Display() {
     if (ImGui::BeginTable("sys_ipl_roms", 6,
                           ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortMulti |
                               ImGuiTableFlags_SortTristate,
-                          ImVec2(0, 250 * m_context.displayScale))) {
+                          ImVec2(0, 250 * imguiData->displayScale))) {
         ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort, 0.0f);
-        ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 50 * m_context.displayScale);
-        ImGui::TableSetupColumn("Date", ImGuiTableColumnFlags_WidthFixed, 75 * m_context.displayScale);
-        ImGui::TableSetupColumn("Variant", ImGuiTableColumnFlags_WidthFixed, 60 * m_context.displayScale);
-        ImGui::TableSetupColumn("Region", ImGuiTableColumnFlags_WidthFixed, 105 * m_context.displayScale);
+        ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, 50 * imguiData->displayScale);
+        ImGui::TableSetupColumn("Date", ImGuiTableColumnFlags_WidthFixed, 75 * imguiData->displayScale);
+        ImGui::TableSetupColumn("Variant", ImGuiTableColumnFlags_WidthFixed, 60 * imguiData->displayScale);
+        ImGui::TableSetupColumn("Region", ImGuiTableColumnFlags_WidthFixed, 105 * imguiData->displayScale);
         ImGui::TableSetupColumn("##use", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort,
                                 useButtonWidth);
         ImGui::TableSetupScrollFreeze(0, 1);
@@ -277,7 +280,7 @@ void IPLSettingsView::Display() {
     if (m_context.iplRomPath.empty()) {
         ImGui::TextUnformatted("No IPL ROM loaded");
     } else {
-        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
         ImGui::Text("Currently using IPL ROM at %s", fmt::format("{}", m_context.iplRomPath).c_str());
         ImGui::PopTextWrapPos();
     }

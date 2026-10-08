@@ -7,6 +7,8 @@
 
 #include <app/input/input_utils.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <SDL3/SDL_misc.h>
 
 using namespace ymir;
@@ -17,14 +19,15 @@ InputSettingsView::InputSettingsView(SharedContext &context)
     : SettingsViewBase(context) {}
 
 void InputSettingsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings().input;
 
-    ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
 
     if (ImGui::BeginTable("periph_ports", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableNextRow();
         if (ImGui::TableNextColumn()) {
-            ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+            ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
             ImGui::SeparatorText("Port 1");
             ImGui::PopFont();
 
@@ -33,7 +36,7 @@ void InputSettingsView::Display() {
             }
         }
         if (ImGui::TableNextColumn()) {
-            ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+            ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
             ImGui::SeparatorText("Port 2");
             ImGui::PopFont();
 
@@ -46,7 +49,7 @@ void InputSettingsView::Display() {
 
     // -------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Mouse");
     ImGui::PopFont();
 
@@ -55,7 +58,7 @@ void InputSettingsView::Display() {
         if (MakeDirty(ImGui::RadioButton(name, settings.mouse.captureMode == value))) {
             settings.mouse.captureMode = value;
         }
-        widgets::ExplanationTooltip(explanation, m_context.displayScale);
+        widgets::ExplanationTooltip(explanation, imguiData->displayScale);
     };
 
     ImGui::AlignTextToFramePadding();
@@ -92,13 +95,13 @@ void InputSettingsView::Display() {
     MakeDirty(ImGui::Checkbox("Lock mouse cursor to window", &settings.mouse.lockToDisplay));
     widgets::ExplanationTooltip("When this option is enabled, if using system cursor capture mode, the mouse cursor "
                                 "will be constrained to the window area.",
-                                m_context.displayScale);
+                                imguiData->displayScale);
 
     // TODO: preferred device capture order
 
     // -------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Gamepads");
     ImGui::PopFont();
 
@@ -135,7 +138,7 @@ void InputSettingsView::Display() {
             ImGui::TextUnformatted("Left stick deadzone");
             widgets::ExplanationTooltip("Adjusts the deadzone for the left stick.\n"
                                         "The active range is mapped linearly from 0 to 1.",
-                                        m_context.displayScale);
+                                        imguiData->displayScale);
         }
         if (ImGui::TableNextColumn()) {
             float dz = settings.gamepad.lsDeadzone * 100.0f;
@@ -151,7 +154,7 @@ void InputSettingsView::Display() {
             ImGui::TextUnformatted("Right stick deadzone");
             widgets::ExplanationTooltip("Adjusts the deadzone for the right stick.\n"
                                         "The active range is mapped linearly from 0 to 1.",
-                                        m_context.displayScale);
+                                        imguiData->displayScale);
         }
         if (ImGui::TableNextColumn()) {
             float dz = settings.gamepad.rsDeadzone * 100.0f;
@@ -166,7 +169,7 @@ void InputSettingsView::Display() {
         if (ImGui::TableNextColumn()) {
             ImGui::TextUnformatted("Analog to digital sensitivity");
             widgets::ExplanationTooltip("Affects how far analog inputs must be pushed to trigger buttons.",
-                                        m_context.displayScale);
+                                        imguiData->displayScale);
         }
         if (ImGui::TableNextColumn()) {
             float sens = settings.gamepad.analogToDigitalSensitivity * 100.0f;
@@ -200,7 +203,7 @@ void InputSettingsView::Display() {
 
         const ImU32 textColor = ImGui::ColorConvertFloat4ToU32(ImGui::GetStyle().Colors[ImGuiCol_Text]);
 
-        const float widgetSize = kWidgetSize * m_context.displayScale;
+        const float widgetSize = kWidgetSize * imguiData->displayScale;
 
         auto drawStick = [&](const char *name, float x, float y, float dz, float sens) {
             static constexpr float kArrowSize = 8.0f;
@@ -212,17 +215,17 @@ void InputSettingsView::Display() {
             static constexpr ImU32 kAdjustedStickPointColor = 0xF0F58F5F;
             static constexpr ImU32 kArrowColor = kAxisActiveColor;
 
-            const float arrowSize = kArrowSize * m_context.displayScale;
-            const float circleRadius = kCircleRadius * m_context.displayScale;
+            const float arrowSize = kArrowSize * imguiData->displayScale;
+            const float circleRadius = kCircleRadius * imguiData->displayScale;
 
             const float lineSpacing = ImGui::GetStyle().ItemSpacing.y;
             const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
 
-            const float circleBorderThickness = 1.5f * m_context.displayScale;
-            const float octantLineThickness = 1.0f * m_context.displayScale;
-            const float orthoLineThickness = 0.7f * m_context.displayScale;
-            const float stickLineThickness = 1.2f * m_context.displayScale;
-            const float stickPointRadius = 2.0f * m_context.displayScale;
+            const float circleBorderThickness = 1.5f * imguiData->displayScale;
+            const float octantLineThickness = 1.0f * imguiData->displayScale;
+            const float orthoLineThickness = 0.7f * imguiData->displayScale;
+            const float stickLineThickness = 1.2f * imguiData->displayScale;
+            const float stickPointRadius = 2.0f * imguiData->displayScale;
 
             const auto pos = ImGui::GetCursorScreenPos();
             const float left = pos.x;
@@ -331,7 +334,7 @@ void InputSettingsView::Display() {
             // TODO: draw vertical bar
             static constexpr float kWidth = 50.0f;
 
-            const float width = kWidth * m_context.displayScale;
+            const float width = kWidth * imguiData->displayScale;
             const float height = widgetSize;
 
             const float lineSpacing = ImGui::GetStyle().ItemSpacing.y;
@@ -344,7 +347,7 @@ void InputSettingsView::Display() {
             const float bottom = pos.y + height;
             const ImVec2 center{pos.x + width * 0.5f, pos.y + height * 0.5f};
 
-            const float borderThickness = 1.5f * m_context.displayScale;
+            const float borderThickness = 1.5f * imguiData->displayScale;
 
             const bool active = value >= sens;
 
@@ -362,15 +365,14 @@ void InputSettingsView::Display() {
                                     kDeadzoneBackgroundColor);
             drawList->AddRectFilled(ImVec2(left, bottom - height * value), ImVec2(right, bottom),
                                     active ? kAxisActiveColor : kAxisAtRestColor);
-            drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), kBorderColor, 0.0f, ImDrawFlags_None,
-                              borderThickness);
+            drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), kBorderColor, 0.0f, borderThickness);
 
             // Label and values
             drawText(name, 0, textColor);
             drawText(fmt::format("{:.2f}%", value * 100.0f).c_str(), 1, active ? kAxisActiveColor : kAxisAtRestColor);
         };
 
-        ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
         ImGui::Text("Gamepad %u", id + 1);
         ImGui::PopFont();
         ImGui::PushID(id);

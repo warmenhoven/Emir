@@ -1,17 +1,20 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+#include <ymir/core/types.hpp>
+
+namespace ymir::scu {
+class SCU;
+}
 
 namespace app::ui {
 
 class SCUDMAStateView {
 public:
-    SCUDMAStateView(SharedContext &context);
+    SCUDMAStateView(ymir::scu::SCU &scu);
 
     void Display(uint8 channel);
 
 private:
-    SharedContext &m_context;
     ymir::scu::SCU &m_scu;
 };
 

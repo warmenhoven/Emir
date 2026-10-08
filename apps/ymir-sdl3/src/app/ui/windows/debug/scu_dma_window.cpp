@@ -4,8 +4,8 @@ namespace app::ui {
 
 SCUDMAWindow::SCUDMAWindow(SharedContext &context)
     : WindowBase(context)
-    , m_dmaRegsView(context)
-    , m_dmaStateView(context) {
+    , m_dmaRegsView(context.saturn.GetSCU())
+    , m_dmaStateView(context.saturn.GetSCU()) {
 
     m_windowConfig.name = "SCU DMA";
     m_windowConfig.flags = ImGuiWindowFlags_AlwaysAutoResize;

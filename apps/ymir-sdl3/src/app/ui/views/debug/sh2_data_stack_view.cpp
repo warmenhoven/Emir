@@ -2,11 +2,9 @@
 
 #include <ymir/hw/sh2/sh2.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
-
-#include <fmt/format.h>
-
-#include <ranges>
 
 using namespace ymir;
 
@@ -19,6 +17,8 @@ SH2DataStackView::SH2DataStackView(SharedContext &context, sh2::SH2 &sh2, SH2Tra
     , m_model(model) {}
 
 void SH2DataStackView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     ImGui::BeginGroup();
 
     const bool master = m_sh2.IsMaster();
@@ -51,7 +51,7 @@ void SH2DataStackView::Display() {
         }
     };
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
     static constexpr uint32 kMaxStackSize = 0x100000;
     const uint32 stackBase = m_tracer.execAnalyst.GetCurrentDataStackBase().value_or(r15 + 64);
     // Sanity check: if the stack is too large, just use R15
@@ -70,10 +70,10 @@ void SH2DataStackView::Display() {
                     ImGui::BeginDisabled();
                 }
                 ImGui::TextColored(m_model.colors.address, "%08X", entryAddress);
-                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * m_context.displayScale);
+                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * imguiData->displayScale);
                 ImGui::TextColored(m_model.colors.bytes, "%08X", value);
                 if (entry != nullptr) {
-                    ImGui::SameLine(0.0f, m_model.style.disasmSpacing * m_context.displayScale);
+                    ImGui::SameLine(0.0f, m_model.style.disasmSpacing * imguiData->displayScale);
                     drawEntry(*entry);
                 } else {
                     ImGui::EndDisabled();

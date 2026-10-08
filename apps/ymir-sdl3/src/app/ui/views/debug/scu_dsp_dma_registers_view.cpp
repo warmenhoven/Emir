@@ -2,16 +2,19 @@
 
 #include <ymir/hw/scu/scu.hpp>
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
-SCUDSPDMARegistersView::SCUDSPDMARegistersView(SharedContext &context)
-    : m_context(context)
-    , m_scu(context.saturn.GetSCU()) {}
+SCUDSPDMARegistersView::SCUDSPDMARegistersView(ymir::scu::SCU &scu)
+    : m_scu(scu) {}
 
 void SCUDSPDMARegistersView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     ImGui::BeginGroup();
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -53,7 +56,7 @@ void SCUDSPDMARegistersView::Display() {
             ImGui::TextUnformatted("to");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 7);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             if (ImGui::InputScalar("##dst", ImGuiDataType_U32, &dsp.dmaWriteAddr, nullptr, nullptr, "%07X",
                                    ImGuiInputTextFlags_CharsHexadecimal)) {
                 dsp.dmaWriteAddr &= 0x7FF'FFFC;
@@ -66,7 +69,7 @@ void SCUDSPDMARegistersView::Display() {
             ImGui::TextUnformatted("From");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 7);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             if (ImGui::InputScalar("##src", ImGuiDataType_U32, &dsp.dmaReadAddr, nullptr, nullptr, "%07X",
                                    ImGuiInputTextFlags_CharsHexadecimal)) {
                 dsp.dmaReadAddr &= 0x7FF'FFFC;
@@ -133,7 +136,7 @@ void SCUDSPDMARegistersView::Display() {
         ImGui::TextUnformatted("Count:");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::InputScalar("##count", ImGuiDataType_U8, &dsp.dmaCount, nullptr, nullptr, "%02X",
                            ImGuiInputTextFlags_CharsHexadecimal);
         ImGui::PopFont();

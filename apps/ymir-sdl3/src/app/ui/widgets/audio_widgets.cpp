@@ -1,5 +1,9 @@
 #include "audio_widgets.hpp"
 
+#include <app/imgui_data.hpp>
+
+#include <ymir/core/types.hpp>
+
 #include <imgui.h>
 
 namespace app::ui::widgets {
@@ -8,7 +12,9 @@ namespace app::ui::widgets {
 
 // TODO: custom colors and styles
 
-void Oscilloscope(SharedContext &ctx, std::span<const float> waveform, ImVec2 size) {
+void Oscilloscope(std::span<const float> waveform, ImVec2 size) {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     if (size.x == 0.0f) {
         size.x = ImGui::GetContentRegionAvail().x;
     }
@@ -17,8 +23,8 @@ void Oscilloscope(SharedContext &ctx, std::span<const float> waveform, ImVec2 si
     }
 
     // TODO: move all style and colors to the SharedContext
-    const float centerLineThickness = 1.0f * ctx.displayScale;
-    const float waveThickness = 1.5f * ctx.displayScale;
+    const float centerLineThickness = 1.0f * imguiData->displayScale;
+    const float waveThickness = 1.5f * imguiData->displayScale;
 
     const auto pos = ImGui::GetCursorScreenPos();
 
@@ -47,13 +53,14 @@ void Oscilloscope(SharedContext &ctx, std::span<const float> waveform, ImVec2 si
     // TODO: background
     drawList->AddLine(ImVec2(pos.x, pos.y + size.y * 0.5f), ImVec2(pos.x + size.x, pos.y + size.y * 0.5f), 0x7FFFFFFF,
                       centerLineThickness);
-    drawList->AddPolyline(points.data(), points.size(), 0xFFFFFFFF, ImDrawFlags_None, waveThickness);
+    drawList->AddPolyline(points.data(), points.size(), 0xFFFFFFFF, waveThickness);
     // TODO: border
 
     ImGui::Dummy(size);
 }
 
-void Oscilloscope(SharedContext &ctx, std::span<const StereoSample> waveform, ImVec2 size) {
+void Oscilloscope(std::span<const StereoSample> waveform, ImVec2 size) {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     if (size.x == 0.0f) {
         size.x = ImGui::GetContentRegionAvail().x;
     }
@@ -62,8 +69,8 @@ void Oscilloscope(SharedContext &ctx, std::span<const StereoSample> waveform, Im
     }
 
     // TODO: move all style and colors to the SharedContext
-    const float centerLineThickness = 1.0f * ctx.displayScale;
-    const float waveThickness = 1.5f * ctx.displayScale;
+    const float centerLineThickness = 1.0f * imguiData->displayScale;
+    const float waveThickness = 1.5f * imguiData->displayScale;
 
     const auto pos = ImGui::GetCursorScreenPos();
 
@@ -86,8 +93,8 @@ void Oscilloscope(SharedContext &ctx, std::span<const StereoSample> waveform, Im
     // TODO: background
     drawList->AddLine(ImVec2(pos.x, pos.y + size.y * 0.5f), ImVec2(pos.x + size.x, pos.y + size.y * 0.5f), 0x45FFFFFF,
                       centerLineThickness);
-    drawList->AddPolyline(pointsL.data(), pointsL.size(), 0xFF7FBFFF, ImDrawFlags_None, waveThickness);
-    drawList->AddPolyline(pointsR.data(), pointsR.size(), 0xFFFFBF7F, ImDrawFlags_None, waveThickness);
+    drawList->AddPolyline(pointsL.data(), pointsL.size(), 0xFF7FBFFF, waveThickness);
+    drawList->AddPolyline(pointsR.data(), pointsR.size(), 0xFFFFBF7F, waveThickness);
     // TODO: border
 
     ImGui::Dummy(size);

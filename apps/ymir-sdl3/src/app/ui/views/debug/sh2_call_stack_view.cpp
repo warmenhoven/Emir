@@ -2,9 +2,9 @@
 
 #include <ymir/hw/sh2/sh2.hpp>
 
-#include <imgui.h>
+#include <app/imgui_data.hpp>
 
-#include <fmt/format.h>
+#include <imgui.h>
 
 using namespace ymir;
 
@@ -17,6 +17,8 @@ SH2CallStackView::SH2CallStackView(SharedContext &context, sh2::SH2 &sh2, SH2Tra
     , m_model(model) {}
 
 void SH2CallStackView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     ImGui::BeginGroup();
 
     const bool master = m_sh2.IsMaster();
@@ -39,7 +41,7 @@ void SH2CallStackView::Display() {
         ImGui::TextColored(colors.arrow, " ->");
     };
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
     const auto callStack = m_tracer.execAnalyst.GetCurrentCallStack();
 
     ImGuiListClipper clipper{};
@@ -49,13 +51,13 @@ void SH2CallStackView::Display() {
         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++) {
             if (i == 0) {
                 ImGui::TextColored(m_model.colors.address, "%08X", pc);
-                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * m_context.displayScale);
+                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * imguiData->displayScale);
                 ImGui::TextColored(colors.pc, "<current PC>");
             } else {
                 auto it = callStack.rbegin() + (static_cast<size_t>(i) - 1);
                 auto &entry = *it;
                 ImGui::TextColored(m_model.colors.address, "%08X", entry.address);
-                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * m_context.displayScale);
+                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * imguiData->displayScale);
                 switch (entry.type) {
                 case SH2CallStackEntry::Type::Call: ImGui::TextColored(colors.call, "Call"); break;
                 case SH2CallStackEntry::Type::Trap: drawVec(colors.trap, "Trap ", entry.vecNum); break;

@@ -4,6 +4,8 @@
 
 #include <app/events/emu_debug_event_factory.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
 
 using namespace ymir;
@@ -15,6 +17,7 @@ VDP2CRAMView::VDP2CRAMView(SharedContext &context, vdp::VDP &vdp)
     , m_vdp(vdp) {}
 
 void VDP2CRAMView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &probe = m_vdp.GetProbe();
     const uint8 cramMode = probe.VDP2GetCRAMMode();
     const bool useColor888 = cramMode >= 2;
@@ -30,19 +33,19 @@ void VDP2CRAMView::Display() {
 
     for (uint32 i = 0; i < numColors; ++i) {
         if (i > 0 && i % 256 == 0) {
-            ImGui::Dummy(ImVec2(0, 1 * m_context.displayScale));
+            ImGui::Dummy(ImVec2(0, 1 * imguiData->displayScale));
         }
         if (i % kNumCols == 0) {
             const uint32 address = i * colorSize;
             ImGui::AlignTextToFramePadding();
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             ImGui::Text("%03X", address);
             ImGui::PopFont();
             ImGui::SameLine();
         } else if (i % kNumCols == kNumCols / 2) {
-            ImGui::SameLine(0, 8 * m_context.displayScale);
+            ImGui::SameLine(0, 8 * imguiData->displayScale);
         } else {
-            ImGui::SameLine(0, 3 * m_context.displayScale);
+            ImGui::SameLine(0, 3 * imguiData->displayScale);
         }
 
         vdp::Color888 color;

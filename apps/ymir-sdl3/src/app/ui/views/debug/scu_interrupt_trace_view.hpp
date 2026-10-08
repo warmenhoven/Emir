@@ -1,19 +1,16 @@
 #pragma once
 
-#include <app/shared_context.hpp>
-
 #include <app/debug/scu_tracer.hpp>
 
 namespace app::ui {
 
 class SCUInterruptTraceView {
 public:
-    SCUInterruptTraceView(SharedContext &context);
+    SCUInterruptTraceView(SCUTracer &tracer);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     SCUTracer &m_tracer;
 };
 

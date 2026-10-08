@@ -4,7 +4,7 @@ namespace app::ui {
 
 VDP2VRAMAccessPatternsWindow::VDP2VRAMAccessPatternsWindow(SharedContext &context)
     : VDPWindowBase(context)
-    , m_accessPatternsView(context, m_vdp) {
+    , m_accessPatternsView(m_vdp) {
 
     m_windowConfig.name = "VDP2 VRAM access patterns";
     m_windowConfig.flags = ImGuiWindowFlags_AlwaysAutoResize;

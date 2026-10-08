@@ -1,7 +1,25 @@
 cmake_minimum_required(VERSION 3.28)
 project(Ymir VERSION 0.4.0)
 
+# Disabling the GPU API builds ymir-core without hardware renderers and without their toolchain
+# requirements (DXC, spirv-cross, Vulkan, WIL).
+option(Ymir_ENABLE_GPU_API "Enable the GPU API and hardware renderers" ON)
+
+# Check for Vulkan support before including CompileShaders as it depends on knowing if Vulkan
+# is available to determine whether to make SPIR-V compilation required or optional.
+# Vulkan support is excluded from macOS as the system doesn't support it natively.
+# Metal is the preferred backend on that platform.
+if (Ymir_ENABLE_GPU_API AND NOT APPLE)
+    find_package(Vulkan COMPONENTS SPIRV-Tools)
+endif ()
+
 include(cmake/CMakeRC.cmake)
+if (Ymir_ENABLE_GPU_API)
+    include(cmake/CompileShaders.cmake)
+else ()
+    function(compile_shader)
+    endfunction()
+endif ()
 include(cmake/CopyRuntimeDLLs.cmake)
 include(cmake/TargetConditionalSources.cmake)
 include(CMakeDependentOption)
@@ -18,8 +36,6 @@ option(Ymir_EXTRA_INLINING "Enable more aggressive inlining (slows down build!)"
 option(Ymir_ENABLE_TESTS "Enable tests for Ymir" "${is_top_level}")
 option(Ymir_ENABLE_SANDBOX "Compile the sandbox app" "${is_top_level}")
 option(Ymir_ENABLE_YMDASM "Compile the disassembly tool" "${is_top_level}")
-option(Ymir_ENABLE_YMIR_HEADLESS "Compile the headless debug worker" "${is_top_level}")
-option(Ymir_ENABLE_YMIR_DBG "Compile the command-line debug frontend" "${is_top_level}")
 option(Ymir_ENABLE_IPO "Enable IPO / LTO for Ymir" ON)
 option(Ymir_ENABLE_DEVLOG "Enable development logs" ${Ymir_DEV_BUILD})
 option(Ymir_ENABLE_DEV_ASSERTIONS "Enable development-time assertions" OFF)

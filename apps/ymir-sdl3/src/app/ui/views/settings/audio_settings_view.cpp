@@ -7,6 +7,8 @@
 #include <app/ui/widgets/common_widgets.hpp>
 #include <app/ui/widgets/settings_widgets.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <rtmidi/RtMidi.h>
 
 using namespace ymir;
@@ -19,11 +21,12 @@ AudioSettingsView::AudioSettingsView(SharedContext &context)
     : SettingsViewBase(context) {}
 
 void AudioSettingsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings().audio;
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("General");
     ImGui::PopFont();
 
@@ -41,7 +44,7 @@ void AudioSettingsView::Display() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Quality");
     ImGui::PopFont();
 
@@ -49,7 +52,7 @@ void AudioSettingsView::Display() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("MIDI");
     ImGui::PopFont();
 
@@ -66,7 +69,7 @@ void AudioSettingsView::Display() {
 
     // INPUT PORTS
 
-    auto *midiInput = midiService.GetInput();
+    auto midiInput = midiService.GetInput();
     const std::string inputPortName = midiService.GetMidiInputPortName();
     const std::string inputLabel = fmt::format("Input port {}", midiInput->isPortOpen() ? "(open)" : "");
 
@@ -100,7 +103,7 @@ void AudioSettingsView::Display() {
 
     // OUTPUT PORTS
 
-    auto *midiOutput = midiService.GetOutput();
+    auto midiOutput = midiService.GetOutput();
     const std::string outputPortName = midiService.GetMidiOutputPortName();
     const std::string outputLabel = fmt::format("Output port {}", midiOutput->isPortOpen() ? "(open)" : "");
 
@@ -134,7 +137,7 @@ void AudioSettingsView::Display() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Accuracy");
     ImGui::PopFont();
 
@@ -142,7 +145,7 @@ void AudioSettingsView::Display() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Performance");
     ImGui::PopFont();
 

@@ -1,5 +1,7 @@
 #include "cdblock_drive_state_trace_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 CDDriveStateTraceWindow::CDDriveStateTraceWindow(SharedContext &context)
@@ -10,7 +12,8 @@ CDDriveStateTraceWindow::CDDriveStateTraceWindow(SharedContext &context)
 }
 
 void CDDriveStateTraceWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(720 * m_context.displayScale, 250 * m_context.displayScale),
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(720 * imguiData->displayScale, 250 * imguiData->displayScale),
                                         ImVec2(FLT_MAX, FLT_MAX));
 }
 

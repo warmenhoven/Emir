@@ -4,10 +4,15 @@
 #include <app/services/graphics_service.hpp>
 #include <app/services/rom_service.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <SDL3/SDL.h>
-#include <chrono>
+
 #include <fmt/format.h>
+
 #include <imgui.h>
+
+#include <chrono>
 
 namespace app::services {
 
@@ -82,6 +87,7 @@ void WindowManagerService::OpenPeripheralBindsEditor(uint32 portIndex, uint32 sl
 }
 
 void WindowManagerService::DrawGenericModal() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     std::string title = fmt::format("{}##generic_modal", m_genericModalTitle);
 
     if (m_openGenericModal) {
@@ -90,7 +96,7 @@ void WindowManagerService::DrawGenericModal() {
     }
 
     if (ImGui::BeginPopupModal(title.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::PushTextWrapPos(500.0f * m_context.displayScale);
+        ImGui::PushTextWrapPos(500.0f * imguiData->displayScale);
         if (m_genericModalContents) {
             m_genericModalContents();
         }
@@ -99,7 +105,7 @@ void WindowManagerService::DrawGenericModal() {
 
         bool close = m_closeGenericModal;
         if (m_showOkButtonInGenericModal) {
-            if (ImGui::Button("OK", ImVec2(80 * m_context.displayScale, 0 * m_context.displayScale))) {
+            if (ImGui::Button("OK", ImVec2(80 * imguiData->displayScale, 0 * imguiData->displayScale))) {
                 close = true;
             }
         }
@@ -146,28 +152,25 @@ void WindowManagerService::OpenWelcomeModal(bool scanIPLROMs) {
     OpenGenericModal("Welcome", [=, this, nextScanDeadline = clk::now() + kScanInterval,
                                  lastROMCount = m_context.romManager.GetIPLROMs().size(),
                                  romSelectResult = ROMSelectResult{}]() mutable {
+        const YmirImGuiData *imguiData = GetYmirImGuiData();
         bool doSelectRom = false;
         bool doOpenSettings = false;
 
         auto graphicsService = m_context.serviceLocator.Get<GraphicsService>();
-        SDL_Texture *logoTexture =
-            graphicsService ? graphicsService->GetSDLTexture(m_context.images.ymirLogo.texture) : nullptr;
-        if (logoTexture) {
-            ImGui::Image((ImTextureID)logoTexture,
-                         ImVec2(m_context.images.ymirLogo.size.x * m_context.displayScale * 0.7f,
-                                m_context.images.ymirLogo.size.y * m_context.displayScale * 0.7f));
-        }
+        const ImTextureID logoTextureID = graphicsService->GetImGuiTextureID(m_context.images.ymirLogo.texture);
+        ImGui::Image(logoTextureID, ImVec2(m_context.images.ymirLogo.size.x * imguiData->displayScale * 0.7f,
+                                           m_context.images.ymirLogo.size.y * imguiData->displayScale * 0.7f));
 
-        ImGui::PushFont(m_context.fonts.display,
-                        m_context.fontSizes.display); // Fallback if Display size is not separate in ImFont
+        ImGui::PushFont(imguiData->fonts.display,
+                        imguiData->fontSizes.display); // Fallback if Display size is not separate in ImFont
         ImGui::TextUnformatted("Ymir");
         ImGui::PopFont();
-        ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.large);
+        ImGui::PushFont(imguiData->fonts.sansSerif.regular, imguiData->fontSizes.large);
         ImGui::TextUnformatted("Welcome to Ymir!");
         ImGui::PopFont();
         ImGui::NewLine();
-        ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
-        ImGui::TextColored(m_context.colors.notice, "Ymir requires a valid IPL (BIOS) ROM to work.");
+        ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
+        ImGui::TextColored(imguiData->colors.notice, "Ymir requires a valid IPL (BIOS) ROM to work.");
         ImGui::PopFont();
 
         ImGui::NewLine();

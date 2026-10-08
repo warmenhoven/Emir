@@ -1,10 +1,10 @@
 #include "sh2_breakpoints_view.hpp"
 
-#include <ymir/hw/sh2/sh2.hpp>
-
 #include <app/ui/fonts/IconsMaterialSymbols.h>
 
 #include <app/events/emu_event_factory.hpp>
+
+#include <app/imgui_data.hpp>
 
 #include <imgui.h>
 
@@ -17,15 +17,16 @@ SH2BreakpointsView::SH2BreakpointsView(SharedContext &context, SH2DebuggerModel 
     , m_model(model) {}
 
 void SH2BreakpointsView::Display() {
-    const float fontSize = m_context.fontSizes.medium;
-    ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    const float fontSize = imguiData->fontSizes.medium;
+    ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
     const float framePadding = ImGui::GetStyle().FramePadding.x;
     const float vecFieldWidth = framePadding * 2 + hexCharWidth * 8;
 
     auto drawHex32 = [&](auto id, uint32 &value) {
-        ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
         ImGui::SetNextItemWidth(vecFieldWidth);
         ImGui::InputScalar(fmt::format("##input_{}", id).c_str(), ImGuiDataType_U32, &value, nullptr, nullptr, "%08X",
                            ImGuiInputTextFlags_CharsHexadecimal);
@@ -36,8 +37,8 @@ void SH2BreakpointsView::Display() {
     ImGui::BeginGroup();
 
     if (!m_context.saturn.IsDebugTracingEnabled()) {
-        ImGui::TextColored(m_context.colors.warn, "Debug tracing is disabled.");
-        ImGui::TextColored(m_context.colors.warn, "Breakpoints will not work.");
+        ImGui::TextColored(imguiData->colors.warn, "Debug tracing is disabled.");
+        ImGui::TextColored(imguiData->colors.warn, "Breakpoints will not work.");
         ImGui::SameLine();
         if (ImGui::SmallButton("Enable##debug_tracing")) {
             m_context.EnqueueEvent(events::emu::SetDebugTrace(true));
@@ -87,7 +88,7 @@ void SH2BreakpointsView::Display() {
         ImGui::EndTooltip();
     }
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
     ImGui::SeparatorText("Active breakpoints");
     ImGui::PopFont();
 

@@ -1,5 +1,6 @@
 #include "cdblock_drive_state_trace_view.hpp"
 
+#include <app/imgui_data.hpp>
 #include <app/settings.hpp>
 
 #include <ymir/util/bit_ops.hpp>
@@ -35,10 +36,11 @@ CDDriveStateTraceView::CDDriveStateTraceView(SharedContext &context)
     , m_tracer(context.tracers.CDDrive) {}
 
 void CDDriveStateTraceView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const auto &settings = m_context.serviceLocator.GetRequired<Settings>();
 
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -56,8 +58,8 @@ void CDDriveStateTraceView::Display() {
         m_tracer.ClearStateUpdates();
     }
     if (!settings.cdblock.useLLE) {
-        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
-        ImGui::TextColored(m_context.colors.notice, "CD Block LLE is disabled. Nothing will be traced here.");
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+        ImGui::TextColored(imguiData->colors.notice, "CD Block LLE is disabled. Nothing will be traced here.");
         ImGui::PopTextWrapPos();
     }
 
@@ -83,21 +85,21 @@ void CDDriveStateTraceView::Display() {
 
             ImGui::TableNextRow();
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%u", trace.index);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 const std::string str = MakeString(trace.command);
                 const uint8 cmd = trace.command[0];
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(MakeColorFromU8(cmd), "%s", str.c_str());
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
                 const std::string str = MakeString(trace.status);
                 const uint8 status = trace.status[0];
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextColored(MakeColorFromU8(status), "%s", str.c_str());
                 ImGui::PopFont();
             }

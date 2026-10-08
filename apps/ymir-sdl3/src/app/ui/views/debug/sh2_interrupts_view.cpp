@@ -2,6 +2,8 @@
 
 #include <ymir/hw/sh2/sh2.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
 
 #include <initializer_list>
@@ -11,15 +13,15 @@ using namespace ymir;
 
 namespace app::ui {
 
-SH2InterruptsView::SH2InterruptsView(SharedContext &context, ymir::sh2::SH2 &sh2)
-    : m_context(context)
-    , m_sh2(sh2) {}
+SH2InterruptsView::SH2InterruptsView(ymir::sh2::SH2 &sh2)
+    : m_sh2(sh2) {}
 
 void SH2InterruptsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &probe = m_sh2.GetProbe();
     auto &intc = probe.INTC();
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -29,7 +31,7 @@ void SH2InterruptsView::Display() {
     {
         ImGui::SeparatorText("INTC and SR");
 
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 4);
         uint16 ICR = intc.ReadICR();
         if (ImGui::InputScalar("##ICR", ImGuiDataType_U16, &ICR, nullptr, nullptr, "%04X")) {
@@ -42,7 +44,7 @@ void SH2InterruptsView::Display() {
 
         ImGui::SameLine();
 
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 1);
         uint8 ILevel = probe.SR().ILevel;
         if (ImGui::InputScalar("##SR_I", ImGuiDataType_U8, &ILevel, nullptr, nullptr, "%X")) {
@@ -93,7 +95,7 @@ void SH2InterruptsView::Display() {
                     if (!editable) {
                         ImGui::BeginDisabled();
                     }
-                    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                     for (auto [source, name] : sources) {
                         const bool irlAutoVector = source == sh2::InterruptSource::IRL && !intc.ICR.VECMD;
                         uint8 vector = intc.GetVector(source);
@@ -120,7 +122,7 @@ void SH2InterruptsView::Display() {
                     }
 
                     ImVec2 startPos = ImGui::GetCursorScreenPos();
-                    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                     for (auto [source, name] : sources) {
                         const bool irl = source == sh2::InterruptSource::IRL;
                         uint8 level = intc.GetLevel(source);
@@ -147,8 +149,8 @@ void SH2InterruptsView::Display() {
                         ImGuiStyle &style = ImGui::GetStyle();
                         const float xOfs = ImGui::GetContentRegionAvail().x;
                         const float yOfs = ImGui::GetFrameHeightWithSpacing() * 0.2f;
-                        const float width = 8.0f * m_context.displayScale;
-                        const float thickness = 3.0f * m_context.displayScale;
+                        const float width = 8.0f * imguiData->displayScale;
+                        const float thickness = 3.0f * imguiData->displayScale;
                         const float paddingX = style.FramePadding.x;
                         const float spacingY = style.ItemSpacing.y;
 
@@ -162,8 +164,7 @@ void SH2InterruptsView::Display() {
                                            ImVec2(endPos.x + width, endPos.y), endPos};
 
                         ImGui::GetWindowDrawList()->AddPolyline(points, std::size(points),
-                                                                ImColor(style.Colors[ImGuiCol_Separator]),
-                                                                ImDrawFlags_None, thickness);
+                                                                ImColor(style.Colors[ImGuiCol_Separator]), thickness);
                         ImGui::SameLine();
                         ImGui::Dummy(ImVec2(width + paddingX, 0));
                     }
@@ -198,7 +199,7 @@ void SH2InterruptsView::Display() {
     {
         ImGui::SeparatorText("External interrupt");
 
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
         ImGui::InputScalar("##ext_vec", ImGuiDataType_U8, &m_extIntrVector, nullptr, nullptr, "%02X");
         ImGui::PopFont();
@@ -208,7 +209,7 @@ void SH2InterruptsView::Display() {
 
         ImGui::SameLine();
 
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::SetNextItemWidth(ImGui::GetStyle().FramePadding.x * 2 + hexCharWidth * 2);
         if (ImGui::InputScalar("##ext_lv", ImGuiDataType_U8, &m_extIntrLevel, nullptr, nullptr, "%X")) {
             m_extIntrLevel = std::min<uint8>(m_extIntrLevel, 0xF);

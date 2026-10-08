@@ -1,5 +1,7 @@
 #include "cdblock_filters_view.hpp"
 
+#include <app/imgui_data.hpp>
+
 #include <app/ui/fonts/IconsMaterialSymbols.h>
 
 #include <ymir/hw/cdblock/cdblock.hpp>
@@ -8,13 +10,13 @@ using namespace ymir;
 
 namespace app::ui {
 
-CDBlockFiltersView::CDBlockFiltersView(SharedContext &context)
-    : m_context(context)
-    , m_cdblock(context.saturn.GetCDBlock()) {}
+CDBlockFiltersView::CDBlockFiltersView(ymir::cdblock::CDBlock &cdblock)
+    : m_cdblock(cdblock) {}
 
 void CDBlockFiltersView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
     const float msCharWidth = ImGui::CalcTextSize(ICON_MS_ALBUM).x;
@@ -55,7 +57,7 @@ void CDBlockFiltersView::Display() {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%2u", filter.index);
                 ImGui::PopFont();
             }
@@ -68,7 +70,7 @@ void CDBlockFiltersView::Display() {
             }
             ImGui::TableNextColumn();
             {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 if (bit::test<0>(filter.mode)) {
                     ImGui::Text("%02X", filter.fileNum);
                 } else {
@@ -78,7 +80,7 @@ void CDBlockFiltersView::Display() {
             }
             ImGui::TableNextColumn();
             {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 if (bit::test<1>(filter.mode)) {
                     ImGui::Text("%02X", filter.chanNum);
                 } else {
@@ -88,7 +90,7 @@ void CDBlockFiltersView::Display() {
             }
             ImGui::TableNextColumn();
             {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 if (bit::test<2>(filter.mode)) {
                     ImGui::Text("%s", makeBitmask(filter.submodeMask, filter.submodeValue).c_str());
                 } else {
@@ -98,7 +100,7 @@ void CDBlockFiltersView::Display() {
             }
             ImGui::TableNextColumn();
             {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 if (bit::test<3>(filter.mode)) {
                     ImGui::Text("%s", makeBitmask(filter.codingInfoMask, filter.codingInfoValue).c_str());
                 } else {
@@ -108,7 +110,7 @@ void CDBlockFiltersView::Display() {
             }
             ImGui::TableNextColumn();
             {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 if (bit::extract<0, 3>(filter.mode) != 0) {
                     if (bit::test<4>(filter.mode)) {
                         ImGui::TextUnformatted("yes");
@@ -122,7 +124,7 @@ void CDBlockFiltersView::Display() {
             }
             ImGui::TableNextColumn();
             {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 if (bit::test<6>(filter.mode)) {
                     ImGui::Text("%06X-%06X", filter.startFrameAddress,
                                 (filter.startFrameAddress + filter.frameAddressCount - 1u) & 0xFFFFFFu);
@@ -133,7 +135,7 @@ void CDBlockFiltersView::Display() {
             }
             ImGui::TableNextColumn();
             {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 if (filter.passOutput != cdblock::Filter::kDisconnected) {
                     ImGui::Text("%2u", filter.passOutput);
                 } else {
@@ -143,7 +145,7 @@ void CDBlockFiltersView::Display() {
             }
             ImGui::TableNextColumn();
             {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 if (filter.failOutput != cdblock::Filter::kDisconnected) {
                     ImGui::Text("%2u", filter.failOutput);
                 } else {

@@ -3,6 +3,8 @@
 
 #include <app/events/emu_event_factory.hpp>
 #include <app/events/gui_event_factory.hpp>
+
+#include <app/imgui_data.hpp>
 #include <app/profile.hpp>
 #include <app/settings.hpp>
 #include <app/shared_context.hpp>
@@ -14,11 +16,14 @@
 #include <ymir/ymir.hpp>
 
 #include <SDL3/SDL.h>
-#include <algorithm>
+
 #include <fmt/format.h>
 #include <fmt/std.h>
-#include <fstream>
+
 #include <imgui.h>
+
+#include <algorithm>
+#include <fstream>
 #include <mutex>
 
 namespace app::services {
@@ -72,10 +77,11 @@ bool DiscService::LoadDiscImage(std::filesystem::path path, bool showErrorModal)
 #ifdef __linux__
             // Check if we're running inside Flatpak's sandbox and warn user about filesystem permissions
             if (getenv("FLATPAK_ID") != nullptr) {
+                const YmirImGuiData *imguiData = GetYmirImGuiData();
                 ImGui::Separator();
-                ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
-                ImGui::TextColored(m_context.colors.notice, "Flatpak restricts access to the filesystem by default.");
-                ImGui::TextColored(m_context.colors.notice,
+                ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
+                ImGui::TextColored(imguiData->colors.notice, "Flatpak restricts access to the filesystem by default.");
+                ImGui::TextColored(imguiData->colors.notice,
                                    "You must manually grant Ymir permission to access the directory.");
                 ImGui::PopFont();
                 ImGui::TextUnformatted(
@@ -92,7 +98,7 @@ bool DiscService::LoadDiscImage(std::filesystem::path path, bool showErrorModal)
                 ImGui::Bullet();
                 ImGui::TextLinkOpenURL(
                     "How to configure Ymir using Flatseal",
-                    R"(https://github.com/StrikerX3/Ymir/blob/main/TROUBLESHOOTING.md#game-discs-dont-load-with-the-flatpak-release)");
+                    R"(https://github.com/ymir-emu/Ymir/blob/main/TROUBLESHOOTING.md#game-discs-dont-load-with-the-flatpak-release)");
             }
 #endif
             ImGui::Separator();

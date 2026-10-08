@@ -1,6 +1,6 @@
 #include "hotkeys_settings_view.hpp"
 
-#include <app/events/gui_event_factory.hpp>
+#include <app/imgui_data.hpp>
 
 namespace app::ui {
 
@@ -10,6 +10,7 @@ HotkeysSettingsView::HotkeysSettingsView(SharedContext &context)
     , m_unboundActionsWidget(context) {}
 
 void HotkeysSettingsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings();
 
     if (ImGui::Button("Restore defaults")) {
@@ -21,8 +22,8 @@ void HotkeysSettingsView::Display() {
     m_unboundActionsWidget.Display();
     if (ImGui::BeginTable("hotkeys", 2 + input::kNumBindsPerInput,
                           ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY)) {
-        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 80.0f * m_context.displayScale);
-        ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed, 200.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 80.0f * imguiData->displayScale);
+        ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed, 200.0f * imguiData->displayScale);
         for (size_t i = 0; i < input::kNumBindsPerInput; i++) {
             ImGui::TableSetupColumn(fmt::format("Hotkey {}", i + 1).c_str(), ImGuiTableColumnFlags_WidthStretch, 1.0f);
         }

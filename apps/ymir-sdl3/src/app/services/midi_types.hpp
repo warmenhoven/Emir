@@ -242,18 +242,18 @@ protected:
 // ---------------------------------------------------------------------------------------------------------------------
 // Helper functions
 
-inline std::unique_ptr<IRtMidiIn> WrapRtMidi(std::unique_ptr<RtMidiIn> &&in) {
+inline std::shared_ptr<IRtMidiIn> WrapRtMidi(std::unique_ptr<RtMidiIn> &&in) {
     if (in) {
-        return std::make_unique<RtMidiInWrapper>(std::move(in));
+        return std::make_shared<RtMidiInWrapper>(std::move(in));
     }
-    return std::make_unique<RtMidiInNoop>();
+    return std::make_shared<RtMidiInNoop>();
 }
 
-inline std::unique_ptr<IRtMidiOut> WrapRtMidi(std::unique_ptr<RtMidiOut> &&out) {
+inline std::shared_ptr<IRtMidiOut> WrapRtMidi(std::unique_ptr<RtMidiOut> &&out) {
     if (out) {
-        return std::make_unique<RtMidiOutWrapper>(std::move(out));
+        return std::make_shared<RtMidiOutWrapper>(std::move(out));
     }
-    return std::make_unique<RtMidiOutNoop>();
+    return std::make_shared<RtMidiOutNoop>();
 }
 
 } // namespace util

@@ -14,10 +14,13 @@
 #include <ymir/util/dev_log.hpp>
 
 #include <SDL3/SDL.h>
-#include <cassert>
+
 #include <fmt/format.h>
 #include <fmt/std.h>
+
 #include <imgui.h>
+
+#include <cassert>
 #include <mutex>
 
 namespace app::services {

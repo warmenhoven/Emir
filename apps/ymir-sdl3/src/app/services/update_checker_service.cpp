@@ -7,12 +7,14 @@
 #include <ymir/util/thread_name.hpp>
 #include <ymir/version.hpp>
 
-#include <semver.hpp>
 #include <util/std_lib.hpp>
+
+#include <semver.hpp>
 
 #include <fmt/chrono.h>
 #include <fmt/format.h>
 #include <fmt/std.h>
+
 #include <mutex>
 
 namespace app::services {

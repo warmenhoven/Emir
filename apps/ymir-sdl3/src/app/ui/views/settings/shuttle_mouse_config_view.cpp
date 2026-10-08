@@ -1,5 +1,7 @@
 #include "shuttle_mouse_config_view.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 ShuttleMouseConfigView::ShuttleMouseConfigView(SharedContext &context)
@@ -8,6 +10,7 @@ ShuttleMouseConfigView::ShuttleMouseConfigView(SharedContext &context)
     , m_unboundActionsWidget(context) {}
 
 void ShuttleMouseConfigView::Display(Settings::Input::Port::ShuttleMouse &controllerSettings, uint32 portIndex) {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings();
     auto &binds = controllerSettings.binds;
 
@@ -15,7 +18,7 @@ void ShuttleMouseConfigView::Display(Settings::Input::Port::ShuttleMouse &contro
 
     // -------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Behavior");
     ImGui::PopFont();
 
@@ -43,7 +46,7 @@ void ShuttleMouseConfigView::Display(Settings::Input::Port::ShuttleMouse &contro
 
     // -------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Binds");
     ImGui::PopFont();
 
@@ -62,7 +65,7 @@ void ShuttleMouseConfigView::Display(Settings::Input::Port::ShuttleMouse &contro
     ImGui::TextUnformatted("Left-click a button to assign a hotkey. Right-click to clear.");
     m_unboundActionsWidget.Display();
     if (ImGui::BeginTable("hotkeys", 1 + input::kNumBindsPerInput, ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed, 90.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed, 90.0f * imguiData->displayScale);
         for (size_t i = 0; i < input::kNumBindsPerInput; i++) {
             ImGui::TableSetupColumn(fmt::format("Hotkey {}", i + 1).c_str(), ImGuiTableColumnFlags_WidthStretch, 1.0f);
         }

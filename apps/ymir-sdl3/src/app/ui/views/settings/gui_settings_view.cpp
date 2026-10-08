@@ -2,6 +2,8 @@
 
 #include <app/ui/widgets/common_widgets.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <ymir/sys/clocks.hpp>
 
 namespace app::ui {
@@ -10,30 +12,30 @@ GUISettingsView::GUISettingsView(SharedContext &context)
     : SettingsViewBase(context) {}
 
 void GUISettingsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings();
     auto &guiSettings = settings.gui;
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("General");
     ImGui::PopFont();
 
     MakeDirty(ImGui::Checkbox("Show game name on window title bar", &guiSettings.showGameNameOnTitleBar));
     MakeDirty(
         ImGui::Checkbox("Show performance indicator on window title bar", &guiSettings.showPerformanceOnTitleBar));
-    widgets::ExplanationTooltip("Display emulation speed, VDP2, VDP1 and GUI frame rates on title bar",
-                                m_context.displayScale);
+    widgets::ExplanationTooltip("Display emulation speed, VDP2, VDP1 and GUI frame rates on title bar");
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("UI scaling");
     ImGui::PopFont();
 
     // Round scale to steps of 25% and clamp to 100%-200% range
     bool overrideUIScale = guiSettings.overrideUIScale;
-    double uiScale = overrideUIScale ? guiSettings.uiScale.Get() : m_context.displayScale;
+    double uiScale = overrideUIScale ? guiSettings.uiScale.Get() : imguiData->displayScale;
     uiScale = std::round(uiScale / 0.25) * 0.25;
     uiScale = std::clamp(uiScale, 1.00, 2.00);
 
@@ -76,25 +78,23 @@ void GUISettingsView::Display() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Behavior");
     ImGui::PopFont();
 
     MakeDirty(ImGui::Checkbox("Remember window geometry", &guiSettings.rememberWindowGeometry));
-    widgets::ExplanationTooltip(
-        "When enabled, the current window position and size will be restored the next time the application is started.",
-        m_context.displayScale);
+    widgets::ExplanationTooltip("When enabled, the current window position and size will be restored the next time the "
+                                "application is started.");
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("On-screen display");
     ImGui::PopFont();
 
     MakeDirty(ImGui::Checkbox("Show messages", &guiSettings.showMessages));
     widgets::ExplanationTooltip(
-        "When enabled, notification messages are displayed on the top-left corner of the window.",
-        m_context.displayScale);
+        "When enabled, notification messages are displayed on the top-left corner of the window.");
 
     const bool isPAL = settings.system.videoStandard.Get() == ymir::core::config::sys::VideoStandard::PAL;
 
@@ -113,8 +113,7 @@ void GUISettingsView::Display() {
             "smooth experience on capable machines with variable refresh rate displays.\n"
             "- Speed indicates the (adjustable) target emulation speed. 100% is realtime speed.",
             (isPAL ? "PAL" : "NTSC"), (isPAL ? ymir::sys::kPALFrameRate : ymir::sys::kNTSCFrameRate))
-            .c_str(),
-        m_context.displayScale);
+            .c_str());
     ImGui::Indent();
     auto frameRateOSDOption = [&](const char *name, Settings::GUI::FrameRateOSDPosition value) {
         if (MakeDirty(ImGui::RadioButton(name, guiSettings.frameRateOSDPosition == value))) {
@@ -135,8 +134,7 @@ void GUISettingsView::Display() {
     widgets::ExplanationTooltip(
         "When enabled, the speed indicator will be displayed for any emulation speed other than 100%.\n"
         "When disabled, the speed indicator is only displayed while running in turbo speed.\n"
-        "The speed indicator is always shown while paused or rewinding.",
-        m_context.displayScale);
+        "The speed indicator is always shown while paused or rewinding.");
 }
 
 } // namespace app::ui

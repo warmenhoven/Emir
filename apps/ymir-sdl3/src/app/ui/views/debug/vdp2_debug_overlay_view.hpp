@@ -1,17 +1,18 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+namespace ymir::vdp {
+class VDP;
+}
 
 namespace app::ui {
 
 class VDP2DebugOverlayView {
 public:
-    VDP2DebugOverlayView(SharedContext &context, ymir::vdp::VDP &vdp);
+    VDP2DebugOverlayView(ymir::vdp::VDP &vdp);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     ymir::vdp::VDP &m_vdp;
 };
 

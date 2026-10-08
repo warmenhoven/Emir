@@ -1,5 +1,7 @@
 #include "debug_output_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
 
 namespace app::ui {
@@ -12,7 +14,8 @@ DebugOutputWindow::DebugOutputWindow(SharedContext &context)
 }
 
 void DebugOutputWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(365 * m_context.displayScale, 150 * m_context.displayScale),
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(365 * imguiData->displayScale, 150 * imguiData->displayScale),
                                         ImVec2(FLT_MAX, FLT_MAX));
 }
 

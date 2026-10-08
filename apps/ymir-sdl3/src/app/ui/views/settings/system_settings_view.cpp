@@ -10,6 +10,8 @@
 #include <app/ui/widgets/settings_widgets.hpp>
 #include <app/ui/widgets/system_widgets.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <util/regions.hpp>
 #include <util/sdl_file_dialog.hpp>
 
@@ -32,6 +34,7 @@ SystemSettingsView::SystemSettingsView(SharedContext &context)
     : SettingsViewBase(context) {}
 
 void SystemSettingsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings().system;
 
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
@@ -40,7 +43,7 @@ void SystemSettingsView::Display() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Region");
     ImGui::PopFont();
 
@@ -61,7 +64,7 @@ void SystemSettingsView::Display() {
         if (ImGui::TableNextColumn()) {
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted("Region");
-            widgets::ExplanationTooltip("Changing this option will cause a hard reset", m_context.displayScale);
+            widgets::ExplanationTooltip("Changing this option will cause a hard reset");
         }
         if (ImGui::TableNextColumn()) {
             ui::widgets::RegionSelector(m_context);
@@ -77,12 +80,11 @@ void SystemSettingsView::Display() {
     widgets::ExplanationTooltip(
         "Whenever a game disc is loaded, the emulator will automatically switch the system region to match one of the "
         "game's supported regions. The list below allows you to choose the preferred region order. If none of the "
-        "preferred regions is supported by the game, the emulator will pick the first region listed on the disc.",
-        m_context.displayScale);
+        "preferred regions is supported by the game, the emulator will pick the first region listed on the disc.");
 
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Preferred region order:");
-    widgets::ExplanationTooltip("Drag items to reorder", m_context.displayScale);
+    widgets::ExplanationTooltip("Drag items to reorder");
 
     std::vector<core::config::sys::Region> prefRgnOrder{};
     {
@@ -102,7 +104,7 @@ void SystemSettingsView::Display() {
         prefRgnOrder.insert(prefRgnOrder.end(), validRegions.begin(), validRegions.end());
     }
 
-    if (ImGui::BeginListBox("##pref_rgn_order", ImVec2(150 * m_context.displayScale, ImGui::GetFrameHeight() * 4))) {
+    if (ImGui::BeginListBox("##pref_rgn_order", ImVec2(150 * imguiData->displayScale, ImGui::GetFrameHeight() * 4))) {
         ImGui::PushItemFlag(ImGuiItemFlags_AllowDuplicateId, true);
         bool changed = false;
         for (int n = 0; n < prefRgnOrder.size(); n++) {
@@ -131,7 +133,7 @@ void SystemSettingsView::Display() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("SH-2");
     ImGui::PopFont();
 
@@ -143,7 +145,7 @@ void SystemSettingsView::Display() {
     auto &smpc = m_context.saturn.GetSMPC();
     auto &rtc = smpc.GetRTC();
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Real-Time Clock");
     ImGui::PopFont();
 
@@ -151,8 +153,7 @@ void SystemSettingsView::Display() {
     ImGui::TextUnformatted("Mode:");
     widgets::ExplanationTooltip("- Host: Syncs the emulated RTC to your system's clock.\n"
                                 "- Virtual: Runs a virtual RTC synced to emulation speed.\n\n"
-                                "For deterministic behavior, use a virtual RTC synced to a fixed time point on reset.",
-                                m_context.displayScale);
+                                "For deterministic behavior, use a virtual RTC synced to a fixed time point on reset.");
     ImGui::SameLine();
     if (MakeDirty(ImGui::RadioButton("Host##rtc", settings.rtc.mode == core::config::rtc::Mode::Host))) {
         settings.rtc.mode = core::config::rtc::Mode::Host;
@@ -175,7 +176,7 @@ void SystemSettingsView::Display() {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Host time offset:");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(150.0f * m_context.displayScale);
+        ImGui::SetNextItemWidth(150.0f * imguiData->displayScale);
         if (ImGui::DragScalar("##rtc_host_offset", ImGuiDataType_S64, &rtc.HostTimeOffset())) {
             smpc.PersistData();
         }
@@ -189,8 +190,7 @@ void SystemSettingsView::Display() {
     } else if (settings.rtc.mode == core::config::rtc::Mode::Virtual) {
         // TODO: request emulator to update date/time so that it is updated in real time
         widgets::ExplanationTooltip(
-            "This may occasionally stop updating because the virtual RTC is only updated when the game reads from it.",
-            m_context.displayScale);
+            "This may occasionally stop updating because the virtual RTC is only updated when the game reads from it.");
 
         if (ImGui::Button("Set to host time##curr_time")) {
             rtc.SetDateTime(util::datetime::host());
@@ -209,12 +209,12 @@ void SystemSettingsView::Display() {
                                              settings.rtc.virtHardResetStrategy == strategy))) {
                 settings.rtc.virtHardResetStrategy = strategy;
             }
-            widgets::ExplanationTooltip(explanation, m_context.displayScale);
+            widgets::ExplanationTooltip(explanation);
         };
 
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Hard reset behavior:");
-        widgets::ExplanationTooltip("Specifies how the virtual RTC behaves on a hard reset.", m_context.displayScale);
+        widgets::ExplanationTooltip("Specifies how the virtual RTC behaves on a hard reset.");
 
         hardResetOption("Preserve current time", HardResetStrategy::Preserve,
                         "The virtual RTC will continue counting from the time point prior to the reset.\n"
@@ -241,7 +241,7 @@ void SystemSettingsView::Display() {
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Internal backup memory");
     ImGui::PopFont();
 
@@ -252,8 +252,7 @@ void SystemSettingsView::Display() {
     widgets::ExplanationTooltip(
         fmt::format("When enabled, separate internal backup memory images will be created for each game under {}",
                     m_context.profile.GetPath(ProfilePath::BackupMemory) / "games")
-            .c_str(),
-        m_context.displayScale);
+            .c_str());
 
     if (settings.internalBackupRAMPerGame) {
         ImGui::BeginDisabled();
@@ -303,7 +302,7 @@ void SystemSettingsView::Display() {
 
     if (settings.internalBackupRAMPerGame) {
         const std::filesystem::path intBupPath = m_context.GetInternalBackupRAMPath();
-        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
         ImGui::Text("Currently using internal backup memory image from %s", fmt::format("{}", intBupPath).c_str());
         ImGui::PopTextWrapPos();
         if (ImGui::Button("Open containing directory##int_bup")) {

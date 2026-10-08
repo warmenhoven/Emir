@@ -1,5 +1,7 @@
 #include "message_history_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 #include <util/std_lib.hpp>
 
 #include <fmt/format.h>
@@ -14,10 +16,11 @@ MessageHistoryWindow::MessageHistoryWindow(SharedContext &context)
 }
 
 void MessageHistoryWindow::PrepareWindow() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto *vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(400 * m_context.displayScale, 300 * m_context.displayScale),
+    ImGui::SetNextWindowSizeConstraints(ImVec2(400 * imguiData->displayScale, 300 * imguiData->displayScale),
                                         ImVec2(vp->Size.x, vp->Size.y));
 }
 

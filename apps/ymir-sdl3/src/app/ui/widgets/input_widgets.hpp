@@ -44,8 +44,6 @@ struct CrosshairParams {
 
     ImVec4 strokeColor;
     float strokeThickness; // in percent of radius; min 1px
-
-    float displayScale;
 };
 
 void Crosshair(ImDrawList *drawList, const CrosshairParams &params, ImVec2 pos);

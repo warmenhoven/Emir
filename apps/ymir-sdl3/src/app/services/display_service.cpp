@@ -1,17 +1,22 @@
 #include "display_service.hpp"
 
+#include <app/imgui_data.hpp>
 #include <app/profile.hpp>
 #include <app/settings.hpp>
 #include <app/shared_context.hpp>
+
 #include <app/ui/fonts/IconsMaterialSymbols.h>
 
 #include <ymir/util/dev_log.hpp>
 #include <ymir/util/scope_guard.hpp>
 
 #include <SDL3/SDL.h>
+
 #include <backends/imgui_impl_sdl3.h>
 #include <backends/imgui_impl_sdlrenderer3.h>
+
 #include <cmrc/cmrc.hpp>
+
 #include <imgui.h>
 
 #include <algorithm>
@@ -29,16 +34,34 @@ DisplayService::DisplayService(SharedContext &context, Settings &settings)
     : m_context(context)
     , m_settings(settings) {}
 
-void DisplayService::RescaleUI(float displayScale) {
+namespace {
+
+    float LogicalUIScale(SDL_Window *window) {
+        // ImGui handles Retina via DisplayFramebufferScale
+#if defined(__APPLE__)
+        (void)window;
+        return 1.0f;
+#else
+        const SDL_DisplayID display = window != nullptr ? SDL_GetDisplayForWindow(window) : SDL_GetPrimaryDisplay();
+        const float contentScale = SDL_GetDisplayContentScale(display);
+        return contentScale > 0.0f ? contentScale : 1.0f;
+#endif
+    }
+
+} // namespace
+
+void DisplayService::RescaleUI() {
     const auto &settings = m_settings;
+    float displayScale = LogicalUIScale(m_context.screen.window);
     if (settings.gui.overrideUIScale) {
         displayScale = settings.gui.uiScale;
     }
     devlog::info<grp::base>("Window DPI scaling: {:.1f}%", displayScale * 100.0f);
 
-    m_context.displayScale = displayScale;
-    devlog::info<grp::base>("UI scaling set to {:.1f}%", m_context.displayScale * 100.0f);
-    ReloadStyle(m_context.displayScale);
+    YmirImGuiData *imguiData = GetYmirImGuiData();
+    imguiData->displayScale = displayScale;
+    devlog::info<grp::base>("UI scaling set to {:.1f}%", imguiData->displayScale * 100.0f);
+    ReloadStyle(imguiData->displayScale);
 }
 
 void DisplayService::ReloadStyle(float displayScale) {
@@ -159,6 +182,7 @@ void DisplayService::ReloadStyle(float displayScale) {
 }
 
 void DisplayService::LoadFonts() {
+    YmirImGuiData *imguiData = GetYmirImGuiData();
     ImGuiIO &io = ImGui::GetIO();
     ImGuiStyle &style = ImGui::GetStyle();
 
@@ -187,7 +211,6 @@ void DisplayService::LoadFonts() {
             ImFontConfig iconsConfig;
             iconsConfig.MergeMode = true;
             iconsConfig.PixelSnapH = true;
-            iconsConfig.PixelSnapV = true;
             iconsConfig.GlyphMinAdvanceX = 20.0f;
             iconsConfig.GlyphOffset.y = 4.0f;
             font = io.Fonts->AddFontFromMemoryTTF((void *)iconFile.begin(), iconFile.size(), 20.0f, &iconsConfig,
@@ -208,19 +231,19 @@ void DisplayService::LoadFonts() {
         return font;
     };
 
-    m_context.fonts.sansSerif.regular = loadFont("SplineSans Medium", "fonts/SplineSans-Medium.ttf", true);
-    m_context.fonts.sansSerif.regular = mergeFont("fonts/MPLUSU-Ymir-Bold.ttf");
-    m_context.fonts.sansSerif.bold = loadFont("SplineSans Bold", "fonts/SplineSans-Bold.ttf", true);
-    m_context.fonts.sansSerif.bold = mergeFont("fonts/MPLUSU-Ymir-ExtraBold.ttf");
+    imguiData->fonts.sansSerif.regular = loadFont("SplineSans Medium", "fonts/SplineSans-Medium.ttf", true);
+    imguiData->fonts.sansSerif.regular = mergeFont("fonts/MPLUSU-Ymir-Bold.ttf");
+    imguiData->fonts.sansSerif.bold = loadFont("SplineSans Bold", "fonts/SplineSans-Bold.ttf", true);
+    imguiData->fonts.sansSerif.bold = mergeFont("fonts/MPLUSU-Ymir-ExtraBold.ttf");
 
-    m_context.fonts.monospace.regular = loadFont("SplineSansMono Medium", "fonts/SplineSansMono-Medium.ttf", false);
-    m_context.fonts.monospace.regular = mergeFont("fonts/MPLUSU-Ymir-Bold.ttf");
-    m_context.fonts.monospace.bold = loadFont("SplineSansMono Bold", "fonts/SplineSansMono-Bold.ttf", false);
-    m_context.fonts.monospace.bold = mergeFont("fonts/MPLUSU-Ymir-ExtraBold.ttf");
+    imguiData->fonts.monospace.regular = loadFont("SplineSansMono Medium", "fonts/SplineSansMono-Medium.ttf", false);
+    imguiData->fonts.monospace.regular = mergeFont("fonts/MPLUSU-Ymir-Bold.ttf");
+    imguiData->fonts.monospace.bold = loadFont("SplineSansMono Bold", "fonts/SplineSansMono-Bold.ttf", false);
+    imguiData->fonts.monospace.bold = mergeFont("fonts/MPLUSU-Ymir-ExtraBold.ttf");
 
-    m_context.fonts.display = loadFont("ZenDots Regular", "fonts/ZenDots-Regular.ttf", false);
+    imguiData->fonts.display = loadFont("ZenDots Regular", "fonts/ZenDots-Regular.ttf", false);
 
-    io.FontDefault = m_context.fonts.sansSerif.regular;
+    io.FontDefault = imguiData->fonts.sansSerif.regular;
 }
 
 void DisplayService::OnDisplayAdded(SDL_DisplayID id) {
@@ -288,7 +311,7 @@ void DisplayService::ApplyFullscreenMode() const {
 
 void DisplayService::PersistWindowGeometry() {
     const auto &settings = m_settings;
-    if (settings.gui.rememberWindowGeometry) {
+    if (settings.gui.rememberWindowGeometry && !settings.video.fullScreen) {
         int wx, wy, ww, wh;
         const bool posOK = SDL_GetWindowPosition(m_context.screen.window, &wx, &wy);
         const bool sizeOK = SDL_GetWindowSize(m_context.screen.window, &ww, &wh);

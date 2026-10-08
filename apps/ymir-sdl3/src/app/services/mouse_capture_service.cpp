@@ -6,9 +6,12 @@
 #include <ymir/util/dev_log.hpp>
 
 #include <SDL3/SDL.h>
-#include <cassert>
+
 #include <fmt/format.h>
+
 #include <imgui.h>
+
+#include <cassert>
 
 namespace app::services {
 

@@ -2,9 +2,6 @@
 
 #include <app/settings.hpp>
 #include <app/shared_context.hpp>
-#include <functional>
-#include <string>
-#include <vector>
 
 #include <app/ui/windows/about_window.hpp>
 #include <app/ui/windows/backup_ram_manager_window.hpp>
@@ -22,6 +19,10 @@
 #include <app/ui/windows/debug/scu_window_set.hpp>
 #include <app/ui/windows/debug/sh2_window_set.hpp>
 #include <app/ui/windows/debug/vdp_window_set.hpp>
+
+#include <functional>
+#include <string>
+#include <vector>
 
 namespace app::services {
 

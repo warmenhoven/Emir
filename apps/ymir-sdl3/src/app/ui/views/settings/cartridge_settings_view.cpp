@@ -12,6 +12,8 @@
 #include <app/events/emu_event_factory.hpp>
 #include <app/events/gui_event_factory.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <util/file_loader.hpp>
 #include <util/sdl_file_dialog.hpp>
 
@@ -41,6 +43,7 @@ CartridgeSettingsView::CartridgeSettingsView(SharedContext &context)
     : SettingsViewBase(context) {}
 
 void CartridgeSettingsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings().cartridge;
 
     static constexpr Settings::Cartridge::Type kCartTypes[] = {
@@ -50,7 +53,7 @@ void CartridgeSettingsView::Display() {
         Settings::Cartridge::Type::ROM,
     };
 
-    ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
 
     ImGui::TextUnformatted("Current cartridge: ");
     ImGui::SameLine(0, 0);
@@ -75,8 +78,7 @@ void CartridgeSettingsView::Display() {
                     "\n"
                     "For ROM cartridges, make sure you add the required files to {}.",
                     m_context.profile.GetPath(ProfilePath::ROMCartImages))
-            .c_str(),
-        m_context.displayScale);
+            .c_str());
 
     if (ImGui::Button("Open ROM cartridge images directory")) {
         SDL_OpenURL(fmt::format("file:///{}", m_context.profile.GetPath(ProfilePath::ROMCartImages)).c_str());
@@ -130,7 +132,7 @@ void CartridgeSettingsView::Display() {
         if (wantedCartType != cart::CartType::None && currCartType != wantedCartType) {
             ImGui::AlignTextToFramePadding();
 
-            const auto color = m_context.colors.notice;
+            const auto color = imguiData->colors.notice;
 
             switch (gameInfo->GetCartridge()) {
             case db::Cartridge::DRAM8Mbit:
@@ -199,8 +201,7 @@ void CartridgeSettingsView::DrawBackupRAMSettings() {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Capacity:");
     widgets::ExplanationTooltip(
-        "This will automatically adjust if you load an existing image from the file selector below.",
-        m_context.displayScale);
+        "This will automatically adjust if you load an existing image from the file selector below.");
     ImGui::SameLine();
     if (ImGui::BeginCombo("##bup_capacity", BupCapacityLongName(settings.capacity), ImGuiComboFlags_WidthFitPreview)) {
         for (auto cap : {BUPCap::_4Mbit, BUPCap::_8Mbit, BUPCap::_16Mbit, BUPCap::_32Mbit}) {

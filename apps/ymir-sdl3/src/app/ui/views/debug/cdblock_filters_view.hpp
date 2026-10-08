@@ -1,17 +1,18 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+namespace ymir::cdblock {
+class CDBlock;
+}
 
 namespace app::ui {
 
 class CDBlockFiltersView {
 public:
-    CDBlockFiltersView(SharedContext &context);
+    CDBlockFiltersView(ymir::cdblock::CDBlock &cdblock);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     ymir::cdblock::CDBlock &m_cdblock;
 };
 

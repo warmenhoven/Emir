@@ -3,6 +3,8 @@
 #include <ymir/hw/sh2/sh2.hpp>
 #include <ymir/hw/sh2/sh2_disasm.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -73,6 +75,8 @@ SH2DisassemblyView::SH2DisassemblyView(SharedContext &context, ymir::sh2::SH2 &s
     , m_model(model) {}
 
 void SH2DisassemblyView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("Disassembly")) {
             ImGui::MenuItem("Display opcode bytes", nullptr, &m_model.settings.displayOpcodeBytes);
@@ -100,7 +104,7 @@ void SH2DisassemblyView::Display() {
         ImGui::EndMenuBar();
     }
 
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const ImVec2 disasmCharSize = ImGui::CalcTextSize("x");
     const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
     const float itemSpacing = ImGui::GetStyle().ItemSpacing.y;
@@ -139,7 +143,7 @@ void SH2DisassemblyView::Display() {
             m_context.debuggers.MakeDirty();
         };
 
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         auto &probe = m_sh2.GetProbe();
         const uint32 pc = probe.PC() & ~1u;
         const uint32 pr = probe.PR() & ~1u;
@@ -277,7 +281,7 @@ void SH2DisassemblyView::Display() {
                     color = m_model.colors.disasm.altLineBgColor;
                 }
 
-                const float borderThickness = 2.0f * m_context.displayScale;
+                const float borderThickness = 2.0f * imguiData->displayScale;
 
                 if (color.w != 0.0f) {
                     if (filled) {
@@ -289,7 +293,7 @@ void SH2DisassemblyView::Display() {
                         auto borderEnd = ImVec2(rectEnd.x - 0.5f, rectEnd.y - 0.5f);
                         drawList->AddRectFilled(rectPos, rectEnd, ImGui::ColorConvertFloat4ToU32(fillColor));
                         drawList->AddRect(borderPos, borderEnd, ImGui::ColorConvertFloat4ToU32(color), 0.0f,
-                                          ImDrawFlags_None, borderThickness);
+                                          borderThickness);
                     }
                 }
 
@@ -297,13 +301,13 @@ void SH2DisassemblyView::Display() {
                 if (address == m_cursor.address && !isCursorHighlighted) {
                     drawList->AddRect(borderPos, borderEnd,
                                       ImGui::ColorConvertFloat4ToU32(m_model.colors.disasm.cursorBgColor), 0.0f,
-                                      ImDrawFlags_None, borderThickness);
+                                      borderThickness);
                 }
 
                 if (lineHovered) {
                     drawList->AddRect(borderPos, borderEnd,
                                       ImGui::ColorConvertFloat4ToU32(m_model.colors.disasm.lineHoverColor), 0.0f,
-                                      ImDrawFlags_None, borderThickness);
+                                      borderThickness);
                 }
             };
 
@@ -333,7 +337,7 @@ void SH2DisassemblyView::Display() {
 
                     if (ImGui::BeginItemTooltip()) {
                         ImGui::Separator();
-                        ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.medium);
+                        ImGui::PushFont(imguiData->fonts.sansSerif.regular, imguiData->fontSizes.medium);
                         ImGui::TextUnformatted("Click to toggle breakpoint (F9, B)");
                         ImGui::TextUnformatted("Shift-click to enable/disable breakpoint (Shift-F9, Shift-B)");
                         ImGui::PopFont();
@@ -357,7 +361,7 @@ void SH2DisassemblyView::Display() {
                             drawList->AddCircleFilled(center, circleRadius, color);
                         } else {
                             drawList->AddCircle(center, circleRadius, color, 0,
-                                                m_model.style.iconContourThickness * m_context.displayScale);
+                                                m_model.style.iconContourThickness * imguiData->displayScale);
                         }
                     }
                 }
@@ -375,7 +379,7 @@ void SH2DisassemblyView::Display() {
 
                     if (ImGui::BeginItemTooltip()) {
                         ImGui::Separator();
-                        ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.medium);
+                        ImGui::PushFont(imguiData->fonts.sansSerif.regular, imguiData->fontSizes.medium);
                         ImGui::TextUnformatted("Click to set PR here");
                         ImGui::PopFont();
                         ImGui::EndTooltip();
@@ -401,8 +405,9 @@ void SH2DisassemblyView::Display() {
                         if (visible) {
                             drawList->AddConcavePolyFilled(points, std::size(points), color);
                         } else {
-                            drawList->AddPolyline(points, std::size(points), color, ImDrawFlags_Closed,
-                                                  m_model.style.iconContourThickness * m_context.displayScale);
+                            drawList->AddPolyline(points, std::size(points), color,
+                                                  m_model.style.iconContourThickness * imguiData->displayScale,
+                                                  ImDrawFlags_Closed);
                         }
                     }
                 }
@@ -420,7 +425,7 @@ void SH2DisassemblyView::Display() {
 
                     if (ImGui::BeginItemTooltip()) {
                         ImGui::Separator();
-                        ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.medium);
+                        ImGui::PushFont(imguiData->fonts.sansSerif.regular, imguiData->fontSizes.medium);
                         ImGui::TextUnformatted("Click to set PC here");
                         ImGui::PopFont();
                         ImGui::EndTooltip();
@@ -446,8 +451,9 @@ void SH2DisassemblyView::Display() {
                         if (visible) {
                             drawList->AddConcavePolyFilled(points, std::size(points), color);
                         } else {
-                            drawList->AddPolyline(points, std::size(points), color, ImDrawFlags_Closed,
-                                                  m_model.style.iconContourThickness * m_context.displayScale);
+                            drawList->AddPolyline(points, std::size(points), color,
+                                                  m_model.style.iconContourThickness * imguiData->displayScale,
+                                                  ImDrawFlags_Closed);
                         }
                     }
                 }
@@ -488,8 +494,7 @@ void SH2DisassemblyView::Display() {
                     ImVec2(startPos.x + disasmCharSize.x * 1.4f, startPos.y + disasmCharSize.y * 0.6f),
                 };
                 const ImVec4 color = valid ? m_model.colors.disasm.delaySlot : m_model.colors.disasm.delaySlotIllegal;
-                drawList->AddPolyline(points, std::size(points), ImGui::ColorConvertFloat4ToU32(color),
-                                      ImDrawFlags_None, 2.0f);
+                drawList->AddPolyline(points, std::size(points), ImGui::ColorConvertFloat4ToU32(color), 2.0f);
                 ImGui::Dummy(ImVec2(0, 0));
             };
 
@@ -872,11 +877,11 @@ void SH2DisassemblyView::Display() {
             if (lineHovered) {
                 if (ImGui::BeginTooltip()) {
                     drawAddress();
-                    ImGui::SameLine(0.0f, m_model.style.disasmSpacing * m_context.displayScale);
+                    ImGui::SameLine(0.0f, m_model.style.disasmSpacing * imguiData->displayScale);
                     drawOpcodeBytes(true);
-                    ImGui::SameLine(0.0f, m_model.style.disasmSpacing * m_context.displayScale);
+                    ImGui::SameLine(0.0f, m_model.style.disasmSpacing * imguiData->displayScale);
                     drawOpcodeAscii(true);
-                    // ImGui::SameLine(0.0f, m_model.style.disasmSpacing * m_context.displayScale);
+                    // ImGui::SameLine(0.0f, m_model.style.disasmSpacing * imguiData->displayScale);
                     drawInstruction();
                     if (disasm.op1.type != sh2::Operand::Type::None) {
                         ImGui::SameLine(0, 0);
@@ -1030,7 +1035,7 @@ void SH2DisassemblyView::Display() {
                         }
                     };
 
-                    ImGui::PushFont(m_context.fonts.sansSerif.regular, m_context.fontSizes.medium);
+                    ImGui::PushFont(imguiData->fonts.sansSerif.regular, imguiData->fontSizes.medium);
                     if (prevDisasm.hasDelaySlot && !disasm.validInDelaySlot) {
                         ImGui::TextColored(m_model.colors.disasm.illegalMnemonic, "Illegal delay slot instruction");
                     }
@@ -1061,11 +1066,11 @@ void SH2DisassemblyView::Display() {
                 drawHighlight();
                 drawIcons();
                 drawAddress();
-                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * m_context.displayScale);
+                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * imguiData->displayScale);
                 drawOpcodeBytes(m_model.settings.displayOpcodeBytes);
-                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * m_context.displayScale);
+                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * imguiData->displayScale);
                 drawOpcodeAscii(m_model.settings.displayOpcodeAscii);
-                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * m_context.displayScale);
+                ImGui::SameLine(0.0f, m_model.style.disasmSpacing * imguiData->displayScale);
                 drawInstruction();
                 if (disasm.op1.type != sh2::Operand::Type::None) {
                     ImGui::SameLine(0, 0);

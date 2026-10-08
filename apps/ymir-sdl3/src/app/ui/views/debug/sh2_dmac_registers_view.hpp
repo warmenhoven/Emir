@@ -1,17 +1,18 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+namespace ymir::sh2 {
+class SH2;
+}
 
 namespace app::ui {
 
 class SH2DMAControllerRegistersView {
 public:
-    SH2DMAControllerRegistersView(SharedContext &context, ymir::sh2::SH2 &sh2);
+    SH2DMAControllerRegistersView(ymir::sh2::SH2 &sh2);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     ymir::sh2::SH2 &m_sh2;
 };
 

@@ -2,15 +2,16 @@
 
 #include <ymir/util/size_ops.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <cinttypes>
 
 using namespace ymir;
 
 namespace app::ui {
 
-SH2DMAControllerChannelTraceView::SH2DMAControllerChannelTraceView(SharedContext &context, int index, SH2Tracer &tracer)
-    : m_context(context)
-    , m_index(index)
+SH2DMAControllerChannelTraceView::SH2DMAControllerChannelTraceView(int index, SH2Tracer &tracer)
+    : m_index(index)
     , m_tracer(tracer) {}
 
 void SH2DMAControllerChannelTraceView::Display() {
@@ -19,6 +20,8 @@ void SH2DMAControllerChannelTraceView::Display() {
 }
 
 void SH2DMAControllerChannelTraceView::DisplayStatistics() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     ImGui::SeparatorText(fmt::format("Channel {} statistics", m_index).c_str());
 
     const auto &stats = m_tracer.dmaStats[m_index];
@@ -28,14 +31,14 @@ void SH2DMAControllerChannelTraceView::DisplayStatistics() {
         ImGui::TableNextRow();
 
         if (ImGui::TableNextColumn()) {
-            ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
             ImGui::Text("%" PRIu64, stats.numTransfers);
             ImGui::PopFont();
             ImGui::TextUnformatted("transfers");
         }
 
         if (ImGui::TableNextColumn()) {
-            ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
             if (stats.bytesTransferred >= 1_TiB) {
                 ImGui::Text("%0.2lf TiB", util::BytesToTiB(stats.bytesTransferred));
             } else if (stats.bytesTransferred >= 1_GiB) {
@@ -52,7 +55,7 @@ void SH2DMAControllerChannelTraceView::DisplayStatistics() {
         }
 
         if (ImGui::TableNextColumn()) {
-            ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.medium);
             ImGui::Text("%" PRIu64, stats.interrupts);
             ImGui::PopFont();
             ImGui::TextUnformatted("interrupts");
@@ -64,8 +67,9 @@ void SH2DMAControllerChannelTraceView::DisplayStatistics() {
 }
 
 void SH2DMAControllerChannelTraceView::DisplayTrace() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -107,16 +111,16 @@ void SH2DMAControllerChannelTraceView::DisplayTrace() {
 
             ImGui::TableNextRow();
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%u", trace.counter);
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%08X", trace.srcAddress);
                 ImGui::PopFont();
                 ImGui::SameLine();
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
                 if (trace.srcInc > 0) {
                     ImGui::TextDisabled("+%d", trace.srcInc);
                 } else if (trace.srcInc < 0) {
@@ -125,11 +129,11 @@ void SH2DMAControllerChannelTraceView::DisplayTrace() {
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%08X", trace.dstAddress);
                 ImGui::PopFont();
                 ImGui::SameLine();
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.small);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.small);
                 if (trace.dstInc > 0) {
                     ImGui::TextDisabled("+%d", trace.dstInc);
                 } else if (trace.dstInc < 0) {
@@ -138,7 +142,7 @@ void SH2DMAControllerChannelTraceView::DisplayTrace() {
                 ImGui::PopFont();
             }
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%X", trace.count);
                 ImGui::PopFont();
             }

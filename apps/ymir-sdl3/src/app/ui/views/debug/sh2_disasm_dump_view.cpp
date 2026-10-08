@@ -4,6 +4,8 @@
 
 #include <app/events/emu_debug_event_factory.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <imgui.h>
 
 #include <utility>
@@ -24,6 +26,8 @@ void SH2DisasmDumpView::OpenPopup() {
 }
 
 void SH2DisasmDumpView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     // enable auto resize
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize;
 
@@ -33,8 +37,8 @@ void SH2DisasmDumpView::Display() {
     }
 
     // font, padding, width
-    const float fontSize = m_context.fontSizes.medium;
-    ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+    const float fontSize = imguiData->fontSizes.medium;
+    ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
     const float framePadding = ImGui::GetStyle().FramePadding.x;
@@ -45,7 +49,7 @@ void SH2DisasmDumpView::Display() {
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(fieldWidth);
-    ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
     if (ImGui::InputScalar("##start", ImGuiDataType_U32, &m_startAddress, nullptr, nullptr, "%08X",
                            ImGuiInputTextFlags_CharsHexadecimal)) {
         m_endAddress = std::max<uint32>(m_startAddress, m_endAddress);
@@ -57,7 +61,7 @@ void SH2DisasmDumpView::Display() {
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(fieldWidth);
-    ImGui::PushFont(m_context.fonts.monospace.regular, fontSize);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, fontSize);
     if (ImGui::InputScalar("##end", ImGuiDataType_U32, &m_endAddress, nullptr, nullptr, "%08X",
                            ImGuiInputTextFlags_CharsHexadecimal)) {
         m_startAddress = std::min<uint32>(m_startAddress, m_endAddress);

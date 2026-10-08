@@ -1,27 +1,31 @@
 #include "scu_dsp_window.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 SCUDSPWindow::SCUDSPWindow(SharedContext &context)
     : WindowBase(context)
-    , m_regsView(context)
-    , m_disasmView(context)
-    , m_dataRAMView(context)
-    , m_dmaRegsView(context)
-    , m_dmaTraceView(context) {
+    , m_regsView(context.saturn.GetSCU())
+    , m_disasmView(context.saturn.GetSCU())
+    , m_dataRAMView(context.saturn.GetSCU())
+    , m_dmaRegsView(context.saturn.GetSCU())
+    , m_dmaTraceView(context.tracers.SCU) {
 
     m_windowConfig.name = "SCU DSP";
 }
 
 void SCUDSPWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(1041 * m_context.displayScale, 368 * m_context.displayScale),
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(1041 * imguiData->displayScale, 368 * imguiData->displayScale),
                                         ImVec2(FLT_MAX, FLT_MAX));
 }
 
 void SCUDSPWindow::DrawContents() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     if (ImGui::BeginTable("scu_dsp", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupColumn("Registers/Disassembly", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("DMA", ImGuiTableColumnFlags_WidthFixed, 310 * m_context.displayScale);
+        ImGui::TableSetupColumn("DMA", ImGuiTableColumnFlags_WidthFixed, 310 * imguiData->displayScale);
 
         ImGui::TableNextRow();
         if (ImGui::TableNextColumn()) {

@@ -2,6 +2,8 @@
 
 #include <app/ui/widgets/common_widgets.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <app/input/input_utils.hpp>
 
 namespace app::ui {
@@ -14,6 +16,7 @@ ArcadeRacerConfigView::ArcadeRacerConfigView(SharedContext &context)
 void ArcadeRacerConfigView::Display(Settings::Input::Port::ArcadeRacer &controllerSettings, uint32 portIndex) {
     using namespace app::config_defaults::input::arcade_racer;
 
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings();
     auto &binds = controllerSettings.binds;
     float sensitivity = controllerSettings.sensitivity;
@@ -25,8 +28,7 @@ void ArcadeRacerConfigView::Display(Settings::Input::Port::ArcadeRacer &controll
         "Lower sensitivity pushes values closer to zero leading to stiffer controls while higher sensitivity pushes "
         "values away from zero causing the slightest touch to be detected.\n"
         "In the meter below, green represents the raw input value and orange is the mapped value sent to the "
-        "controller.",
-        m_context.displayScale);
+        "controller.");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1.0f);
     if (MakeDirty(ImGui::SliderFloat("##wheel_sens", &sensitivity, kMinSensitivity, kMaxSensitivity, "%.02f",
@@ -53,16 +55,16 @@ void ArcadeRacerConfigView::Display(Settings::Input::Port::ArcadeRacer &controll
         static constexpr ImU32 kValueColor = 0xF05FF58F;
         static constexpr ImU32 kAdjustedValueColor = 0xF05F8FF5;
 
-        const float borderThickness = 1.5f * m_context.displayScale;
-        const float zeroLineThickness = 1.0f * m_context.displayScale;
-        const float graphLineThickness = 1.7f * m_context.displayScale;
-        const float valueLineThickness = 2.0f * m_context.displayScale;
-        const float valuePointRadius = 2.5f * m_context.displayScale;
+        const float borderThickness = 1.5f * imguiData->displayScale;
+        const float zeroLineThickness = 1.0f * imguiData->displayScale;
+        const float graphLineThickness = 1.7f * imguiData->displayScale;
+        const float valueLineThickness = 2.0f * imguiData->displayScale;
+        const float valuePointRadius = 2.5f * imguiData->displayScale;
 
         // ---------------------------------------------------------------------
         // Draw value mapping graph
 
-        const auto graphSize = ImVec2(avail.x, kGraphHeight * m_context.displayScale);
+        const auto graphSize = ImVec2(avail.x, kGraphHeight * imguiData->displayScale);
 
         // Graph background
         drawList->AddRectFilled(pos, ImVec2(pos.x + graphSize.x, pos.y + graphSize.y), kBackgroundColor);
@@ -86,7 +88,7 @@ void ArcadeRacerConfigView::Display(Settings::Input::Port::ArcadeRacer &controll
             const float offset = mapToGraph(value);
             graph.push_back(ImVec2(pos.x + x, pos.y + offset * graphSize.y));
         }
-        drawList->AddPolyline(graph.data(), graph.size(), kGraphLineColor, ImDrawFlags_None, graphLineThickness);
+        drawList->AddPolyline(graph.data(), graph.size(), kGraphLineColor, graphLineThickness);
 
         // Current input value mapped onto the graph, vertical
         const ImVec2 valuePos(pos.x + (currRawValue + 1.0f) * 0.5f * graphSize.x,
@@ -96,8 +98,7 @@ void ArcadeRacerConfigView::Display(Settings::Input::Port::ArcadeRacer &controll
         drawList->AddCircleFilled(valuePos, valuePointRadius, kValueColor);
 
         // Graph border
-        drawList->AddRect(pos, ImVec2(pos.x + graphSize.x, pos.y + graphSize.y), kBorderColor, 0.0f, ImDrawFlags_None,
-                          borderThickness);
+        drawList->AddRect(pos, ImVec2(pos.x + graphSize.x, pos.y + graphSize.y), kBorderColor, 0.0f, borderThickness);
 
         ImGui::Dummy(graphSize);
 
@@ -107,7 +108,7 @@ void ArcadeRacerConfigView::Display(Settings::Input::Port::ArcadeRacer &controll
         pos = ImGui::GetCursorScreenPos();
         avail = ImGui::GetContentRegionAvail();
 
-        const auto meterSize = ImVec2(avail.x, kMeterHeight * m_context.displayScale);
+        const auto meterSize = ImVec2(avail.x, kMeterHeight * imguiData->displayScale);
 
         // Meter background
         drawList->AddRectFilled(pos, ImVec2(pos.x + meterSize.x, pos.y + meterSize.y), kBackgroundColor);
@@ -129,8 +130,7 @@ void ArcadeRacerConfigView::Display(Settings::Input::Port::ArcadeRacer &controll
                           kAdjustedValueColor, valueLineThickness);
 
         // Meter border
-        drawList->AddRect(pos, ImVec2(pos.x + meterSize.x, pos.y + meterSize.y), kBorderColor, 0.0f, ImDrawFlags_None,
-                          borderThickness);
+        drawList->AddRect(pos, ImVec2(pos.x + meterSize.x, pos.y + meterSize.y), kBorderColor, 0.0f, borderThickness);
 
         ImGui::Dummy(meterSize);
     }
@@ -152,7 +152,7 @@ void ArcadeRacerConfigView::Display(Settings::Input::Port::ArcadeRacer &controll
     m_unboundActionsWidget.Display();
     if (ImGui::BeginTable("hotkeys", 1 + input::kNumBindsPerInput,
                           ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY)) {
-        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed, 95.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed, 95.0f * imguiData->displayScale);
         for (size_t i = 0; i < input::kNumBindsPerInput; i++) {
             ImGui::TableSetupColumn(fmt::format("Hotkey {}", i + 1).c_str(), ImGuiTableColumnFlags_WidthStretch, 1.0f);
         }

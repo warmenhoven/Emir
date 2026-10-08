@@ -5,46 +5,80 @@
 #include <app/ui/widgets/common_widgets.hpp>
 #include <app/ui/widgets/settings_widgets.hpp>
 
+#include <app/imgui_data.hpp>
+
+#include <ymir/version.hpp>
+
 namespace app::ui {
 
 VideoSettingsView::VideoSettingsView(SharedContext &context)
     : SettingsViewBase(context) {}
 
 void VideoSettingsView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings().video;
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    /*ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("General");
     ImGui::PopFont();
 
-    widgets::settings::video::GraphicsBackendCombo(m_context);*/
+    // TODO: don't apply these settings immediately:
+    // - graphics backend
+    // - graphics adapter
+    // show the current state, an Apply button to apply them at once, and a Revert button to copy the current settings
+    // back to the temporary state.
+
+    widgets::settings::video::GraphicsBackendCombo(m_context);
+    widgets::settings::video::GraphicsAdapterCombo(m_context);
+    widgets::settings::video::UseHardwareAcceleration(m_context);
+    ImGui::TextColored(
+        imguiData->colors.notice,
+        "Hardware acceleration is currently in development. You may encounter bugs, glitches and performance issues.\n"
+        "Only Direct3D12 is supported at the moment. Other backends will be supported in the future.");
 
     // -----------------------------------------------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
+    ImGui::SeparatorText("Software renderer");
+    ImGui::PopFont();
+
+    widgets::settings::video::swrenderer::ThreadedVDP(m_context);
+
+    // -----------------------------------------------------------------------------------------------------------------
+
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
+    ImGui::SeparatorText("Enhancements");
+    ImGui::PopFont();
+
+    widgets::settings::video::enhancements::Deinterlace(m_context);
+    widgets::settings::video::enhancements::TransparentMeshes(m_context);
+
+    // -----------------------------------------------------------------------------------------------------------------
+
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Display");
     ImGui::PopFont();
 
     MakeDirty(ImGui::Checkbox("Force integer scaling", &settings.forceIntegerScaling));
     MakeDirty(ImGui::Checkbox("Force aspect ratio", &settings.forceAspectRatio));
-    widgets::ExplanationTooltip("If disabled, forces square pixels.", m_context.displayScale);
+    widgets::ExplanationTooltip("If disabled, forces square pixels.");
     ImGui::SameLine();
     if (MakeDirty(ImGui::Button("4:3"))) {
-        settings.forcedAspect = 4.0 / 3.0;
+        settings.forcedAspect = {4, 3};
     }
     ImGui::SameLine();
     if (MakeDirty(ImGui::Button("3:2"))) {
-        settings.forcedAspect = 3.0 / 2.0;
+        settings.forcedAspect = {3, 2};
     }
     ImGui::SameLine();
     if (MakeDirty(ImGui::Button("16:10"))) {
-        settings.forcedAspect = 16.0 / 10.0;
+        settings.forcedAspect = {16, 10};
     }
     ImGui::SameLine();
     if (MakeDirty(ImGui::Button("16:9"))) {
-        settings.forcedAspect = 16.0 / 9.0;
+        settings.forcedAspect = {16, 9};
     }
     // TODO: aspect ratio selector? slider?
 
@@ -53,10 +87,8 @@ void VideoSettingsView::Display() {
     ImGui::Separator();
 
     MakeDirty(ImGui::Checkbox("Auto-fit window to screen", &settings.autoResizeWindow));
-    widgets::ExplanationTooltip(
-        "If forced aspect ratio is disabled, adjusts and recenters the window whenever the display "
-        "resolution changes.",
-        m_context.displayScale);
+    widgets::ExplanationTooltip("If forced aspect ratio is disabled, adjusts and recenters the window whenever the "
+                                "display resolution changes.");
     ImGui::SameLine();
     if (settings.displayVideoOutputInWindow) {
         ImGui::BeginDisabled();
@@ -72,8 +104,7 @@ void VideoSettingsView::Display() {
         m_context.EnqueueEvent(events::gui::FitWindowToScreen());
     }
     widgets::ExplanationTooltip("Moves the display into a dedicated window.\n"
-                                "Can be helpful when used in conjunction with the debugger windows.",
-                                m_context.displayScale);
+                                "Can be helpful when used in conjunction with the debugger windows.");
 
     ImGui::Separator();
 
@@ -83,8 +114,7 @@ void VideoSettingsView::Display() {
     }
 
     MakeDirty(ImGui::Checkbox("Double-click to toggle full screen", &settings.doubleClickToFullScreen));
-    widgets::ExplanationTooltip("This option will not work if you are using a Virtua Gun or Shuttle Mouse.",
-                                m_context.displayScale);
+    widgets::ExplanationTooltip("This option will not work if you are using a Virtua Gun or Shuttle Mouse.");
 
     auto formatDisplay = [&](SDL_DisplayID id) -> std::string {
         if (m_context.display.list.contains(id)) {
@@ -148,8 +178,7 @@ void VideoSettingsView::Display() {
         "The numbers in [brackets] indicate the display's virtual position in multi-monitor systems. [0x0] is your "
         "primary display.\n"
         "\n"
-        "The \"Current display\" option causes Ymir to go full screen on the display where the window is located at.",
-        m_context.displayScale);
+        "The \"Current display\" option causes Ymir to go full screen on the display where the window is located at.");
 
     if (ImGui::BeginCombo("Full screen resolution",
                           settings.borderlessFullScreen ? "Borderless full screen"
@@ -191,22 +220,19 @@ void VideoSettingsView::Display() {
                                 "All options besides \"Borderless full screen\" are exclusive modes.\n"
                                 "\n"
                                 "This option is reset when the display is changed or removed, or while using the "
-                                "current display and moving the window across different displays.",
-                                m_context.displayScale);
+                                "current display and moving the window across different displays.");
 
     ImGui::Separator();
 
     MakeDirty(ImGui::Checkbox("Synchronize video in windowed mode", &settings.syncInWindowedMode));
     widgets::ExplanationTooltip(
         "When enabled, synchronizes GUI updates with emulator rendering while in windowed mode.\n"
-        "This greatly improves frame pacing but may reduce GUI performance.",
-        m_context.displayScale);
+        "This greatly improves frame pacing but may reduce GUI performance.");
 
     MakeDirty(ImGui::Checkbox("Synchronize video in full screen mode", &settings.syncInFullscreenMode));
     widgets::ExplanationTooltip(
         "When enabled, synchronizes GUI updates with emulator rendering while in full screen mode.\n"
-        "This greatly improves frame pacing but may reduce GUI performance.",
-        m_context.displayScale);
+        "This greatly improves frame pacing but may reduce GUI performance.");
 
     MakeDirty(
         ImGui::Checkbox("Use full refresh rate when synchronizing video", &settings.useFullRefreshRateWithVideoSync));
@@ -219,8 +245,7 @@ void VideoSettingsView::Display() {
         "WARNING: Before enabling this option, disable the \"Synchronize video in windowed/full screen mode\" options "
         "above and check if the reported GUI frame rate matches your display's refresh rate. If it is capped to any "
         "value lower than your display's refresh rate (e.g. 60 fps on a 120 Hz display), enabling this option will "
-        "significantly slow down emulation.",
-        m_context.displayScale);
+        "significantly slow down emulation.");
 
     MakeDirty(ImGui::Checkbox("Reduce video latency on low refresh rate displays", &settings.reduceLatency));
     widgets::ExplanationTooltip(
@@ -230,25 +255,7 @@ void VideoSettingsView::Display() {
         "- When disabled, the first rendered frame since the last refresh is displayed. Slightly improves overall "
         "emulation performance by skipping some framebuffer copies.\n"
         "\n"
-        "This option has no effect if your display's refresh rate is higher than the emulator's target frame rate.",
-        m_context.displayScale);
-
-    // -----------------------------------------------------------------------------------------------------------------
-
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
-    ImGui::SeparatorText("Enhancements");
-    ImGui::PopFont();
-
-    widgets::settings::video::enhancements::Deinterlace(m_context);
-    widgets::settings::video::enhancements::TransparentMeshes(m_context);
-
-    // -----------------------------------------------------------------------------------------------------------------
-
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
-    ImGui::SeparatorText("Software renderer");
-    ImGui::PopFont();
-
-    widgets::settings::video::swrenderer::ThreadedVDP(m_context);
+        "This option has no effect if your display's refresh rate is higher than the emulator's target frame rate.");
 }
 
 } // namespace app::ui

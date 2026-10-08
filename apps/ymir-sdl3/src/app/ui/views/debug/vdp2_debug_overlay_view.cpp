@@ -2,7 +2,7 @@
 
 #include <ymir/hw/vdp/vdp.hpp>
 
-#include <app/events/emu_debug_event_factory.hpp>
+#include <app/imgui_data.hpp>
 
 #include <imgui.h>
 
@@ -10,16 +10,16 @@ using namespace ymir;
 
 namespace app::ui {
 
-VDP2DebugOverlayView::VDP2DebugOverlayView(SharedContext &context, vdp::VDP &vdp)
-    : m_context(context)
-    , m_vdp(vdp) {}
+VDP2DebugOverlayView::VDP2DebugOverlayView(vdp::VDP &vdp)
+    : m_vdp(vdp) {}
 
 void VDP2DebugOverlayView::Display() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &overlay = m_vdp.vdp2DebugRenderOptions.overlay;
     using OverlayType = vdp::config::VDP2DebugRender::Overlay::Type;
 
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -188,7 +188,7 @@ void VDP2DebugOverlayView::Display() {
                         ImGui::SameLine();
                         ImGui::Checkbox("Line table:", &overlay.customLineWindowTableEnable[i]);
                         ImGui::SameLine();
-                        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                         ImGui::SetNextItemWidth(5 * hexCharWidth + 2 * paddingWidth);
                         ImGui::InputScalar("##linetbl_addr", ImGuiDataType_U32,
                                            &overlay.customLineWindowTableAddress[i], nullptr, nullptr, "%05X");

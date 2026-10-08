@@ -2,6 +2,7 @@
 
 #include <app/events/gui_event_factory.hpp>
 
+#include <app/imgui_data.hpp>
 #include <app/settings.hpp>
 #include <app/settings_defaults.hpp>
 
@@ -255,6 +256,8 @@ void InputCaptureWidget::BindInput(input::InputBind &bind, size_t elementIndex, 
 }
 
 void Crosshair(ImDrawList *drawList, const CrosshairParams &params, ImVec2 pos) {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     const float x = (int)pos.x + 0.5f;
     const float y = (int)pos.y + 0.5f;
 
@@ -264,7 +267,7 @@ void Crosshair(ImDrawList *drawList, const CrosshairParams &params, ImVec2 pos) 
     const float baseThickness = std::clamp<float>(params.thickness, kMinThickness, kMaxThickness) * baseRadius;
     const float baseStrokeThickness =
         std::clamp<float>(params.strokeThickness, kMinStrokeThickness, kMaxStrokeThickness) * baseThickness;
-    const float scale = params.displayScale;
+    const float scale = imguiData->displayScale;
 
     const ImU32 color = ImGui::ColorConvertFloat4ToU32(params.color);
     const float radius = baseRadius * scale;
@@ -299,7 +302,7 @@ void Crosshair(ImDrawList *drawList, const CrosshairParams &params, ImVec2 pos) 
     }
 
     drawList->AddConvexPolyFilled(points, std::size(points), color);
-    drawList->AddPolyline(points, std::size(points), strokeColor, ImDrawFlags_Closed, strokeThickness);
+    drawList->AddPolyline(points, std::size(points), strokeColor, strokeThickness, ImDrawFlags_Closed);
 }
 
 } // namespace app::ui::widgets

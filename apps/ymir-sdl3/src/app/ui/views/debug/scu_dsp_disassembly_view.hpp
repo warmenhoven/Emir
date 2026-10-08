@@ -1,17 +1,20 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+#include <imgui.h>
+
+namespace ymir::scu {
+class SCU;
+}
 
 namespace app::ui {
 
 class SCUDSPDisassemblyView {
 public:
-    SCUDSPDisassemblyView(SharedContext &context);
+    SCUDSPDisassemblyView(ymir::scu::SCU &scu);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     ymir::scu::SCU &m_scu;
 
     struct Colors {

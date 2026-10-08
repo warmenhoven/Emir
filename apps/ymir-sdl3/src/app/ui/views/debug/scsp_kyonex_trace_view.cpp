@@ -1,17 +1,19 @@
 #include "scsp_kyonex_trace_view.hpp"
 
+#include <app/imgui_data.hpp>
+
 #include <cinttypes>
 
 using namespace ymir;
 
 namespace app::ui {
 
-SCSPKeyOnExecuteTraceView::SCSPKeyOnExecuteTraceView(SharedContext &context)
-    : m_context(context)
-    , m_tracer(context.tracers.SCSP) {}
+SCSPKeyOnExecuteTraceView::SCSPKeyOnExecuteTraceView(SCSPTracer &tracer)
+    : m_tracer(tracer) {}
 
 void SCSPKeyOnExecuteTraceView::Display() {
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -28,7 +30,7 @@ void SCSPKeyOnExecuteTraceView::Display() {
             const auto &trace = m_tracer.kyonexTrace.ReadReverse(i);
             ImGui::TableNextRow();
             if (ImGui::TableNextColumn()) {
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::Text("%" PRIu64, trace.sampleCounter);
                 ImGui::PopFont();
             }
@@ -41,7 +43,7 @@ void SCSPKeyOnExecuteTraceView::Display() {
                         display[j] = '-';
                     }
                 }
-                ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+                ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
                 ImGui::TextUnformatted(std::string(display.begin(), display.end()).c_str());
                 ImGui::PopFont();
             }

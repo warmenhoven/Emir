@@ -871,7 +871,7 @@ FLATTEN FORCE_INLINE uint16 SH2::FetchInstruction(uint32 address) {
 
 template <bool emulateCache>
 FLATTEN FORCE_INLINE void SH2::RefillPipeline() {
-    m_fetchedOpcodes = MemRead<uint32, true, false, emulateCache>(PC);
+    m_fetchedOpcodes = MemRead<uint32, true, false, emulateCache>(PC & ~3u);
 }
 
 template <bool emulateCache>

@@ -17,10 +17,10 @@
 
 namespace ymir::core {
 
-inline constexpr RatioU32 kMinSH2ClockRatio = RatioU32::FromPercentage(25u);
-inline constexpr RatioU32 kMaxSH2ClockRatio = RatioU32::FromPercentage(10000u);
+inline constexpr Ratio kMinSH2ClockRatio = Ratio::FromPercentage(25u);
+inline constexpr Ratio kMaxSH2ClockRatio = Ratio::FromPercentage(10000u);
 
-inline constexpr RatioU32 ClampSH2ClockRatio(RatioU32 ratio) {
+inline constexpr Ratio ClampSH2ClockRatio(Ratio ratio) {
     return std::clamp(ratio, kMinSH2ClockRatio, kMaxSH2ClockRatio);
 }
 
@@ -74,7 +74,7 @@ struct Configuration {
         /// The ratio is clamped to the range [25%..10000%]. The SH2 starts to choke on interrupts if it runs too
         /// slowly and, while going faster technically is feasible, a 2.8 GHz SH2 is already too much to emulate, let
         /// alone two of them.
-        util::Observable<RatioU32, ClampSH2ClockRatio> sh2ClockFactor = RatioU32::FromPercentage(100u);
+        util::Observable<Ratio, ClampSH2ClockRatio> sh2ClockFactor = Ratio::FromPercentage(100u);
     } system;
 
     /// @brief RTC configuration
@@ -92,10 +92,8 @@ struct Configuration {
             util::datetime::DateTime{.year = 1994, .month = 1, .day = 1, .hour = 0, .minute = 0, .second = 0});
     } rtc;
 
-    /// @brief VDP1, VDP2 and video rendering configuration.
-    struct Video {
-        // TODO: renderer backend options
-
+    /// @brief Software VDP1 and VDP2 rendering configuration.
+    struct SoftwareRenderer {
         /// @brief Runs the VDP1 renderer in a dedicated thread.
         util::Observable<bool> threadedVDP1 = true;
 
@@ -104,7 +102,7 @@ struct Configuration {
 
         /// @brief Runs the VDP2 deinterlacer in a dedicated thread, if the VDP2 renderer is running in a thread.
         util::Observable<bool> threadedDeinterlacer = true;
-    } video;
+    } swRenderer;
 
     /// @brief SCSP and audio rendering configuration.
     struct Audio {

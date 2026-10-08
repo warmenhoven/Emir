@@ -1,5 +1,7 @@
 #include "virtua_gun_config_view.hpp"
 
+#include <app/imgui_data.hpp>
+
 namespace app::ui {
 
 VirtuaGunConfigView::VirtuaGunConfigView(SharedContext &context)
@@ -8,6 +10,7 @@ VirtuaGunConfigView::VirtuaGunConfigView(SharedContext &context)
     , m_unboundActionsWidget(context) {}
 
 void VirtuaGunConfigView::Display(Settings::Input::Port::VirtuaGun &controllerSettings, uint32 portIndex) {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &settings = GetSettings();
     auto &binds = controllerSettings.binds;
     auto &xhair = controllerSettings.crosshair;
@@ -16,7 +19,7 @@ void VirtuaGunConfigView::Display(Settings::Input::Port::VirtuaGun &controllerSe
 
     // -------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Behavior");
     ImGui::PopFont();
 
@@ -38,13 +41,13 @@ void VirtuaGunConfigView::Display(Settings::Input::Port::VirtuaGun &controllerSe
 
     // -------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Crosshair");
     ImGui::PopFont();
 
     ImGui::BeginGroup();
     {
-        const float scale = m_context.displayScale;
+        const float scale = imguiData->displayScale;
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         const ImVec2 size{150.0f * scale, 150.0f * scale};
         const ImVec2 end{pos.x + size.x, pos.y + size.y};
@@ -62,8 +65,6 @@ void VirtuaGunConfigView::Display(Settings::Input::Port::VirtuaGun &controllerSe
 
             .strokeColor = {xhair.strokeColor[0], xhair.strokeColor[1], xhair.strokeColor[2], xhair.strokeColor[3]},
             .strokeThickness = xhair.strokeThickness,
-
-            .displayScale = scale,
         };
 
         drawList->AddRectFilled(pos, end, bgColor);
@@ -72,7 +73,7 @@ void VirtuaGunConfigView::Display(Settings::Input::Port::VirtuaGun &controllerSe
         widgets::Crosshair(drawList, params, {pos.x + size.x * 0.5f, pos.y + size.y * 0.5f});
         drawList->PopClipRect();
 
-        drawList->AddRect(pos, end, kBorderColor, 0.0f, ImDrawFlags_None, 1.0f * scale);
+        drawList->AddRect(pos, end, kBorderColor, 0.0f, 1.0f * scale);
 
         ImGui::Dummy(size);
 
@@ -178,7 +179,7 @@ void VirtuaGunConfigView::Display(Settings::Input::Port::VirtuaGun &controllerSe
 
     // -------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Binds");
     ImGui::PopFont();
 
@@ -195,7 +196,7 @@ void VirtuaGunConfigView::Display(Settings::Input::Port::VirtuaGun &controllerSe
     ImGui::TextUnformatted("Left-click a button to assign a hotkey. Right-click to clear.");
     m_unboundActionsWidget.Display();
     if (ImGui::BeginTable("hotkeys", 1 + input::kNumBindsPerInput, ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed, 90.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("Button", ImGuiTableColumnFlags_WidthFixed, 90.0f * imguiData->displayScale);
         for (size_t i = 0; i < input::kNumBindsPerInput; i++) {
             ImGui::TableSetupColumn(fmt::format("Hotkey {}", i + 1).c_str(), ImGuiTableColumnFlags_WidthStretch, 1.0f);
         }
@@ -233,7 +234,7 @@ void VirtuaGunConfigView::Display(Settings::Input::Port::VirtuaGun &controllerSe
 
     // -------------------------------------------------------------------------
 
-    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::PushFont(imguiData->fonts.sansSerif.bold, imguiData->fontSizes.large);
     ImGui::SeparatorText("Mouse binds");
     ImGui::PopFont();
 

@@ -20,6 +20,37 @@
 
 namespace ymir::vdp {
 
+/// @brief Pair of VDP1 framebuffer indices.
+/// Always kept in sync, opposite to one another.
+union FBRAMIndex {
+    uint16 u16;
+    struct {
+        uint8 display; // display framebuffer index, used by VDP2 only
+        uint8 draw;    // draw framebuffer index, used by VDP1 and accessible on the bus
+    };
+
+    FBRAMIndex() {
+        Reset();
+    }
+
+    /// @brief Sets the display and draw indices in one go.
+    /// The draw index is set to the opposite of the given display index.
+    /// @param[in] displayIndex the display index
+    void Set(bool displayIndex) {
+        display = displayIndex ? 1 : 0;
+        draw = display ^ 1;
+    }
+
+    void Reset() {
+        display = 1;
+        draw = 0;
+    }
+
+    void Flip() {
+        u16 ^= 0x0101;
+    }
+};
+
 /// @brief No-op memory function.
 /// @tparam T value type
 /// @param[in] address address to read or write
@@ -30,6 +61,7 @@ inline void NoopMemFn(uint32 address, T value) {}
 /// @brief VDP1 memory arrays and accessors.
 struct VDP1Memory {
     alignas(16) std::array<uint8, kVDP1VRAMSize> VRAM;
+    alignas(16) std::array<SpriteFB, 2> FBRAM;
 
     // Hard reset
     void Reset() {
@@ -44,6 +76,8 @@ struct VDP1Memory {
                 VRAM[addr] = 0xAA;
             }
         }
+        FBRAM[0].fill(0);
+        FBRAM[1].fill(0);
     }
 
     template <mem_primitive T>
@@ -118,6 +152,12 @@ struct VDP2Memory {
     FORCE_INLINE uint32 MapCRAMAddress(uint32 address) const {
         address &= 0xFFF & ~(sizeof(T) - 1);
         return kVDP2CRAMAddressMapping[regs.vramControl.colorRAMMode >> 1][address];
+    }
+
+    template <mem_primitive T>
+    FORCE_INLINE uint32 UnmapCRAMAddress(uint32 address) const {
+        address &= 0xFFF & ~(sizeof(T) - 1);
+        return kVDP2CRAMAddressReverseMapping[regs.vramControl.colorRAMMode >> 1][address];
     }
 
     template <mem_primitive T, typename TMemFn = decltype(NoopMemFn<T>)>
@@ -837,10 +877,7 @@ struct VDPState {
         if (hard) {
             mem1.Reset();
             mem2.Reset();
-            for (auto &fb : spriteFB) {
-                fb.fill(0);
-            }
-            displayFB = 0;
+            fbIndex.Reset();
         }
 
         regs1.Reset();
@@ -856,10 +893,11 @@ struct VDPState {
 
     void SaveState(savestate::VDPSaveState &state) const {
         state.VRAM1 = mem1.VRAM;
+        state.FBRAM = mem1.FBRAM;
+        state.displayFB = fbIndex.display;
+
         state.VRAM2 = mem2.VRAM;
         state.CRAM = mem2.CRAM;
-        state.spriteFB = spriteFB;
-        state.displayFB = displayFB;
 
         state.regs1.TVMR = regs1.ReadTVMR();
         state.regs1.FBCR = regs1.ReadFBCR();
@@ -1101,10 +1139,11 @@ struct VDPState {
 
     void LoadState(const savestate::VDPSaveState &state) {
         mem1.VRAM = state.VRAM1;
+        mem1.FBRAM = state.FBRAM;
+        fbIndex.Set(state.displayFB);
+
         mem2.VRAM = state.VRAM2;
         mem2.CRAM = state.CRAM;
-        spriteFB = state.spriteFB;
-        displayFB = state.displayFB;
 
         regs1.WriteTVMR(state.regs1.TVMR);
         regs1.WriteFBCR(state.regs1.FBCR);
@@ -1130,7 +1169,7 @@ struct VDPState {
         regs2.WriteTVSTAT(state.regs2.TVSTAT);
         regs2.WriteVRSIZE(state.regs2.VRSIZE);
         regs2.WriteHCNT(state.regs2.HCNT);
-        regs2.WriteVCNT(state.regs2.VCNT);
+        regs2.VCNT = state.regs2.VCNT;
         regs2.WriteRAMCTL(state.regs2.RAMCTL);
         regs2.WriteCYCA0L(state.regs2.CYCA0L);
         regs2.WriteCYCA0U(state.regs2.CYCA0U);
@@ -1327,8 +1366,7 @@ struct VDPState {
 
     VDP1Memory mem1;
     VDP2Memory mem2;
-    alignas(16) std::array<SpriteFB, 2> spriteFB;
-    uint8 displayFB; // index of current sprite display buffer, CPU-accessible; opposite buffer is drawn into by VDP1
+    FBRAMIndex fbIndex;
 
     // -------------------------------------------------------------------------
     // Registers and state
@@ -1347,7 +1385,7 @@ struct VDPState {
     template <mem_primitive T, typename TMemFn = decltype(NoopMemFn<T>)>
     FORCE_INLINE T VDP1ReadFB(uint32 address, TMemFn &&memFn = NoopMemFn) const {
         address = MapVDP1FBAddress<T>(address);
-        const T value = util::ReadBE<T>(&spriteFB[displayFB ^ 1][address]);
+        const T value = util::ReadBE<T>(&mem1.FBRAM[fbIndex.draw][address]);
         memFn(address, value);
         return value;
     }
@@ -1355,7 +1393,7 @@ struct VDPState {
     template <mem_primitive T, typename TMemFn = decltype(NoopMemFn<T>)>
     FORCE_INLINE void VDP1WriteFB(uint32 address, T value, TMemFn &&memFn = NoopMemFn) {
         address = MapVDP1FBAddress<T>(address);
-        util::WriteBE<T>(&spriteFB[displayFB ^ 1][address], value);
+        util::WriteBE<T>(&mem1.FBRAM[fbIndex.draw][address], value);
         memFn(address, value);
     }
 

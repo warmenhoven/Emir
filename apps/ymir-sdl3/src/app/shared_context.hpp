@@ -8,7 +8,7 @@
 #include <app/rom_manager.hpp>
 #include <app/update_checker.hpp>
 
-#include <app/services/graphics_types.hpp>
+#include <app/services/gfx/gfx_gui_types.hpp>
 
 #include <app/input/input_context.hpp>
 #include <app/input/input_utils.hpp>
@@ -197,8 +197,6 @@ struct SharedContext {
     AudioSystem audioSystem;
     std::chrono::steady_clock::time_point lastVolumeChangeTime;
 
-    float displayScale = 1.0f;
-
     struct DisplayInfo {
         std::string name;
         SDL_Rect bounds;
@@ -289,20 +287,19 @@ struct SharedContext {
             resolutionChanged = true;
         }
 
-        // Staging framebuffers -- emu renders to one, GUI copies to other
-        std::array<std::array<uint32, ymir::vdp::kMaxResH * ymir::vdp::kMaxResV>, 2> framebuffers;
+        // Display framebuffers -- emu renders to one, GUI displays the other
+        using Framebuffer = std::array<uint32, ymir::vdp::kMaxResH * ymir::vdp::kMaxResV>;
+        std::array<Framebuffer, 2> framebuffers;
+        size_t currBackFramebuffer = 0;
         std::mutex mtxFramebuffer;
         bool updated = false;
 
-        void CopyFramebufferToTexture(SDL_Texture *texture) {
-            uint32 *pixels = nullptr;
-            int pitch = 0;
+        void CopyFramebufferToTexture(void *data, size_t pitch) const {
+            auto pixelData = static_cast<uint32 *>(data);
             SDL_Rect area{.x = 0, .y = 0, .w = (int)width, .h = (int)height};
-            if (SDL_LockTexture(texture, &area, (void **)&pixels, &pitch)) {
-                for (uint32 y = 0; y < height; y++) {
-                    std::copy_n(&framebuffers[1][y * width], width, &pixels[y * pitch / sizeof(uint32)]);
-                }
-                SDL_UnlockTexture(texture);
+            const auto &fb = framebuffers[currBackFramebuffer ^ 1u];
+            for (uint32 y = 0; y < height; y++) {
+                std::copy_n(&fb[y * width], width, &pixelData[y * pitch / sizeof(uint32)]);
             }
         }
 
@@ -735,47 +732,9 @@ struct SharedContext {
         YGRTracer YGR;
     } tracers;
 
-    struct Fonts {
-        struct {
-            ImFont *regular = nullptr;
-            ImFont *bold = nullptr;
-        } sansSerif;
-
-        struct {
-            ImFont *regular = nullptr;
-            ImFont *bold = nullptr;
-        } monospace;
-
-        ImFont *display = nullptr;
-    } fonts;
-
-    struct FontSizes {
-        float small = 14.0f;
-        float medium = 16.0f;
-        float large = 20.0f;
-        float xlarge = 28.0f;
-
-        float display = 64.0f;
-        float displaySmall = 24.0f;
-    } fontSizes;
-
-    struct Colors {
-        ImVec4 good{0.25f, 1.00f, 0.41f, 1.00f};
-        ImVec4 notice{1.00f, 0.71f, 0.25f, 1.00f};
-        ImVec4 warn{1.00f, 0.41f, 0.25f, 1.00f};
-
-        ImVec4 purple{0.93f, 0.51f, 1.00f, 1.00f};
-        ImVec4 blue{0.51f, 0.51f, 1.00f, 1.00f};
-        ImVec4 cyan{0.25f, 0.81f, 1.00f, 1.00f};
-        ImVec4 green{0.25f, 1.00f, 0.41f, 1.00f};
-        ImVec4 yellow{1.00f, 0.88f, 0.25f, 1.00f};
-        ImVec4 orange{1.00f, 0.71f, 0.25f, 1.00f};
-        ImVec4 red{1.00f, 0.41f, 0.25f, 1.00f};
-    } colors;
-
     struct Images {
         struct Image {
-            gfx::TextureHandle texture = gfx::kInvalidTextureHandle;
+            gfx::GUITextureHandle texture = gfx::kInvalidGUITextureHandle;
             ImVec2 size;
         };
 

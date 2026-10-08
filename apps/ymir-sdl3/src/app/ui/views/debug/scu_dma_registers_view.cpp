@@ -2,22 +2,25 @@
 
 #include <ymir/hw/scu/scu.hpp>
 
+#include <app/imgui_data.hpp>
+
 using namespace ymir;
 
 namespace app::ui {
 
-SCUDMARegistersView::SCUDMARegistersView(SharedContext &context)
-    : m_context(context)
-    , m_scu(context.saturn.GetSCU()) {}
+SCUDMARegistersView::SCUDMARegistersView(ymir::scu::SCU &scu)
+    : m_scu(scu) {}
 
 void SCUDMARegistersView::Display(uint8 channel) {
     if (channel >= 3) {
         return;
     }
 
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
+
     const float frameHeight = ImGui::GetFrameHeight();
     const float paddingWidth = ImGui::GetStyle().FramePadding.x;
-    ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+    ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
     const float hexCharWidth = ImGui::CalcTextSize("F").x;
     ImGui::PopFont();
 
@@ -48,7 +51,7 @@ void SCUDMARegistersView::Display(uint8 channel) {
         ImGui::TableNextRow();
         if (ImGui::TableNextColumn()) {
             uint32 srcAddr = probe.GetDMASourceAddress(channel);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             ImGui::SetNextItemWidth(paddingWidth * 2 + hexCharWidth * 7);
             if (ImGui::InputScalar(fmt::format("##srcAddr_{}", channel).c_str(), ImGuiDataType_U32, &srcAddr, nullptr,
                                    nullptr, "%07X", ImGuiInputTextFlags_CharsHexadecimal)) {
@@ -64,7 +67,7 @@ void SCUDMARegistersView::Display(uint8 channel) {
         }
         if (ImGui::TableNextColumn()) {
             uint32 srcAddrIncAmount = probe.GetDMASourceAddressIncrement(channel);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             ImGui::SetNextItemWidth(paddingWidth * 2 + hexCharWidth * 3);
             if (ImGui::InputScalar(fmt::format("##srcAddrIncAmount_{}", channel).c_str(), ImGuiDataType_U32,
                                    &srcAddrIncAmount, nullptr, nullptr, "%u", ImGuiInputTextFlags_CharsHexadecimal)) {
@@ -80,7 +83,7 @@ void SCUDMARegistersView::Display(uint8 channel) {
         ImGui::TableNextRow();
         if (ImGui::TableNextColumn()) {
             uint32 dstAddr = probe.GetDMADestinationAddress(channel);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             ImGui::SetNextItemWidth(paddingWidth * 2 + hexCharWidth * 7);
             if (ImGui::InputScalar(fmt::format("##dstAddr_{}", channel).c_str(), ImGuiDataType_U32, &dstAddr, nullptr,
                                    nullptr, "%07X", ImGuiInputTextFlags_CharsHexadecimal)) {
@@ -96,7 +99,7 @@ void SCUDMARegistersView::Display(uint8 channel) {
         }
         if (ImGui::TableNextColumn()) {
             uint32 dstAddrIncAmount = probe.GetDMADestinationAddressIncrement(channel);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             ImGui::SetNextItemWidth(paddingWidth * 2 + hexCharWidth * 3);
             if (ImGui::InputScalar(fmt::format("##dstAddrIncAmount_{}", channel).c_str(), ImGuiDataType_U32,
                                    &dstAddrIncAmount, nullptr, nullptr, "%u", ImGuiInputTextFlags_CharsHexadecimal)) {
@@ -112,7 +115,7 @@ void SCUDMARegistersView::Display(uint8 channel) {
         ImGui::TableNextRow();
         if (ImGui::TableNextColumn()) {
             uint32 xferLen = probe.GetDMATransferCount(channel);
-            ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+            ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
             ImGui::SetNextItemWidth(paddingWidth * 2 + hexCharWidth * 7); // only 4 for channels 1 and 2
             if (ImGui::InputScalar(fmt::format("##xferLen_{}", channel).c_str(), ImGuiDataType_U32, &xferLen, nullptr,
                                    nullptr, "%u", ImGuiInputTextFlags_CharsHexadecimal)) {

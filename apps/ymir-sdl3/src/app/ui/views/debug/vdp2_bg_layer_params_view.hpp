@@ -1,17 +1,18 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+namespace ymir::vdp {
+class VDP;
+}
 
 namespace app::ui {
 
 class VDP2BGLayerParamsView {
 public:
-    VDP2BGLayerParamsView(SharedContext &context, ymir::vdp::VDP &vdp);
+    VDP2BGLayerParamsView(ymir::vdp::VDP &vdp);
 
     void Display();
 
 private:
-    SharedContext &m_context;
     ymir::vdp::VDP &m_vdp;
 };
 

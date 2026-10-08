@@ -1,19 +1,22 @@
 #pragma once
 
-#include <app/shared_context.hpp>
+#include <ymir/core/types.hpp>
+
+namespace ymir::sh2 {
+class SH2;
+}
 
 namespace app::ui {
 
 class SH2ExceptionVectorsView {
 public:
-    SH2ExceptionVectorsView(SharedContext &context, ymir::sh2::SH2 &sh2);
+    SH2ExceptionVectorsView(ymir::sh2::SH2 &sh2);
 
     void Display();
 
     float GetWidth() const;
 
 private:
-    SharedContext &m_context;
     ymir::sh2::SH2 &m_sh2;
 
     bool m_useVBR = true;

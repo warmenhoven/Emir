@@ -8,20 +8,32 @@ Introduces save state file version 14.
 
 ### New features and improvements
 
+- App: Added Discord Rich Presence support. (#260, #917; @SternXD)
+- App: Added option to File menu to open the screenshots directory.
 - App: Added option to unpause emulator when loading discs. Enabled by default, which changes established behavior.
 - App: Clarified IPL ROM meaning in the Welcome window and IPL settings tab -- it refers to the BIOS.
 - App: Display volume indicator on the top-right corner of the window for a few seconds after adjustments.
+- App: Persist SMPC data per region based on the loaded IPL ROM region:
     - `smpc-us_eu.bin`: USA, Europe -- SMPC area codes 4, 5, A, C, D
     - `smpc-jp.bin`: Japan -- SMPC area code 1
     - `smpc-asia.bin`: Korea, Taiwan -- SMPC area codes 2, 6
     - `smpc-other.bin`: Other (invalid) SMPC area codes
     - The old `smpc.bin` will be automatically migrated to these files as you use IPL ROMs for each region.
 - App: Shrink embedded M PLUS U font files by removing unused glyphs, reducing binary size. (#915; @4re)
+- Build: Lower macOS version requirement to 12.0 Monterey. (#954)
 - Debugger: Added RBG0 and RBG1 line color single stack views to the VDP2 debug overlay.
+- Debugger: Added basic VDP2 registers view.
+- Graphics: New graphics backend, adding support for native graphics APIs:
+    - Direct3D 11 on Windows (TBD)
+    - Direct3D 12 on Windows (@StrikerX3)
+    - Vulkan on Windows and Linux (TBD)
+    - Metal on macOS (#929; @SternXD)
+    - SDL Renderer wherever it's supported (@StrikerX3)
 - Input: Added option to constrain mouse cursor to window in system cursor mode.
 - Input: Convert 3D Control Pad analog stick to D-Pad inputs when in digital mode.
 - Input: Graduate Virtua Gun to stable feature.
 - Input: Introduce a small amount of jitter to the Virtua Gun aim in Death Crimson. Greatly improves shot detection in the game. (#787)
+- Media: Added support for MP3 and OGG audio tracks to CUE loader. (#920; @surajrbhardwaj)
 - SH2: Interrupt recalculation microoptimizations.
 - SMPC: Remove direct dependency to filesystem API for data persistence.
 - VDP1: Software renderer performance microoptimizations:
@@ -29,11 +41,19 @@ Introduces save state file version 14.
         - Determine double density mode
         - Get references to VDP1 registers
         - Shift/mask color bank values
+- VDP1/VDP2: Hardware-accelerated rendering is now available. Supported graphics backends:
+    - Direct3D 12 on Windows (@StrikerX3)
 
 ### Fixes
 
+- App: Don't persist window geometry in full screen mode.
+- App: Initialize MIDI subsystem asynchronously. Fixes some cases where the application takes a long time to start up.
+- App: Reset window geometry if it matches the bounds of a display to prevent "remember window geometry" from loading full screen coordinates.
 - Backup RAM: Fix crash when attempting to load a backup RAM cartridge with the default path.
+- Backup RAM: Remove strict language check when importing files. Fixes importing save files from Kronos's backup RAM cartridges. (#942)
+- CD Block (HLE): Report current CD status and raise CMOK HIRQ signal when processing unimplemented commands.
 - CD Block (HLE): Read reset position flag correctly from parameters.
+- CD Block (LLE): Fix audio track playback failing for tracks 16 and higher. Fixes Virtual On - Cyber Troopers credits and the songs in certain arenas.
 - GameDB: Disable a number of game-specific hacks that are no longer required:
     - Chisato Moritaka - Watarase Bashi & Lala Sunshine: no longer crashes at startup. (#604)
     - Deep Fear: no longer freezes after the "April Fools!" voice line. (#740)
@@ -41,7 +61,11 @@ Introduces save state file version 14.
     - Mega Man X3 / Rockman X3: sprites are not glitched anymore. (#244)
     - Metal Fighter Miku: goes in-game, no longer stuck after start menu. (#466)
     - Soviet Strike: VDP1 graphics no longer flicker.
-- GameDB: Force-enable SH-2 cache emulation for Dino Island to fix palette glitches. (#764)
+- GameDB: Force-enable SH-2 cache emulation for multiple games:
+    - Dino Island: fix palette glitches. (#764)
+    - Dragon Force II: fix black screen when entering 100 vs 100 battles. (#945)
+    - Hissatsu!: fix crash at startup. (#943)
+    - No-appointment Gals Olympos: fix crash during animations.
 - GameDB: Force fast bus timings on Resident Evil to fix start menu crashes. (#907)
 - GameDB: Slow down VDP1 execution speed in 3D Baseball to fix team name plates and announcer voice line glitches. (#593)
 - GUI: Reinitialize style from scratch when rescaling GUI elements. Fixes Settings windows (and probably others) from growing extremely large when constantly switching display scales.
@@ -51,16 +75,31 @@ Introduces save state file version 14.
     - Black/Matrix (#861)
 - Media: Don't read the Path Table past the size specified in the Volume Descriptor. Fixes CD Block HLE not able to read disc images made with some lazy patches that don't properly clean up the Path Table. (#912)
 - Media (CUE): Don't accumulate pre/postgaps multiple times per track. Fixes some audio track offset issues for single-BIN dumps. (#146)
+- Media (CUE): Properly compute track count on discs with sparse track numbers. Fixes audio playback on some homebrew discs that omit tracks (e.g. The Rockin'-B All Stars version 06/03/23 skips track 2).
 - Media (CUE): Use CUE sheet timestamps to compute track lengths. Fixes some audio track offset issues for single-BIN dumps. (#146)
+- SCU: Allow 8-bit writes to DSP registers.
+- Settings: Apply CD Block LLE configuration at startup. Fixes Ymir always launching with CD Block HLE mode when LLE was enabled in the settings file.
+- SMPC: Ignore SSHON command when the Slave SH2 is already enabled. Fixes multiple issues:
+    - Guardian Heroes no longer gets stuck on level transitions. (#951)
+    - Gekitotsu Koushien no longer crashes when going in-game. (#576)
+    - Madden NFL 97 (Europe) now goes in-game. (#522)
+    - No-appointment Gals Olympos now goes in-game.
+    - Ten Pin Alley now goes in-game.
+    - UEFA Euro 96 - England now goes in-game. (#486)
 - SMPC: Update peripheral PDR1/2 registers when reading and when updating EXLE. Fixes many cases of games not recognizing Virtua Gun inputs or missing shots. (#787)
+- VDP1: Don't clear COPR when beginning a new VDP1 frame. Fixes lockups in Alone in the Dark - Alone in the Dark - One-Eyed Jack's Revenge. (#938)
 - VDP1: Don't sync VDP1 FBRAM on debug reads. Fixes deadlock when viewing the framebuffer area in a memory viewer window.
-- VDP1: Ignore 8-bit setting and force-align to 16-bit addresses when writing pixels with MSB enabled. Fixes deselected menu options being fully painted in black in Derby Analyst. (#587)
+- VDP1: Force-align MSB write to 16-bit addresses when writing pixels with MSB enabled. Fixes deselected menu options being fully painted in black in Derby Analyst. (#587)
 - VDP1: Textured sprites with CMDSIZE.H=0 never fetch additional texels. Fixes glitched graphics in the scorecard of the shooting range in Policenauts.
+- VDP1-SW: Write back FBRAM writes from VDP1 renderer thread. Fixes glitched title screen in Waialae no Kiseki - Extra 36 Holes when using threaded VDP1 rendering. (#898)
 - VDP2: Avoid unintentional side effects on VDP2 EXTEN register when saving states. Fixes camera angles in Digital Dance Mix Vol. 1 - Namie Amuro.
+- VDP2: Disable color gradation if color RAM mode is not 0. Fixes the fog effect in The River of Dreams level in Astal. (#927)
 - VDP2: Fix coordinate latching on external latches. Fixes various Virtua Gun shot offset errors. (#787)
 - VDP2: Fix off-screen coordinate latching. Fixes some Virtua Gun reload detection issues. (#787)
 - VDP2: Restrict color calculations in certain video modes. Fixes Sound Test screen text blending in with the background in Dark Savior.
     - In high resolution modes with color RAM modes other than 0, color calculations can only be applied on top of RGB layers, but not palette layers.
+- VDP2-SW: Fix out of bounds access when the display resolution is changed mid-frame while drawing an RBG.
+- VDP2-SW: Stop updating LNCL/BACK screen once DISP is disabled for the remainder of the frame.
 
 
 ## Version 0.3.3
@@ -562,7 +601,7 @@ Introduced save state file version 8.
 - App: Show actual VDP1 frame rate separated from VDP1 draw calls.
 - Build: FreeBSD support for x86-64 systems. (#389; @bsdcode)
 - Build: macOS builds are now universal -- one binary supports both Intel and Apple Silicon Macs. (#351; @Wunkolo)
-- Build: Nightly builds are now available [here](https://github.com/StrikerX3/Ymir/releases/latest-nightly).
+- Build: Nightly builds are now available [here](https://github.com/ymir-emu/Ymir/releases/latest-nightly).
 - Core: Improve manual reset event performance by using OS-specific implementations based on [cppcoro](https://github.com/lewissbaker/cppcoro).
 - Debugger: Added CD Block filters view.
 - Debugger: Added rudimentary SH-2 breakpoint management and per-game debugger state persistence. (#22)

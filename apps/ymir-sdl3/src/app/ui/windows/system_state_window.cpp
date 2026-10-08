@@ -9,6 +9,8 @@
 #include <app/ui/widgets/common_widgets.hpp>
 #include <app/ui/widgets/system_widgets.hpp>
 
+#include <app/imgui_data.hpp>
+
 #include <SDL3/SDL_clipboard.h>
 
 #include <fmt/std.h>
@@ -79,19 +81,18 @@ void SystemStateWindow::DrawSMPCParameters() {
             widgets::ExplanationTooltip(
                 "Select the divider for system clock rates.\n"
                 "Automatically adjusted by games.\n"
-                "On a real Saturn, games must use the faster clock setting to use 352 pixels-wide resolution modes.",
-                m_context.displayScale);
+                "On a real Saturn, games must use the faster clock setting to use 352 pixels-wide resolution modes.");
         }
         if (ImGui::TableNextColumn()) {
             if (ImGui::RadioButton("Slow", clockSpeed == sys::ClockSpeed::_320)) {
                 m_context.EnqueueEvent(events::emu::SetClockSpeed(sys::ClockSpeed::_320));
             }
-            widgets::ExplanationTooltip("320 pixels", m_context.displayScale);
+            widgets::ExplanationTooltip("320 pixels");
             ImGui::SameLine();
             if (ImGui::RadioButton("Fast", clockSpeed == sys::ClockSpeed::_352)) {
                 m_context.EnqueueEvent(events::emu::SetClockSpeed(sys::ClockSpeed::_352));
             }
-            widgets::ExplanationTooltip("352 pixels", m_context.displayScale);
+            widgets::ExplanationTooltip("352 pixels");
         }
 
         ImGui::TableNextRow();
@@ -246,6 +247,7 @@ void SystemStateWindow::DrawClocks() {
 }
 
 void SystemStateWindow::DrawCDBlock() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &probe = m_context.saturn.instance->CDBlock.GetProbe();
 
     const uint8 status = probe.GetCurrentStatusCode();
@@ -293,7 +295,7 @@ void SystemStateWindow::DrawCDBlock() {
 
     if (status == cdblock::kStatusCodePlay || status == cdblock::kStatusCodeScan) {
         ImGui::BeginGroup();
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         if (msf.m == 0) {
             ImGui::TextDisabled("00");
         } else {
@@ -340,7 +342,7 @@ void SystemStateWindow::DrawCDBlock() {
         ImGui::SameLine(0, 0);
 
         ImGui::BeginGroup();
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         const uint32 numZeros = std::countl_zero(fad) / 4 - 2; // FAD is 24 bits
         ImGui::TextDisabled("%0*u", numZeros, 0);
         ImGui::SameLine(0, 0);
@@ -350,7 +352,7 @@ void SystemStateWindow::DrawCDBlock() {
         ImGui::SetItemTooltip("Frame address (FAD)");
     } else {
         ImGui::BeginGroup();
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::TextDisabled("--");
         ImGui::SameLine(0, 0);
         ImGui::TextUnformatted(":");
@@ -369,7 +371,7 @@ void SystemStateWindow::DrawCDBlock() {
         ImGui::SameLine(0, 0);
 
         ImGui::BeginGroup();
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::TextDisabled("------");
         ImGui::PopFont();
         ImGui::EndGroup();
@@ -401,6 +403,7 @@ void SystemStateWindow::DrawCDBlock() {
 }
 
 void SystemStateWindow::DrawCDDrive() {
+    const YmirImGuiData *imguiData = GetYmirImGuiData();
     auto &probe = m_context.saturn.instance->CDDrive.GetProbe();
 
     using CDOp = cdblock::CDDrive::Operation;
@@ -459,7 +462,7 @@ void SystemStateWindow::DrawCDDrive() {
 
     if (isReading || isSeeking) {
         ImGui::BeginGroup();
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         if (msf.m == 0) {
             ImGui::TextDisabled("00");
         } else {
@@ -506,7 +509,7 @@ void SystemStateWindow::DrawCDDrive() {
         ImGui::SameLine(0, 0);
 
         ImGui::BeginGroup();
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         const uint32 numZeros = std::countl_zero(fad) / 4 - 2; // FAD is 24 bits
         ImGui::TextDisabled("%0*u", numZeros, 0);
         ImGui::SameLine(0, 0);
@@ -516,7 +519,7 @@ void SystemStateWindow::DrawCDDrive() {
         ImGui::SetItemTooltip("Frame address (FAD)");
     } else {
         ImGui::BeginGroup();
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::TextDisabled("--");
         ImGui::SameLine(0, 0);
         ImGui::TextUnformatted(":");
@@ -535,7 +538,7 @@ void SystemStateWindow::DrawCDDrive() {
         ImGui::SameLine(0, 0);
 
         ImGui::BeginGroup();
-        ImGui::PushFont(m_context.fonts.monospace.regular, m_context.fontSizes.medium);
+        ImGui::PushFont(imguiData->fonts.monospace.regular, imguiData->fontSizes.medium);
         ImGui::TextDisabled("------");
         ImGui::PopFont();
         ImGui::EndGroup();
@@ -555,7 +558,7 @@ void SystemStateWindow::DrawCDDrive() {
 }
 
 void SystemStateWindow::DrawDiscImage() {
-    ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
     if (m_context.state.loadedDiscImagePath.empty() && m_context.state.loadedDiscDrivePath.empty()) {
         ImGui::TextUnformatted("No disc loaded");
     } else {
