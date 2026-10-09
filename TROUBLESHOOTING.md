@@ -66,17 +66,22 @@ Here are a few things you can try to improve performance besides upgrading the C
 - In **Settings > General**, check that the **Emulation speed** is set to **Primary** and it is at **100%**. Press **Reset** to restore the default speed.
 - In **Settings > CD Block**, disable **Use low level CD Block emulation**. Most games work fine without it.
 - In **Settings > System**:
-  - Lower the **SH-2 clock ratio** *carefully*. Most games take the slower CPU gracefully, but a few might break.
-    - If games break due to this setting, reset it to 100%. Issue reports for problems caused by tweaking this will be rejected.
   - Disable **Emulate SH-2 cache** if possible. Most games work fine without it.
     - This option is force-enabled with a few select games.
-- In **Settings > Audio**, set **Emulation step granularity** to the minimum possible value of **0**, all the way to the left. It should read **Step size: 32 slots (1 sample)**.
+  - Lower the **SH-2 clock ratio** *carefully*. Most games take the slower CPU gracefully, but a few might break.
+    - If games break due to this setting, reset it to 100%. Issue reports for problems caused by tweaking this will be rejected.
+- In **Settings > Audio**:
+  - Set **Emulation step granularity** to the minimum possible value of **0**, all the way to the left. It should read **Step size: 32 slots (1 sample)**.
+  - Enable **Threaded SCSP and sound CPU**.
 - In **Settings > Video**:
   - Disable **Use full refresh rate when synchronizing video**. This is known to cause problems in cases where the reported refresh rate does not match the actual display refresh rate.
   - Disable **Synchronize video in windowed mode** and/or **Synchronize video in full screen mode**. These also tend to cause performance issues with mismatched refresh rate reports.
-  - Enable **Threaded VDP2 renderer**.
-  - Enable **Use dedicated thread for deinterlaced rendering**.
-  - Try enabling or disabling **Threaded VDP1 renderer**.
+  - Switch the **Graphics backend** to something other than **SDL Renderer** and enable **Use hardware-accelerated VDP1/VDP2 rendering** if possible.
+    - This only works with Direct3D 12 at the moment.
+  - If you cannot use hardware acceleration:
+    - Enable **Threaded VDP2 renderer**.
+    - Enable **Use dedicated thread for deinterlaced rendering**.
+    - Try enabling or disabling **Threaded VDP1 renderer**.
   - Disable the **Deinterlace video** enhancement.
   - Disable the **Transparent meshes** enhancement.
 - In **Settings > General**:
