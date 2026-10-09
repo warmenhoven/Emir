@@ -74,6 +74,11 @@ Introduces save state file version 14.
     - Bug Too! (#622)
     - Black/Matrix (#861)
 - Media: Don't read the Path Table past the size specified in the Volume Descriptor. Fixes CD Block HLE not able to read disc images made with some lazy patches that don't properly clean up the Path Table. (#912)
+- Media (CHD): Fix several CHD read errors. (#806, #957; @warmenhoven)
+    - Arcade Gears Vol. 2 - Gun Frontier: now boots with CD Block LLE and plays sounds in the logo screen.
+    - Elevator Action^2 - Returns: now plays music in-game with CD Block LLE.
+    - Time Bokan Series - Bokan to Ippatsu! Doronbow Kanpekiban: now plays music in-game with CD Block LLE.
+    - Sega Ages - OutRun: now properly resumes music after pausing in-game with CD Block LLE.
 - Media (CUE): Don't accumulate pre/postgaps multiple times per track. Fixes some audio track offset issues for single-BIN dumps. (#146)
 - Media (CUE): Properly compute track count on discs with sparse track numbers. Fixes audio playback on some homebrew discs that omit tracks (e.g. The Rockin'-B All Stars version 06/03/23 skips track 2).
 - Media (CUE): Use CUE sheet timestamps to compute track lengths. Fixes some audio track offset issues for single-BIN dumps. (#146)
