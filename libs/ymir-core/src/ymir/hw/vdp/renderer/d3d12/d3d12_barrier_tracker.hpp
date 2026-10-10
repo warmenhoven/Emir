@@ -346,7 +346,9 @@ struct BarrierTracker {
             }
             m_uavTextureBarriers.clear();
 
-            cmdList->ResourceBarrier(barriers.size(), barriers.data());
+            if (!barriers.empty()) {
+                cmdList->ResourceBarrier(barriers.size(), barriers.data());
+            }
         }
     }
 
